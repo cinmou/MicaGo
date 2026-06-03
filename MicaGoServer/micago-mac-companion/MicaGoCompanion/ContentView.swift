@@ -64,6 +64,8 @@ struct ContentView: View {
                 }
             }
         }
+        // Concrete content size so the window is never zero-sized on launch.
+        .frame(minWidth: 820, idealWidth: 1000, minHeight: 560, idealHeight: 720)
         .task {
             model.reloadConfig()
             model.startPolling()

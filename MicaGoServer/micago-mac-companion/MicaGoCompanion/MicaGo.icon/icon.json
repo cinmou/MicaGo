@@ -1,0 +1,115 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.04649,0.07786,0.15203,1.00000",
+      "display-p3:0.02092,0.02218,0.06629,1.00000"
+    ],
+    "orientation" : {
+      "start" : {
+        "x" : 0.5,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.5,
+        "y" : 0.7
+      }
+    }
+  },
+  "groups" : [
+    {
+      "hidden" : false,
+      "layers" : [
+        {
+          "fill" : "none",
+          "hidden" : true,
+          "image-name" : "R.png",
+          "name" : "R",
+          "position" : {
+            "scale" : 0.91,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "fill" : "none",
+          "hidden" : true,
+          "image-name" : "L.png",
+          "name" : "L",
+          "position" : {
+            "scale" : 0.91,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "solid" : "extended-gray:0.25000,1.00000"
+          },
+          "glass" : false,
+          "hidden" : true,
+          "image-name" : "List.png",
+          "name" : "List",
+          "opacity" : 0.75,
+          "position" : {
+            "scale" : 1.01,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "solid" : "display-p3:0.35354,0.81738,0.96841,1.00000"
+          },
+          "glass" : false,
+          "hidden" : true,
+          "image-name" : "Gewwn.png",
+          "name" : "Gewwn",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 1.01,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "blend-mode" : "hard-light",
+          "fill" : "none",
+          "image-name" : "Mica.png",
+          "name" : "Mica",
+          "opacity" : 0.94,
+          "position" : {
+            "scale" : 1.06,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
