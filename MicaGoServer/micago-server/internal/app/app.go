@@ -146,11 +146,19 @@ func Run(options Options) error {
 		Events: hub,
 	}
 
+	capabilities, err := store.ProbeCapabilities(ctx, db)
+	if err != nil {
+		log.Printf("chat.db schema probe failed (capabilities default to false): %v", err)
+	} else {
+		log.Printf("chat.db capabilities: %+v", capabilities)
+	}
+
 	statusDeps := httpapi.StatusDeps{
-		APIStore:    apiStore,
-		ClientCount: hub.ClientCount,
-		SyncState:   relay.GetSyncState,
-		Network:     httpapi.NewNetworkController(cfg),
+		APIStore:     apiStore,
+		ClientCount:  hub.ClientCount,
+		SyncState:    relay.GetSyncState,
+		Network:      httpapi.NewNetworkController(cfg),
+		Capabilities: capabilities,
 	}
 
 	handler := httpapi.NewRouter(

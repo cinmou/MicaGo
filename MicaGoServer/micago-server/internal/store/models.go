@@ -211,6 +211,14 @@ type ServerStatusResponse struct {
 	Devices       ServerDevicesStatus      `json:"devices"`
 	WebSocket     ServerWebSocketStatus    `json:"websocket"`
 	Permissions   ServerPermissionStatus   `json:"permissions"`
+	Capabilities  ServerCapabilities       `json:"capabilities"`
+}
+
+// ServerCapabilities reports what the running chat.db schema supports, so
+// clients/companion can know which update signals this Mac can actually produce.
+// See docs/spec-v0.11.x-server-reliability.md.
+type ServerCapabilities struct {
+	Schema SchemaCapabilities `json:"schema"`
 }
 
 type ServerAddressStatus struct {

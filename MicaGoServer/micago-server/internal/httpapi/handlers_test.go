@@ -534,6 +534,34 @@ func TestGetServerStatusTokenNeverExposed(t *testing.T) {
 	}
 }
 
+func TestGetServerStatusIncludesCapabilities(t *testing.T) {
+	caps := store.SchemaCapabilities{
+		EditedMessages:  true,
+		ReadStatus:      true,
+		DeliveredStatus: true,
+		// UnsentMessages, SendError, GroupActions, AttachmentMetadata left false
+	}
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"},
+		StatusDeps{APIStore: "relaydb", Capabilities: caps},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/server/status", nil)
+	rec := httptest.NewRecorder()
+	handlers.GetServerStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var status store.ServerStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if status.Capabilities.Schema != caps {
+		t.Fatalf("capabilities not surfaced: got %+v, want %+v", status.Capabilities.Schema, caps)
+	}
+}
+
 func contains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {

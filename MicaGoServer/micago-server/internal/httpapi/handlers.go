@@ -110,6 +110,9 @@ type StatusDeps struct {
 	// Network owns the optional public connection endpoint (v0.11). Nil disables
 	// the public-url endpoints; local/LAN aggregation still works.
 	Network *NetworkController
+	// Capabilities reports detected chat.db schema support (v0.11.x). Zero value
+	// (all false) is a safe default when the schema was not probed.
+	Capabilities store.SchemaCapabilities
 }
 
 // serverVersion is the advertised server build version. It tracks the latest
@@ -217,6 +220,7 @@ func (h *Handlers) GetServerStatus(w http.ResponseWriter, r *http.Request) {
 		Devices:       store.ServerDevicesStatus{Count: h.deviceCount(r.Context())},
 		WebSocket:     store.ServerWebSocketStatus{Clients: h.clientCount()},
 		Permissions:   h.permissionStatus(),
+		Capabilities:  store.ServerCapabilities{Schema: h.status.Capabilities},
 	}
 
 	if h.status.SyncState != nil {
