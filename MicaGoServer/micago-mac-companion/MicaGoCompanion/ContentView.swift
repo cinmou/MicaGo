@@ -1,31 +1,361 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Sidebar
+
+enum SidebarItem: String, CaseIterable, Identifiable {
+    case dashboard, connections, devices, notifications, permissions, server, logs, advanced
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dashboard: return "Dashboard"
+        case .connections: return "Connections"
+        case .devices: return "Devices"
+        case .notifications: return "Notifications"
+        case .permissions: return "Permissions"
+        case .server: return "Server"
+        case .logs: return "Logs"
+        case .advanced: return "Advanced"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .dashboard: return "gauge.with.dots.needle.bottom.50percent"
+        case .connections: return "network"
+        case .devices: return "iphone.gen3"
+        case .notifications: return "bell"
+        case .permissions: return "lock.shield"
+        case .server: return "server.rack"
+        case .logs: return "text.alignleft"
+        case .advanced: return "slider.horizontal.3"
+        }
+    }
+}
+
+// MARK: - Shell
+
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var runtime: RuntimeMonitor
+    @State private var selection: SidebarItem? = .dashboard
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                ServerControlSection()
-                ConnectionEndpointsSection()
-                TokenSection()
-                DevicesSection()
-                NotificationsSection()
-                DiagnosticsSection()
-                RuntimeSection()
-                LaunchAtLoginSection()
-                ServerLogSection()
+        NavigationSplitView {
+            List(SidebarItem.allCases, selection: $selection) { item in
+                Label(item.title, systemImage: item.symbol).tag(item)
             }
-            .padding(20)
+            .navigationTitle("MicaGo")
+            .frame(minWidth: 200)
+        } detail: {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        detailContent
+                    }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .navigationTitle(selection?.title ?? "MicaGo")
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) { ServerStatusChip() }
+                }
+            }
         }
-        .navigationTitle("MicaGo Companion")
         .task {
             model.reloadConfig()
             model.startPolling()
+            runtime.startMonitoring()
         }
-        .onDisappear { model.stopPolling() }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .onDisappear {
+            model.stopPolling()
+            runtime.stopMonitoring()
+        }
+    }
+
+    @ViewBuilder private var detailContent: some View {
+        switch selection ?? .dashboard {
+        case .dashboard: DashboardPage()
+        case .connections: ConnectionsPage()
+        case .devices: DevicesSection()
+        case .notifications: NotificationsSection()
+        case .permissions: PermissionsPage()
+        case .server: ServerControlSection()
+        case .logs: ServerLogSection()
+        case .advanced: AdvancedPage()
+        }
+    }
+}
+
+// MARK: - Persistent status chip
+
+private struct ServerStatusChip: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            StatusDot(on: model.reachable)
+            Text(statusText).font(.callout)
+            if let version = model.status?.version {
+                Text("v\(version)").font(.caption).foregroundStyle(.secondary)
+            }
+            Button {
+                if model.controller.isRunning {
+                    model.controller.stop()
+                } else {
+                    model.controller.start()
+                }
+            } label: {
+                Image(systemName: model.controller.isRunning ? "stop.fill" : "play.fill")
+            }
+            .help(model.controller.isRunning ? "Stop server" : "Start server")
+            .disabled(!model.controller.isRunning && !model.controller.binaryExists)
+        }
+    }
+
+    private var statusText: String {
+        if model.reachable {
+            return model.authValid ? "Running" : "Token rejected"
+        }
+        return model.controller.isRunning ? "Starting…" : "Stopped"
+    }
+}
+
+// MARK: - Dashboard
+
+private struct DashboardPage: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var runtime: RuntimeMonitor
+
+    var body: some View {
+        // Status
+        SectionCard(title: "Status") {
+            HStack(spacing: 10) {
+                StatusDot(on: model.reachable)
+                Text(statusText).font(.headline)
+                Spacer()
+                if let s = model.status {
+                    Text("v\(s.version) · up \(uptime(s.uptimeSeconds))").foregroundStyle(.secondary)
+                }
+            }
+            if let s = model.status {
+                LabeledRow(label: "Store", value: s.store)
+                LabeledRow(label: "Sync", value: s.sync.loopEnabled ? "every \(s.sync.intervalSeconds)s" : "loop off")
+                LabeledRow(label: "WebSocket clients", value: "\(s.websocket.clients)")
+            }
+            if let error = model.lastError {
+                Text(error).font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+
+        // Endpoints (URLs only — no token here)
+        SectionCard(title: "Endpoints") {
+            CopyableRow(label: "Local", value: localURL)
+            if let lan = model.urls?.lan, !lan.isEmpty {
+                ForEach(lan) { CopyableRow(label: "LAN", value: $0.baseUrl) }
+            } else {
+                LabeledRow(label: "LAN", value: "—")
+            }
+            if let pub = model.urls?.public, pub.enabled {
+                CopyableRow(label: "Public", value: pub.baseUrl)
+            } else {
+                LabeledRow(label: "Public", value: "not configured")
+            }
+        }
+
+        // Runtime & permissions summary
+        SectionCard(title: "Runtime & Permissions") {
+            SummaryRow(label: "Messages.app", ok: runtime.messagesRunning,
+                       value: runtime.messagesRunning ? "running" : "not running")
+            SummaryRow(label: "Keep Awake", ok: runtime.keepAwakeActive,
+                       value: runtime.keepAwakeActive ? "active" : "off", neutralWhenOff: true)
+            if let p = model.status?.permissions {
+                StatusValueRow(label: "Full Disk Access", status: p.fullDiskAccess.status)
+                StatusValueRow(label: "Automation", status: p.automation.status)
+            } else {
+                Text("Start the server to read permission diagnostics.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+
+        // Capabilities
+        CapabilitiesCard()
+    }
+
+    private var statusText: String {
+        if model.reachable {
+            return model.authValid ? "Running" : "Running (token rejected)"
+        }
+        return model.controller.isRunning ? "Starting…" : "Stopped"
+    }
+
+    private var localURL: String {
+        model.urls?.local.first?.baseUrl
+            ?? model.status?.address.baseUrl
+            ?? model.baseURL?.absoluteString
+            ?? "—"
+    }
+
+    private func uptime(_ seconds: Int64) -> String {
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+    }
+}
+
+private struct SummaryRow: View {
+    let label: String
+    let ok: Bool
+    let value: String
+    var neutralWhenOff: Bool = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: ok ? "checkmark.circle.fill" : (neutralWhenOff ? "circle" : "exclamationmark.triangle.fill"))
+                .foregroundStyle(ok ? Color.green : (neutralWhenOff ? Color.secondary : Color.orange))
+            Text(label)
+            Spacer()
+            Text(value).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct StatusValueRow: View {
+    let label: String
+    let status: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(color)
+            Text(label)
+            Spacer()
+            Text(status).font(.caption).foregroundStyle(color)
+        }
+    }
+
+    private var icon: String {
+        switch status {
+        case "ok": return "checkmark.circle.fill"
+        case "denied": return "xmark.circle.fill"
+        default: return "questionmark.circle.fill"
+        }
+    }
+    private var color: Color {
+        switch status {
+        case "ok": return .green
+        case "denied": return .red
+        default: return .secondary
+        }
+    }
+}
+
+private struct CapabilitiesCard: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        SectionCard(title: "Detected chat.db Capabilities") {
+            if let schema = model.status?.capabilities?.schema {
+                CapabilityRow(label: "Edited messages", on: schema.editedMessages)
+                CapabilityRow(label: "Unsent / retracted", on: schema.unsentMessages)
+                CapabilityRow(label: "Read status", on: schema.readStatus)
+                CapabilityRow(label: "Delivered status", on: schema.deliveredStatus)
+                CapabilityRow(label: "Send error", on: schema.sendError)
+                CapabilityRow(label: "Group actions", on: schema.groupActions)
+                CapabilityRow(label: "Attachment metadata", on: schema.attachmentMetadata)
+            } else {
+                Text("Start the server to read detected capabilities.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct CapabilityRow: View {
+    let label: String
+    let on: Bool
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: on ? "checkmark.circle.fill" : "minus.circle")
+                .foregroundStyle(on ? Color.green : Color.secondary)
+            Text(label)
+            Spacer()
+            Text(on ? "available" : "unavailable").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Connections page
+
+private struct ConnectionsPage: View {
+    var body: some View {
+        ConnectionEndpointsSection()
+        TokenSection()
+    }
+}
+
+// MARK: - Permissions page
+
+private struct PermissionsPage: View {
+    var body: some View {
+        DiagnosticsSection()
+        RuntimeCard()
+    }
+}
+
+private struct RuntimeCard: View {
+    @EnvironmentObject var runtime: RuntimeMonitor
+
+    var body: some View {
+        SectionCard(title: "Runtime") {
+            HStack(spacing: 8) {
+                StatusDot(on: runtime.messagesRunning)
+                Text("Messages.app")
+                Text(runtime.messagesRunning ? "running" : "not running")
+                    .font(.caption)
+                    .foregroundStyle(runtime.messagesRunning ? Color.secondary : Color.orange)
+                Spacer()
+                if !runtime.messagesRunning {
+                    Button("Open Messages") { runtime.openMessages() }
+                }
+            }
+            Text("Messages.app must be running to send via AppleScript.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            Divider()
+
+            Toggle(isOn: Binding(
+                get: { runtime.keepAwakeActive },
+                set: { runtime.setKeepAwake($0) }
+            )) {
+                Text("Keep this Mac awake while serving")
+            }
+            Text("Status: \(runtime.keepAwakeActive ? "active (caffeinate)" : "off")")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Advanced page
+
+private struct AdvancedPage: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        LaunchAtLoginSection()
+        CapabilitiesCard()
+        SectionCard(title: "Configuration") {
+            LabeledRow(label: "Config file", value: "~/.micago/config.yaml")
+            if let url = model.urls {
+                LabeledRow(label: "Preferred pairing", value: url.preferredPairingEndpoint)
+                LabeledRow(label: "Verify TLS (public)", value: url.public.verifyTls ? "yes" : "no")
+            }
+            Text("Edit advanced server settings in ~/.micago/config.yaml. Notification provider configuration and Firebase self-host (FCM) are planned for v0.12.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -70,6 +400,11 @@ private struct ServerControlSection: View {
             }
 
             BinaryPathRow()
+
+            if let s = model.status {
+                LabeledRow(label: "Bind address", value: s.address.listen)
+                LabeledRow(label: "Store", value: s.store)
+            }
 
             if let error = model.lastError {
                 Text(error)
@@ -236,7 +571,7 @@ private struct ReachableDot: View {
     }
 }
 
-// MARK: - Token
+// MARK: - Token (pairing — intentionally includes the token in the QR/copy)
 
 private struct TokenSection: View {
     @EnvironmentObject var model: AppModel
@@ -344,6 +679,9 @@ private struct NotificationsSection: View {
             } else {
                 Text("Unavailable.").foregroundStyle(.secondary)
             }
+            Text("Provider status is read-only here. Configuring providers and Firebase self-host (FCM) is planned for v0.12.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -405,92 +743,6 @@ private struct PermissionRow: View {
     }
 }
 
-// MARK: - Runtime (Messages.app + Keep Awake + permission summary)
-
-private struct RuntimeSection: View {
-    @EnvironmentObject var model: AppModel
-    @StateObject private var keepAwake = KeepAwakeController()
-    @State private var messagesRunning = MessagesApp.isRunning()
-
-    var body: some View {
-        SectionCard(title: "Runtime") {
-            // Messages.app — required for sending.
-            HStack(spacing: 8) {
-                StatusDot(on: messagesRunning)
-                Text("Messages.app")
-                Text(messagesRunning ? "running" : "not running")
-                    .font(.caption)
-                    .foregroundStyle(messagesRunning ? Color.secondary : Color.orange)
-                Spacer()
-                if !messagesRunning {
-                    Button("Open Messages") { MessagesApp.open() }
-                }
-            }
-            Text("Messages.app must be running to send via AppleScript.")
-                .font(.caption2).foregroundStyle(.secondary)
-
-            Divider()
-
-            // Keep Awake — conservative caffeinate owned by the companion.
-            Toggle(isOn: Binding(
-                get: { keepAwake.active },
-                set: { keepAwake.setActive($0) }
-            )) {
-                Text("Keep this Mac awake while serving")
-            }
-            Text("Status: \(keepAwake.active ? "active (caffeinate)" : "off")")
-                .font(.caption2).foregroundStyle(.secondary)
-
-            Divider()
-
-            // Permission summary (sourced from the server's status diagnostics).
-            if let p = model.status?.permissions {
-                RuntimePermissionRow(label: "Full Disk Access", status: p.fullDiskAccess.status)
-                RuntimePermissionRow(label: "Automation", status: p.automation.status)
-            } else {
-                Text("Start the server to read Full Disk Access / Automation status.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .task {
-            // Lightweight local poll for Messages.app running state.
-            while !Task.isCancelled {
-                messagesRunning = MessagesApp.isRunning()
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-            }
-        }
-    }
-}
-
-private struct RuntimePermissionRow: View {
-    let label: String
-    let status: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon).foregroundStyle(color)
-            Text(label)
-            Spacer()
-            Text(status).font(.caption).foregroundStyle(color)
-        }
-    }
-
-    private var icon: String {
-        switch status {
-        case "ok": return "checkmark.circle.fill"
-        case "denied": return "xmark.circle.fill"
-        default: return "questionmark.circle.fill"
-        }
-    }
-    private var color: Color {
-        switch status {
-        case "ok": return .green
-        case "denied": return .red
-        default: return .secondary
-        }
-    }
-}
-
 // MARK: - Launch at login
 
 private struct LaunchAtLoginSection: View {
@@ -529,7 +781,8 @@ private struct ServerLogSection: View {
     var body: some View {
         SectionCard(title: "Server Log") {
             if model.controller.logLines.isEmpty {
-                Text("No output yet.").foregroundStyle(.secondary)
+                Text("No output yet. The log shows output from a server started by this companion.")
+                    .foregroundStyle(.secondary)
             } else {
                 ScrollView {
                     Text(model.controller.logLines.joined(separator: "\n"))
@@ -537,7 +790,7 @@ private struct ServerLogSection: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: 120)
+                .frame(height: 240)
             }
         }
     }
@@ -590,7 +843,7 @@ struct CopyableRow: View {
                 copyToPasteboard(value)
             } label: { Image(systemName: "doc.on.doc") }
                 .buttonStyle(.borderless)
-                .disabled(value == "—")
+                .disabled(value == "—" || value == "not configured")
         }
     }
 }
@@ -611,5 +864,7 @@ func copyToPasteboard(_ value: String) {
 }
 
 #Preview {
-    ContentView().environmentObject(AppModel())
+    ContentView()
+        .environmentObject(AppModel())
+        .environmentObject(RuntimeMonitor())
 }

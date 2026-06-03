@@ -17,6 +17,22 @@ struct ServerStatus: Codable {
     var devices: DevicesStatus
     var websocket: WebSocketStatus
     var permissions: PermissionStatus
+    // Added by v0.11.x schema probing. Optional so older servers still decode.
+    var capabilities: ServerCapabilities?
+}
+
+struct ServerCapabilities: Codable {
+    var schema: SchemaCapabilities
+}
+
+struct SchemaCapabilities: Codable {
+    var editedMessages: Bool
+    var unsentMessages: Bool
+    var readStatus: Bool
+    var deliveredStatus: Bool
+    var sendError: Bool
+    var groupActions: Bool
+    var attachmentMetadata: Bool
 }
 
 struct AddressStatus: Codable {
