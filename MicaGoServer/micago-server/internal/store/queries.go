@@ -1,0 +1,775 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"micagoserver/internal/send"
+	"micagoserver/internal/timeutil"
+)
+
+const recentMessagesBaseSQL = `
+SELECT DISTINCT
+  m.guid,
+  m.text,
+  m.attributedBody,
+  m.subject,
+  m.service,
+  m.date,
+  m.date_read,
+  m.date_delivered,
+  m.is_from_me,
+  m.is_read,
+  m.is_delivered,
+  m.cache_has_attachments,
+  h.id AS handle_id_value,
+  h.service AS handle_service
+FROM message AS m
+LEFT JOIN handle AS h
+  ON h.ROWID = m.handle_id
+`
+
+const chatsBaseSQL = `
+SELECT
+  c.guid,
+  c.chat_identifier,
+  c.service_name,
+  c.display_name,
+  c.is_archived
+FROM chat AS c
+`
+
+const syncChatsSQL = `
+SELECT
+  c.guid,
+  c.chat_identifier,
+  c.service_name,
+  c.display_name,
+  c.is_archived
+FROM chat AS c
+WHERE c.service_name = 'iMessage'
+ORDER BY c.ROWID DESC;
+`
+
+const chatExistsSQL = `
+SELECT 1
+FROM chat
+WHERE guid = ?
+LIMIT 1;
+`
+
+const chatInfoSQL = `
+SELECT guid, service_name
+FROM chat
+WHERE guid = ?
+LIMIT 1;
+`
+
+const chatMessagesBaseSQL = `
+SELECT
+  m.guid,
+  m.text,
+  m.attributedBody,
+  m.subject,
+  m.service,
+  m.date,
+  m.date_read,
+  m.date_delivered,
+  m.is_from_me,
+  m.is_read,
+  m.is_delivered,
+  m.cache_has_attachments,
+  h.id AS handle_id_value,
+  h.service AS handle_service
+FROM message AS m
+JOIN chat_message_join AS cmj
+  ON cmj.message_id = m.ROWID
+JOIN chat AS c
+  ON c.ROWID = cmj.chat_id
+LEFT JOIN handle AS h
+  ON h.ROWID = m.handle_id
+WHERE c.guid = ?
+`
+
+const syncRecentMessagesSQL = `
+SELECT DISTINCT
+  c.guid AS chat_guid,
+  m.ROWID AS source_rowid,
+  m.guid,
+  m.text,
+  m.attributedBody,
+  m.subject,
+  m.service,
+  m.date,
+  m.date_read,
+  m.date_delivered,
+  m.is_from_me,
+  m.is_read,
+  m.is_delivered,
+  m.cache_has_attachments,
+  h.id AS handle_id_value,
+  h.service AS handle_service
+FROM message AS m
+JOIN chat_message_join AS cmj
+  ON cmj.message_id = m.ROWID
+JOIN chat AS c
+  ON c.ROWID = cmj.chat_id
+LEFT JOIN handle AS h
+  ON h.ROWID = m.handle_id
+WHERE c.service_name = 'iMessage'
+  AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)
+ORDER BY m.date DESC
+LIMIT ?;
+`
+
+const syncIncrementalMessagesSQL = `
+SELECT DISTINCT
+  c.guid AS chat_guid,
+  m.ROWID AS source_rowid,
+  m.guid,
+  m.text,
+  m.attributedBody,
+  m.subject,
+  m.service,
+  m.date,
+  m.date_read,
+  m.date_delivered,
+  m.is_from_me,
+  m.is_read,
+  m.is_delivered,
+  m.cache_has_attachments,
+  h.id AS handle_id_value,
+  h.service AS handle_service
+FROM message AS m
+JOIN chat_message_join AS cmj
+  ON cmj.message_id = m.ROWID
+JOIN chat AS c
+  ON c.ROWID = cmj.chat_id
+LEFT JOIN handle AS h
+  ON h.ROWID = m.handle_id
+WHERE c.service_name = 'iMessage'
+  AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)
+  AND m.ROWID > ?
+ORDER BY m.ROWID ASC
+LIMIT ?;
+`
+
+type Queries struct {
+	db *sql.DB
+}
+
+const attachmentBaseSelect = `
+SELECT
+  a.guid,
+  m.guid AS message_guid,
+  a.filename,
+  a.mime_type,
+  a.transfer_name,
+  a.total_bytes,
+  a.filename AS local_path,
+  a.is_outgoing,
+  a.hide_attachment,
+  a.created_date
+FROM attachment AS a
+JOIN message_attachment_join AS maj
+  ON maj.attachment_id = a.ROWID
+JOIN message AS m
+  ON m.ROWID = maj.message_id
+`
+
+func NewQueries(db *sql.DB) *Queries {
+	return &Queries{db: db}
+}
+
+func (q *Queries) ListRecentMessages(ctx context.Context, limit, offset int, service string, includeEmpty bool) ([]MessageJSON, error) {
+	sqlText, args := buildRecentMessagesQuery(limit, offset, service, includeEmpty)
+
+	rows, err := q.db.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages, err := scanMessages(rows, includeEmpty)
+	if err != nil {
+		return nil, err
+	}
+
+	return q.attachMessageAttachments(ctx, messages)
+}
+
+func (q *Queries) ListChats(ctx context.Context, limit, offset int, withArchived bool, service string) ([]ChatJSON, error) {
+	sqlText, args := buildChatsQuery(limit, offset, withArchived, service)
+
+	rows, err := q.db.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chats []ChatJSON
+	for rows.Next() {
+		var row ChatRow
+		if err := rows.Scan(
+			&row.GUID,
+			&row.ChatIdentifier,
+			&row.ServiceName,
+			&row.DisplayName,
+			&row.IsArchived,
+		); err != nil {
+			return nil, err
+		}
+
+		chats = append(chats, ChatJSON{
+			GUID:           row.GUID,
+			ChatIdentifier: row.ChatIdentifier,
+			ServiceName:    row.ServiceName,
+			DisplayName:    row.DisplayName,
+			IsArchived:     row.IsArchived,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return chats, nil
+}
+
+func (q *Queries) ChatExists(ctx context.Context, guid string) (bool, error) {
+	var one int
+	err := q.db.QueryRowContext(ctx, chatExistsSQL, guid).Scan(&one)
+	if err == nil {
+		return true, nil
+	}
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return false, err
+}
+
+func (q *Queries) GetChatInfo(ctx context.Context, guid string) (*ChatInfo, error) {
+	var info ChatInfo
+	err := q.db.QueryRowContext(ctx, chatInfoSQL, guid).Scan(&info.GUID, &info.ServiceName)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+func (q *Queries) ListChatMessages(ctx context.Context, guid string, limit, offset int, includeEmpty bool) ([]MessageJSON, error) {
+	sqlText, args := buildChatMessagesQuery(guid, limit, offset, includeEmpty)
+
+	rows, err := q.db.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages, err := scanMessages(rows, includeEmpty)
+	if err != nil {
+		return nil, err
+	}
+
+	return q.attachMessageAttachments(ctx, messages)
+}
+
+func (q *Queries) FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64) (*MessageJSON, error) {
+	rows, err := q.db.QueryContext(ctx, `
+SELECT
+  m.guid,
+  m.text,
+  m.attributedBody,
+  m.subject,
+  m.service,
+  m.date,
+  m.date_read,
+  m.date_delivered,
+  m.is_from_me,
+  m.is_read,
+  m.is_delivered,
+  m.cache_has_attachments,
+  h.id AS handle_id_value,
+  h.service AS handle_service
+FROM message AS m
+JOIN chat_message_join AS cmj
+  ON cmj.message_id = m.ROWID
+JOIN chat AS c
+  ON c.ROWID = cmj.chat_id
+LEFT JOIN handle AS h
+  ON h.ROWID = m.handle_id
+WHERE c.guid = ?
+  AND m.is_from_me = 1
+ORDER BY m.date DESC
+LIMIT 100;
+`, guid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		row, err := scanMessageRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		json := rowToMessageJSON(row)
+		if json.DateCreated == nil || *json.DateCreated < sentAtUnixMilli {
+			continue
+		}
+		if send.NormalizeText(stringValue(json.Text)) == normalizedText {
+			return &json, nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (q *Queries) ListSyncChats(ctx context.Context) ([]SyncChatRow, error) {
+	rows, err := q.db.QueryContext(ctx, syncChatsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chats []SyncChatRow
+	for rows.Next() {
+		var row SyncChatRow
+		if err := rows.Scan(
+			&row.GUID,
+			&row.ChatIdentifier,
+			&row.ServiceName,
+			&row.DisplayName,
+			&row.IsArchived,
+		); err != nil {
+			return nil, err
+		}
+		chats = append(chats, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return chats, nil
+}
+
+func (q *Queries) ListSyncRecentMessages(ctx context.Context, limit int) ([]SyncMessageRow, error) {
+	rows, err := q.db.QueryContext(ctx, syncRecentMessagesSQL, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []SyncMessageRow
+	for rows.Next() {
+		row, err := scanSyncMessageRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		if row.ChatGUID == nil {
+			continue
+		}
+		text := ExtractMessageText(row.Text, row.AttributedBody)
+		if !MessageHasRenderableContent(text, row.CacheHasAttachments) {
+			continue
+		}
+
+		messages = append(messages, SyncMessageRow{
+			ChatGUID:            *row.ChatGUID,
+			SourceRowID:         derefInt64(row.SourceRowID),
+			GUID:                row.GUID,
+			Text:                text,
+			Subject:             row.Subject,
+			Service:             row.Service,
+			DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
+			DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
+			DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
+			IsFromMe:            row.IsFromMe,
+			IsRead:              row.IsRead,
+			IsDelivered:         row.IsDelivered,
+			HandleID:            row.HandleValue,
+			HandleService:       row.HandleService,
+			CacheHasAttachments: row.CacheHasAttachments,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+func (q *Queries) ListSyncRecentMessagesSince(ctx context.Context, afterRowID int64, limit int) ([]SyncMessageRow, error) {
+	rows, err := q.db.QueryContext(ctx, syncIncrementalMessagesSQL, afterRowID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []SyncMessageRow
+	for rows.Next() {
+		row, err := scanSyncMessageRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		if row.ChatGUID == nil || row.SourceRowID == nil {
+			continue
+		}
+		text := ExtractMessageText(row.Text, row.AttributedBody)
+		if !MessageHasRenderableContent(text, row.CacheHasAttachments) {
+			continue
+		}
+
+		messages = append(messages, SyncMessageRow{
+			ChatGUID:            *row.ChatGUID,
+			SourceRowID:         *row.SourceRowID,
+			GUID:                row.GUID,
+			Text:                text,
+			Subject:             row.Subject,
+			Service:             row.Service,
+			DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
+			DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
+			DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
+			IsFromMe:            row.IsFromMe,
+			IsRead:              row.IsRead,
+			IsDelivered:         row.IsDelivered,
+			HandleID:            row.HandleValue,
+			HandleService:       row.HandleService,
+			CacheHasAttachments: row.CacheHasAttachments,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+func (q *Queries) ListSyncAttachmentsForMessages(ctx context.Context, messageGUIDs []string) ([]SyncAttachmentRow, error) {
+	if len(messageGUIDs) == 0 {
+		return nil, nil
+	}
+
+	sqlText, args := buildMessageAttachmentsQuery(messageGUIDs)
+	rows, err := q.db.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var attachments []SyncAttachmentRow
+	for rows.Next() {
+		row, err := scanAttachmentRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, SyncAttachmentRow{
+			GUID:           row.GUID,
+			MessageGUID:    row.MessageGUID,
+			Filename:       row.Filename,
+			MimeType:       row.MimeType,
+			TransferName:   row.TransferName,
+			TotalBytes:     row.TotalBytes,
+			LocalPath:      row.LocalPath,
+			IsOutgoing:     row.IsOutgoing,
+			HideAttachment: row.HideAttachment,
+			CreatedAt:      timeutil.AppleMicrosToUnixMilliPtr(row.CreatedRaw),
+		})
+	}
+
+	return attachments, rows.Err()
+}
+
+func scanMessages(rows *sql.Rows, includeEmpty bool) ([]MessageJSON, error) {
+	var messages []MessageJSON
+	for rows.Next() {
+		row, err := scanMessageRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		message := rowToMessageJSON(row)
+		if !includeEmpty && !MessageHasRenderableContent(message.Text, message.CacheHasAttachments) {
+			continue
+		}
+		messages = append(messages, message)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+func scanMessageRow(rows *sql.Rows) (MessageRow, error) {
+	var row MessageRow
+	var isFromMe, isRead, isDelivered, hasAttachments int64
+
+	err := rows.Scan(
+		&row.GUID,
+		&row.Text,
+		&row.AttributedBody,
+		&row.Subject,
+		&row.Service,
+		&row.DateRaw,
+		&row.DateReadRaw,
+		&row.DateDeliveredRaw,
+		&isFromMe,
+		&isRead,
+		&isDelivered,
+		&hasAttachments,
+		&row.HandleValue,
+		&row.HandleService,
+	)
+	if err != nil {
+		return MessageRow{}, fmt.Errorf("scan message row: %w", err)
+	}
+
+	row.IsFromMe = isFromMe != 0
+	row.IsRead = isRead != 0
+	row.IsDelivered = isDelivered != 0
+	row.CacheHasAttachments = hasAttachments != 0
+	return row, nil
+}
+
+func scanSyncMessageRow(rows *sql.Rows) (MessageRow, error) {
+	var row MessageRow
+	var isFromMe, isRead, isDelivered, hasAttachments int64
+
+	err := rows.Scan(
+		&row.ChatGUID,
+		&row.SourceRowID,
+		&row.GUID,
+		&row.Text,
+		&row.AttributedBody,
+		&row.Subject,
+		&row.Service,
+		&row.DateRaw,
+		&row.DateReadRaw,
+		&row.DateDeliveredRaw,
+		&isFromMe,
+		&isRead,
+		&isDelivered,
+		&hasAttachments,
+		&row.HandleValue,
+		&row.HandleService,
+	)
+	if err != nil {
+		return MessageRow{}, fmt.Errorf("scan sync message row: %w", err)
+	}
+
+	row.IsFromMe = isFromMe != 0
+	row.IsRead = isRead != 0
+	row.IsDelivered = isDelivered != 0
+	row.CacheHasAttachments = hasAttachments != 0
+	return row, nil
+}
+
+func derefInt64(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func rowToMessageJSON(row MessageRow) MessageJSON {
+	var handle *HandleJSON
+	if row.HandleValue != nil {
+		handle = &HandleJSON{
+			ID:      *row.HandleValue,
+			Service: row.HandleService,
+		}
+	}
+
+	return MessageJSON{
+		GUID:                row.GUID,
+		Text:                ExtractMessageText(row.Text, row.AttributedBody),
+		Subject:             row.Subject,
+		Service:             row.Service,
+		DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
+		DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
+		DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
+		IsFromMe:            row.IsFromMe,
+		IsRead:              row.IsRead,
+		IsDelivered:         row.IsDelivered,
+		Handle:              handle,
+		CacheHasAttachments: row.CacheHasAttachments,
+	}
+}
+
+func buildRecentMessagesQuery(limit, offset int, service string, includeEmpty bool) (string, []any) {
+	sqlText := recentMessagesBaseSQL
+	args := make([]any, 0, 3)
+
+	clauses := make([]string, 0, 2)
+	if !includeEmpty {
+		clauses = append(clauses, "(m.text IS NOT NULL OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)")
+	}
+
+	if service != "all" {
+		sqlText += `
+JOIN chat_message_join AS cmj
+  ON cmj.message_id = m.ROWID
+JOIN chat AS c
+  ON c.ROWID = cmj.chat_id
+`
+		clauses = append(clauses, "c.service_name = ?")
+		args = append(args, service)
+	}
+
+	if len(clauses) > 0 {
+		sqlText += "WHERE " + joinClauses(clauses) + "\n"
+	}
+
+	sqlText += "ORDER BY m.date DESC\nLIMIT ? OFFSET ?;\n"
+	args = append(args, limit, offset)
+	return sqlText, args
+}
+
+func buildChatsQuery(limit, offset int, withArchived bool, service string) (string, []any) {
+	sqlText := chatsBaseSQL
+	args := make([]any, 0, 3)
+	clauses := make([]string, 0, 2)
+
+	if !withArchived {
+		clauses = append(clauses, "c.is_archived = 0")
+	}
+	if service != "all" {
+		clauses = append(clauses, "c.service_name = ?")
+		args = append(args, service)
+	}
+
+	if len(clauses) > 0 {
+		sqlText += "WHERE " + joinClauses(clauses) + "\n"
+	}
+
+	sqlText += "ORDER BY c.ROWID DESC\nLIMIT ? OFFSET ?;\n"
+	args = append(args, limit, offset)
+	return sqlText, args
+}
+
+func buildChatMessagesQuery(guid string, limit, offset int, includeEmpty bool) (string, []any) {
+	sqlText := chatMessagesBaseSQL
+	args := []any{guid}
+
+	if !includeEmpty {
+		sqlText += "AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)\n"
+	}
+
+	sqlText += "ORDER BY m.date DESC\nLIMIT ? OFFSET ?;\n"
+	args = append(args, limit, offset)
+	return sqlText, args
+}
+
+func joinClauses(clauses []string) string {
+	result := clauses[0]
+	for i := 1; i < len(clauses); i++ {
+		result += " AND " + clauses[i]
+	}
+	return result
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+type attachmentRow struct {
+	GUID           string
+	MessageGUID    string
+	Filename       *string
+	MimeType       *string
+	TransferName   *string
+	TotalBytes     int64
+	LocalPath      *string
+	IsOutgoing     bool
+	HideAttachment bool
+	CreatedRaw     *int64
+}
+
+func scanAttachmentRow(rows *sql.Rows) (attachmentRow, error) {
+	var row attachmentRow
+	var isOutgoing, hideAttachment int64
+	err := rows.Scan(
+		&row.GUID,
+		&row.MessageGUID,
+		&row.Filename,
+		&row.MimeType,
+		&row.TransferName,
+		&row.TotalBytes,
+		&row.LocalPath,
+		&isOutgoing,
+		&hideAttachment,
+		&row.CreatedRaw,
+	)
+	if err != nil {
+		return attachmentRow{}, fmt.Errorf("scan attachment row: %w", err)
+	}
+	row.IsOutgoing = isOutgoing != 0
+	row.HideAttachment = hideAttachment != 0
+	return row, nil
+}
+
+func (q *Queries) attachMessageAttachments(ctx context.Context, messages []MessageJSON) ([]MessageJSON, error) {
+	if len(messages) == 0 {
+		return messages, nil
+	}
+
+	guids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		guids = append(guids, message.GUID)
+	}
+
+	attachments, err := q.ListSyncAttachmentsForMessages(ctx, guids)
+	if err != nil {
+		return nil, err
+	}
+
+	grouped := make(map[string][]AttachmentJSON, len(messages))
+	for _, attachment := range attachments {
+		grouped[attachment.MessageGUID] = append(grouped[attachment.MessageGUID], AttachmentJSON{
+			GUID:         attachment.GUID,
+			Filename:     attachment.Filename,
+			MimeType:     attachment.MimeType,
+			TransferName: attachment.TransferName,
+			TotalBytes:   attachment.TotalBytes,
+			DownloadURL:  "/api/attachments/" + attachment.GUID,
+		})
+	}
+
+	for i := range messages {
+		messages[i].Attachments = grouped[messages[i].GUID]
+		if messages[i].Attachments == nil {
+			messages[i].Attachments = []AttachmentJSON{}
+		}
+	}
+
+	return messages, nil
+}
+
+func buildMessageAttachmentsQuery(messageGUIDs []string) (string, []any) {
+	placeholders := make([]string, len(messageGUIDs))
+	args := make([]any, len(messageGUIDs))
+	for i, guid := range messageGUIDs {
+		placeholders[i] = "?"
+		args[i] = guid
+	}
+
+	return attachmentBaseSelect +
+		"WHERE m.guid IN (" + strings.Join(placeholders, ", ") + ")\n" +
+		"ORDER BY a.created_date ASC, a.ROWID ASC;\n", args
+}

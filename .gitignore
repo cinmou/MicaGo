@@ -1,32 +1,103 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+# =============================================================================
+# MicaGo / MicaGoServer .gitignore
 #
-# Binaries for programs and plugins
+# Goal: keep local build, test, smoke, and runtime artifacts out of git while
+# always tracking source (.go), migrations, docs/specs, smoke *scripts*, and
+# example config templates. Most patterns are intentionally NOT anchored so
+# they match at any depth (e.g. both ./.gocache and
+# ./MicaGoServer/micago-server/tmp).
+# =============================================================================
+
+# --- Go build outputs --------------------------------------------------------
+bin/
+build/
+dist/
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
+
+# --- Go coverage and profiling -----------------------------------------------
+coverage.out
+coverage.html
 coverage.*
 *.coverprofile
 profile.cov
+*.prof
+*.pprof
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Local Go build/module cache when GOCACHE/GOPATH is redirected into the repo
+.gocache/
 
-# Go workspace file
+# Go workspace files
 go.work
 go.work.sum
 
-# env file
-.env
+# --- Local runtime / config / database files ---------------------------------
+.micago/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+config.yaml
+relay.db
+# ...but always keep example/template config files
+!*.example.yaml
+!*.example.yml
+!config.example.yaml
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# --- Logs --------------------------------------------------------------------
+*.log
+logs/
+
+# --- Smoke / inspect test temporary OUTPUT (the scripts/ dir is kept) --------
+tmp/
+temp/
+.smoke/
+smoke-output/
+*.tmp
+
+# --- Third-party reference (BlueBubbles upstream, not our source) ------------
+# Kept locally for analysis only; never committed to this repo.
+MicaGoServer/bluebubbles server/
+
+# --- macOS -------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- IDE / editor ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Xcode / Swift (macOS companion app) -------------------------------------
+# Keep the .xcodeproj and project.pbxproj; ignore only local/derived artifacts.
+DerivedData/
+build/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+.swiftpm/
+# Keep the shared scheme; ignore per-user schemes
+xcshareddata/xcschemes/xcuserdata/
+
+# --- Environment files -------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Flutter / client artifacts (for a future client repo) -------------------
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+coverage/

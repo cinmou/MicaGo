@@ -1,0 +1,62 @@
+package httpapi
+
+import (
+	"crypto/subtle"
+	"net/http"
+	"strings"
+)
+
+type AuthConfig struct {
+	Enabled bool
+	Token   string
+}
+
+func (c AuthConfig) Wrap(next http.Handler) http.Handler {
+	if !c.Enabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validBearerToken(r, c.Token) {
+			writeUnauthorized(w)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (c AuthConfig) ValidateRequest(r *http.Request) bool {
+	if !c.Enabled {
+		return true
+	}
+	return validBearerToken(r, c.Token)
+}
+
+func (c AuthConfig) ValidateWebSocketRequest(r *http.Request) bool {
+	if !c.Enabled {
+		return true
+	}
+	if validBearerToken(r, c.Token) {
+		return true
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	return constantTimeEqual(token, c.Token)
+}
+
+func validBearerToken(r *http.Request, expected string) bool {
+	value := strings.TrimSpace(r.Header.Get("Authorization"))
+	if value == "" {
+		return false
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	return constantTimeEqual(strings.TrimSpace(strings.TrimPrefix(value, prefix)), expected)
+}
+
+func constantTimeEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}

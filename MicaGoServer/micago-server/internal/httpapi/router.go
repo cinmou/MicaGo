@@ -1,0 +1,49 @@
+package httpapi
+
+import (
+	"net/http"
+
+	"micagoserver/internal/realtime"
+)
+
+func NewRouter(h *Handlers, hub *realtime.Hub, auth AuthConfig) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/health", h.GetHealth)
+	mux.Handle("GET /api/server/info", auth.Wrap(http.HandlerFunc(h.GetServerInfo)))
+	mux.Handle("GET /api/server/status", auth.Wrap(http.HandlerFunc(h.GetServerStatus)))
+	mux.Handle("GET /api/server/urls", auth.Wrap(http.HandlerFunc(h.GetServerURLs)))
+	mux.Handle("POST /api/server/public-url", auth.Wrap(http.HandlerFunc(h.SetPublicURL)))
+	mux.Handle("POST /api/server/public-url/check", auth.Wrap(http.HandlerFunc(h.CheckPublicURL)))
+	mux.Handle("POST /api/auth/check", auth.Wrap(http.HandlerFunc(h.CheckAuth)))
+	mux.Handle("GET /api/messages/recent", auth.Wrap(http.HandlerFunc(h.GetRecentMessages)))
+	mux.Handle("GET /api/chats", auth.Wrap(http.HandlerFunc(h.GetChats)))
+	mux.Handle("GET /api/chats/{guid}/messages", auth.Wrap(http.HandlerFunc(h.GetChatMessages)))
+	mux.Handle("POST /api/chats/{guid}/send", auth.Wrap(http.HandlerFunc(h.SendText)))
+	mux.Handle("GET /api/attachments/{guid}", auth.Wrap(http.HandlerFunc(h.GetAttachment)))
+	mux.Handle("POST /api/devices/register", auth.Wrap(http.HandlerFunc(h.RegisterDevice)))
+	mux.Handle("GET /api/devices", auth.Wrap(http.HandlerFunc(h.ListDevices)))
+	mux.Handle("PATCH /api/devices/{id}", auth.Wrap(http.HandlerFunc(h.PatchDevice)))
+	mux.Handle("POST /api/devices/{id}/heartbeat", auth.Wrap(http.HandlerFunc(h.DeviceHeartbeat)))
+	mux.Handle("DELETE /api/devices/{id}", auth.Wrap(http.HandlerFunc(h.DeleteDevice)))
+	mux.Handle("POST /api/devices/{id}/test-push", auth.Wrap(http.HandlerFunc(h.TestPush)))
+	if hub != nil {
+		mux.Handle("GET /ws", websocketAuthHandler(hub, auth))
+	}
+	return mux
+}
+
+func websocketAuthHandler(hub *realtime.Hub, auth AuthConfig) http.Handler {
+	if hub == nil {
+		return http.NotFoundHandler()
+	}
+	if !auth.Enabled {
+		return hub
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !auth.ValidateWebSocketRequest(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		hub.ServeHTTP(w, r)
+	})
+}

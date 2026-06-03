@@ -1,0 +1,391 @@
+package httpapi
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"micagoserver/internal/config"
+)
+
+// Connection-endpoint aggregation (v0.11). The server always exposes loopback
+// (local) and, when bound appropriately, LAN endpoints. The public endpoint is
+// an OPTIONAL EXTRA, configured by the user — never a replacement for, or a
+// switchable mode against, local/LAN. See
+// docs/spec-v0.11.0-connection-endpoints.md.
+
+// Reachability is a tri-state that marshals as JSON `true`, `false`, or the
+// string `"unknown"` (matching the documented wire shape).
+type Reachability struct {
+	known bool
+	value bool
+}
+
+func reachableYes() Reachability     { return Reachability{known: true, value: true} }
+func reachableNo() Reachability      { return Reachability{known: true, value: false} }
+func reachableUnknown() Reachability { return Reachability{} }
+
+func (r Reachability) MarshalJSON() ([]byte, error) {
+	if !r.known {
+		return []byte(`"unknown"`), nil
+	}
+	if r.value {
+		return []byte("true"), nil
+	}
+	return []byte("false"), nil
+}
+
+func (r *Reachability) UnmarshalJSON(b []byte) error {
+	switch strings.TrimSpace(string(b)) {
+	case `"unknown"`:
+		r.known, r.value = false, false
+	case "true":
+		r.known, r.value = true, true
+	case "false":
+		r.known, r.value = true, false
+	default:
+		return fmt.Errorf("invalid reachability %q", string(b))
+	}
+	return nil
+}
+
+// EndpointInfo is one reachable connection endpoint.
+type EndpointInfo struct {
+	Kind      string       `json:"kind"` // loopback | lan
+	Label     string       `json:"label"`
+	BaseURL   string       `json:"baseUrl"`
+	WSURL     string       `json:"wsUrl"`
+	Reachable Reachability `json:"reachable"`
+}
+
+// PublicEndpoint is the optional, user-configured public endpoint.
+type PublicEndpoint struct {
+	Enabled       bool         `json:"enabled"`
+	Kind          string       `json:"kind,omitempty"`
+	BaseURL       string       `json:"baseUrl"`
+	WSURL         string       `json:"wsUrl"`
+	Reachable     Reachability `json:"reachable"`
+	ProviderHint  string       `json:"providerHint,omitempty"`
+	VerifyTLS     bool         `json:"verifyTls"`
+	LastCheckedAt *int64       `json:"lastCheckedAt"`
+}
+
+// ServerURLsResponse is the GET /api/server/urls payload.
+type ServerURLsResponse struct {
+	Local                    []EndpointInfo `json:"local"`
+	LAN                      []EndpointInfo `json:"lan"`
+	Public                   PublicEndpoint `json:"public"`
+	PreferredPairingEndpoint string         `json:"preferredPairingEndpoint"`
+}
+
+// PublicURLCheckResult is the POST /api/server/public-url/check payload. It
+// never includes the bearer token.
+type PublicURLCheckResult struct {
+	OK        bool   `json:"ok"`
+	Reachable bool   `json:"reachable"`
+	AuthOK    bool   `json:"authOk"`
+	Status    int    `json:"status"`
+	BaseURL   string `json:"baseUrl"`
+	Message   string `json:"message"`
+}
+
+// NetworkController owns the mutable public-endpoint settings, persists changes
+// to the config file, and performs reachability checks. Local/LAN endpoints are
+// derived statically from the bind address and are NOT part of this controller.
+type NetworkController struct {
+	mu            sync.RWMutex
+	configPath    string
+	publicBaseURL string
+	verifyTLS     bool
+	preferred     string
+	authToken     string // used only for the outbound reachability probe
+	lastReachable Reachability
+	lastCheckedAt int64
+}
+
+func NewNetworkController(cfg config.Config) *NetworkController {
+	return &NetworkController{
+		configPath:    cfg.ConfigPath,
+		publicBaseURL: strings.TrimSpace(cfg.PublicBaseURL),
+		verifyTLS:     cfg.VerifyTLS,
+		preferred:     cfg.PreferredPairingEndpoint,
+		authToken:     cfg.AuthToken,
+	}
+}
+
+type networkSnapshot struct {
+	publicBaseURL string
+	verifyTLS     bool
+	preferred     string
+	lastReachable Reachability
+	lastCheckedAt int64
+}
+
+func (c *NetworkController) snapshot() networkSnapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return networkSnapshot{
+		publicBaseURL: c.publicBaseURL,
+		verifyTLS:     c.verifyTLS,
+		preferred:     c.preferred,
+		lastReachable: c.lastReachable,
+		lastCheckedAt: c.lastCheckedAt,
+	}
+}
+
+// SetPublicURL validates, persists, and applies a new public endpoint. An empty
+// url clears the public endpoint. Local/LAN endpoints are unaffected.
+func (c *NetworkController) SetPublicURL(publicBaseURL string, verifyTLS bool, preferred string) error {
+	trimmed := strings.TrimSpace(publicBaseURL)
+	if preferred == "" {
+		preferred = "auto"
+	}
+	if err := config.UpdatePublicBaseURL(c.configPath, trimmed, verifyTLS, preferred); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.publicBaseURL = trimmed
+	c.verifyTLS = verifyTLS
+	c.preferred = preferred
+	c.lastReachable = reachableUnknown() // URL changed; previous result is stale
+	c.lastCheckedAt = 0
+	return nil
+}
+
+// Check probes the configured public URL and confirms bearer auth works against
+// THIS server. It updates the cached reachability used by GET /api/server/urls.
+func (c *NetworkController) Check(ctx context.Context) PublicURLCheckResult {
+	snap := c.snapshot()
+	base := snap.publicBaseURL
+	if base == "" {
+		return PublicURLCheckResult{OK: false, Reachable: false, Message: "no public URL configured"}
+	}
+
+	transport := &http.Transport{}
+	if !snap.verifyTLS {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // user opted out of TLS verification
+	}
+	client := &http.Client{Timeout: 6 * time.Second, Transport: transport}
+
+	target := strings.TrimRight(base, "/") + "/api/auth/check"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
+	result := PublicURLCheckResult{BaseURL: base}
+	if err != nil {
+		result.Message = "could not build request: " + err.Error()
+		return result
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Reachable = false
+		result.Message = "could not reach public URL: " + err.Error()
+		c.record(reachableNo())
+		return result
+	}
+	defer resp.Body.Close()
+
+	result.Reachable = true
+	result.Status = resp.StatusCode
+	result.AuthOK = resp.StatusCode == http.StatusOK
+	result.OK = result.AuthOK
+	switch {
+	case result.AuthOK:
+		result.Message = "public URL reaches this server and bearer auth works"
+	case resp.StatusCode == http.StatusUnauthorized:
+		result.Message = "reached a server but bearer auth was rejected"
+	default:
+		result.Message = fmt.Sprintf("reached an endpoint but received HTTP %d", resp.StatusCode)
+	}
+	c.record(reachableYes())
+	return result
+}
+
+func (c *NetworkController) record(r Reachability) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastReachable = r
+	c.lastCheckedAt = time.Now().UnixMilli()
+}
+
+// GetServerURLs returns all available connection endpoints grouped by type.
+func (h *Handlers) GetServerURLs(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, h.buildServerURLs())
+}
+
+func (h *Handlers) buildServerURLs() ServerURLsResponse {
+	resp := ServerURLsResponse{
+		Local:                    localEndpoints(h.cfg.HTTPAddr),
+		LAN:                      lanEndpoints(h.cfg.HTTPAddr),
+		PreferredPairingEndpoint: h.cfg.PreferredPairingEndpoint,
+	}
+	if resp.PreferredPairingEndpoint == "" {
+		resp.PreferredPairingEndpoint = "auto"
+	}
+
+	if h.status.Network != nil {
+		snap := h.status.Network.snapshot()
+		resp.PreferredPairingEndpoint = snap.preferred
+		resp.Public = buildPublicEndpoint(snap)
+	}
+	return resp
+}
+
+func buildPublicEndpoint(snap networkSnapshot) PublicEndpoint {
+	if snap.publicBaseURL == "" {
+		return PublicEndpoint{Enabled: false, Reachable: reachableUnknown(), VerifyTLS: snap.verifyTLS}
+	}
+	base := strings.TrimRight(snap.publicBaseURL, "/")
+	pe := PublicEndpoint{
+		Enabled:      true,
+		Kind:         "custom",
+		BaseURL:      base,
+		WSURL:        config.WebSocketURLFromBase(base),
+		Reachable:    snap.lastReachable,
+		ProviderHint: inferProviderHint(base),
+		VerifyTLS:    snap.verifyTLS,
+	}
+	if snap.lastCheckedAt > 0 {
+		checked := snap.lastCheckedAt
+		pe.LastCheckedAt = &checked
+	}
+	return pe
+}
+
+// SetPublicURL handles POST /api/server/public-url.
+func (h *Handlers) SetPublicURL(w http.ResponseWriter, r *http.Request) {
+	if h.status.Network == nil {
+		writeInternalError(w)
+		return
+	}
+	var req struct {
+		PublicBaseURL            string `json:"publicBaseUrl"`
+		VerifyTLS                *bool  `json:"verifyTls"`
+		PreferredPairingEndpoint string `json:"preferredPairingEndpoint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeBadRequest(w, "invalid JSON body")
+		return
+	}
+
+	snap := h.status.Network.snapshot()
+	verifyTLS := snap.verifyTLS
+	if req.VerifyTLS != nil {
+		verifyTLS = *req.VerifyTLS
+	}
+	preferred := strings.TrimSpace(req.PreferredPairingEndpoint)
+	if preferred == "" {
+		preferred = snap.preferred
+	}
+
+	if err := h.status.Network.SetPublicURL(req.PublicBaseURL, verifyTLS, preferred); err != nil {
+		writeBadRequest(w, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, h.buildServerURLs())
+}
+
+// CheckPublicURL handles POST /api/server/public-url/check.
+func (h *Handlers) CheckPublicURL(w http.ResponseWriter, r *http.Request) {
+	if h.status.Network == nil {
+		writeInternalError(w)
+		return
+	}
+	result := h.status.Network.Check(r.Context())
+	writeJSON(w, http.StatusOK, result)
+}
+
+// localEndpoints derives the loopback / "this Mac" endpoint(s) from the bind
+// address. Loopback is served whenever the server binds loopback or a wildcard
+// address; a specific non-loopback bind exposes that address as the local one.
+func localEndpoints(httpAddr string) []EndpointInfo {
+	host, port, loopback, wildcard := classifyHost(httpAddr)
+	hostForURL := "127.0.0.1"
+	if !loopback && !wildcard && host != "" {
+		hostForURL = host
+	}
+	base := "http://" + net.JoinHostPort(hostForURL, port)
+	return []EndpointInfo{{
+		Kind:      "loopback",
+		Label:     "This Mac",
+		BaseURL:   base,
+		WSURL:     config.WebSocketURLFromBase(base),
+		Reachable: reachableYes(),
+	}}
+}
+
+// lanEndpoints derives LAN endpoints when the bind address makes the server
+// LAN-reachable. A loopback-only bind yields no LAN endpoints.
+func lanEndpoints(httpAddr string) []EndpointInfo {
+	host, port, loopback, wildcard := classifyHost(httpAddr)
+	if loopback {
+		return []EndpointInfo{}
+	}
+	if !wildcard && host != "" {
+		// Bound to a specific non-loopback address.
+		base := "http://" + net.JoinHostPort(host, port)
+		return []EndpointInfo{{
+			Kind:      "lan",
+			Label:     "LAN",
+			BaseURL:   base,
+			WSURL:     config.WebSocketURLFromBase(base),
+			Reachable: reachableUnknown(),
+		}}
+	}
+	// Wildcard bind: enumerate non-loopback IPv4 interface addresses.
+	out := make([]EndpointInfo, 0)
+	for _, addr := range lanAddresses(httpAddr) {
+		base := "http://" + addr
+		out = append(out, EndpointInfo{
+			Kind:      "lan",
+			Label:     "LAN",
+			BaseURL:   base,
+			WSURL:     config.WebSocketURLFromBase(base),
+			Reachable: reachableUnknown(),
+		})
+	}
+	return out
+}
+
+func classifyHost(httpAddr string) (host, port string, loopback, wildcard bool) {
+	host, port, err := net.SplitHostPort(httpAddr)
+	if err != nil {
+		host = strings.Trim(httpAddr, "[]")
+		port = "3000"
+	}
+	if port == "" {
+		port = "3000"
+	}
+	lower := strings.ToLower(strings.Trim(host, "[]"))
+	loopback = lower == "127.0.0.1" || lower == "::1" || lower == "localhost"
+	wildcard = host == "" || lower == "0.0.0.0" || lower == "::"
+	return host, port, loopback, wildcard
+}
+
+func inferProviderHint(base string) string {
+	host := base
+	if u, err := url.Parse(base); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+	host = strings.ToLower(host)
+	switch {
+	case strings.HasSuffix(host, ".trycloudflare.com") || strings.Contains(host, "cfargotunnel"):
+		return "cloudflare_tunnel"
+	case strings.HasSuffix(host, ".ngrok.io") || strings.HasSuffix(host, ".ngrok-free.app") || strings.HasSuffix(host, ".ngrok.app"):
+		return "ngrok"
+	case strings.HasSuffix(host, ".ts.net"):
+		return "tailscale"
+	default:
+		return "custom"
+	}
+}

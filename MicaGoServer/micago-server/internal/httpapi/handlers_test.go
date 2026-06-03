@@ -1,0 +1,544 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"micagoserver/internal/config"
+	"micagoserver/internal/notify"
+	micasend "micagoserver/internal/send"
+	"micagoserver/internal/store"
+)
+
+type stubQueries struct {
+	recentService      string
+	recentIncludeEmpty bool
+	chatService        string
+	chatWithArchived   bool
+	chatMessagesEmpty  bool
+	match              *store.MessageJSON
+}
+
+func (s *stubQueries) ListRecentMessages(_ context.Context, _ int, _ int, service string, includeEmpty bool) ([]store.MessageJSON, error) {
+	s.recentService = service
+	s.recentIncludeEmpty = includeEmpty
+	return []store.MessageJSON{}, nil
+}
+
+func (s *stubQueries) ListChats(_ context.Context, _ int, _ int, withArchived bool, service string) ([]store.ChatJSON, error) {
+	s.chatService = service
+	s.chatWithArchived = withArchived
+	return []store.ChatJSON{}, nil
+}
+
+func (s *stubQueries) ChatExists(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
+func (s *stubQueries) GetChatInfo(_ context.Context, guid string) (*store.ChatInfo, error) {
+	service := serviceIMessage
+	return &store.ChatInfo{GUID: guid, ServiceName: &service}, nil
+}
+
+func (s *stubQueries) ListChatMessages(_ context.Context, _ string, _ int, _ int, includeEmpty bool) ([]store.MessageJSON, error) {
+	s.chatMessagesEmpty = includeEmpty
+	return []store.MessageJSON{}, nil
+}
+
+func (s *stubQueries) FindOutgoingMessageMatch(_ context.Context, _ string, _ string, _ int64) (*store.MessageJSON, error) {
+	return s.match, nil
+}
+
+type stubDeviceStore struct {
+	devices map[string]store.DeviceRecord
+}
+
+func (s *stubDeviceStore) UpsertDevice(_ context.Context, device store.DeviceRecord) (*store.DeviceRecord, error) {
+	if s.devices == nil {
+		s.devices = map[string]store.DeviceRecord{}
+	}
+	s.devices[device.ID] = device
+	copy := s.devices[device.ID]
+	return &copy, nil
+}
+
+func (s *stubDeviceStore) GetDeviceByID(_ context.Context, id string) (*store.DeviceRecord, error) {
+	device, ok := s.devices[id]
+	if !ok {
+		return nil, nil
+	}
+	copy := device
+	return &copy, nil
+}
+
+func (s *stubDeviceStore) ListDevices(_ context.Context) ([]store.DeviceRecord, error) {
+	out := make([]store.DeviceRecord, 0, len(s.devices))
+	for _, device := range s.devices {
+		out = append(out, device)
+	}
+	return out, nil
+}
+
+func (s *stubDeviceStore) UpdateDeviceHeartbeat(_ context.Context, id string, at int64) (*store.DeviceRecord, error) {
+	device, ok := s.devices[id]
+	if !ok {
+		return nil, nil
+	}
+	device.LastSeenAt = &at
+	device.UpdatedAt = at
+	s.devices[id] = device
+	copy := device
+	return &copy, nil
+}
+
+func (s *stubDeviceStore) DeleteDevice(_ context.Context, id string) error {
+	delete(s.devices, id)
+	return nil
+}
+
+type stubNotifier struct {
+	err error
+}
+
+func (s stubNotifier) SendTest(context.Context, store.DeviceRecord) error { return s.err }
+func (s stubNotifier) ProviderNames() []string {
+	return []string{"none", "webhook", "fcm", "hms", "harmony_push", "ntfy"}
+}
+
+func newTestHandlers(queries *stubQueries) *Handlers {
+	return NewHandlers(
+		queries,
+		log.New(io.Discard, "", 0),
+		nil,
+		nil,
+		"",
+		&stubDeviceStore{},
+		stubNotifier{},
+		config.Config{WebhookURL: "", HTTPAddr: "127.0.0.1:3000"},
+		StatusDeps{},
+	)
+}
+
+func TestGetRecentMessagesDefaultsToIMessageWithoutEmpty(t *testing.T) {
+	queries := &stubQueries{}
+	handlers := newTestHandlers(queries)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/messages/recent", nil)
+	rec := httptest.NewRecorder()
+
+	handlers.GetRecentMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if queries.recentService != defaultService {
+		t.Fatalf("expected default service %q, got %q", defaultService, queries.recentService)
+	}
+	if queries.recentIncludeEmpty {
+		t.Fatal("expected includeEmpty to default to false")
+	}
+}
+
+func TestGetChatsUsesRequestedServiceAndArchivedFlag(t *testing.T) {
+	queries := &stubQueries{}
+	handlers := newTestHandlers(queries)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chats?service=all&withArchived=true", nil)
+	rec := httptest.NewRecorder()
+
+	handlers.GetChats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if queries.chatService != serviceAll {
+		t.Fatalf("expected service %q, got %q", serviceAll, queries.chatService)
+	}
+	if !queries.chatWithArchived {
+		t.Fatal("expected withArchived to be true")
+	}
+}
+
+func TestGetRecentMessagesRejectsInvalidService(t *testing.T) {
+	queries := &stubQueries{}
+	handlers := newTestHandlers(queries)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/messages/recent?service=whatsapp", nil)
+	rec := httptest.NewRecorder()
+
+	handlers.GetRecentMessages(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "service must be one of") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestGetChatMessagesIncludeEmptyParsing(t *testing.T) {
+	queries := &stubQueries{}
+	handlers := newTestHandlers(queries)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chats/chat-guid/messages?includeEmpty=true", nil)
+	req.SetPathValue("guid", "chat-guid")
+	rec := httptest.NewRecorder()
+
+	handlers.GetChatMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !queries.chatMessagesEmpty {
+		t.Fatal("expected includeEmpty to be true")
+	}
+}
+
+type duplicatePendingManager struct{}
+
+func (duplicatePendingManager) Add(micasend.PendingSend) error { return micasend.ErrDuplicateTempGUID }
+func (duplicatePendingManager) Remove(string)                  {}
+func (duplicatePendingManager) Has(string) bool                { return true }
+
+type noopSender struct{}
+
+func (noopSender) SendText(context.Context, string, string) error { return nil }
+
+func TestSendTextRejectsDuplicateTempGUID(t *testing.T) {
+	queries := &stubQueries{}
+	handlers := NewHandlers(queries, log.New(io.Discard, "", 0), &SendDependencies{
+		Pending: duplicatePendingManager{},
+		Sender:  noopSender{},
+	}, nil, "", &stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/chat-guid/send", strings.NewReader(`{"tempGuid":"dup","message":"hello"}`))
+	req.SetPathValue("guid", "chat-guid")
+	rec := httptest.NewRecorder()
+
+	handlers.SendText(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "tempGuid is already pending") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+type fakePendingManager struct {
+	added   map[string]bool
+	removed []string
+}
+
+func (m *fakePendingManager) Add(p micasend.PendingSend) error {
+	if m.added == nil {
+		m.added = map[string]bool{}
+	}
+	if m.added[p.TempGUID] {
+		return micasend.ErrDuplicateTempGUID
+	}
+	m.added[p.TempGUID] = true
+	return nil
+}
+
+func (m *fakePendingManager) Remove(tempGUID string) {
+	m.removed = append(m.removed, tempGUID)
+	delete(m.added, tempGUID)
+}
+
+func (m *fakePendingManager) Has(tempGUID string) bool { return m.added[tempGUID] }
+
+type errorSender struct{}
+
+func (errorSender) SendText(context.Context, string, string) error { return errors.New("boom") }
+
+func TestSendTextCleansPendingOnFailure(t *testing.T) {
+	queries := &stubQueries{}
+	pending := &fakePendingManager{}
+	handlers := NewHandlers(queries, log.New(io.Discard, "", 0), &SendDependencies{
+		Pending: pending,
+		Sender:  errorSender{},
+	}, nil, "", &stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/chat-guid/send", strings.NewReader(`{"tempGuid":"one","message":"hello"}`))
+	req.SetPathValue("guid", "chat-guid")
+	rec := httptest.NewRecorder()
+
+	handlers.SendText(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	if pending.Has("one") {
+		t.Fatal("expected pending tempGuid to be removed after failure")
+	}
+}
+
+type stubAttachmentStore struct {
+	meta *store.AttachmentMeta
+	err  error
+}
+
+func (s stubAttachmentStore) GetAttachmentByGUID(context.Context, string) (*store.AttachmentMeta, error) {
+	return s.meta, s.err
+}
+
+func TestResolveAttachmentPathRejectsOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := resolveAttachmentPath(root, &outside); ok {
+		t.Fatal("expected path outside root to be rejected")
+	}
+}
+
+func TestGetAttachmentNotFoundWhenHidden(t *testing.T) {
+	root := t.TempDir()
+	meta := &store.AttachmentMeta{
+		GUID:           "att-1",
+		HideAttachment: true,
+	}
+	handlers := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, stubAttachmentStore{meta: meta}, root, &stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/attachments/att-1", nil)
+	req.SetPathValue("guid", "att-1")
+	rec := httptest.NewRecorder()
+
+	handlers.GetAttachment(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestGetAttachmentStreamsFile(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "folder", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	localPath := filePath
+	meta := &store.AttachmentMeta{
+		GUID:         "att-1",
+		LocalPath:    &localPath,
+		TransferName: ptr("file.txt"),
+		MimeType:     ptr("text/plain"),
+	}
+
+	handlers := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, stubAttachmentStore{meta: meta}, root, &stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+	req := httptest.NewRequest(http.MethodGet, "/api/attachments/att-1", nil)
+	req.SetPathValue("guid", "att-1")
+	rec := httptest.NewRecorder()
+
+	handlers.GetAttachment(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Body.String(); got != "hello" {
+		t.Fatalf("expected file contents, got %q", got)
+	}
+}
+
+func TestRegisterListAndDeleteDevice(t *testing.T) {
+	devices := &stubDeviceStore{}
+	handlers := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", devices, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/devices/register", strings.NewReader(`{"name":"Cinmou Android","platform":"android","clientType":"flutter","pushProvider":"none","pushEnabled":false}`))
+	registerRec := httptest.NewRecorder()
+	handlers.RegisterDevice(registerRec, registerReq)
+
+	if registerRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", registerRec.Code)
+	}
+	var registered store.DeviceResponse
+	if err := json.Unmarshal(registerRec.Body.Bytes(), &registered); err != nil {
+		t.Fatal(err)
+	}
+	if registered.Data.ID == "" {
+		t.Fatal("expected generated device id")
+	}
+	if registered.Data.PushTokenSet {
+		t.Fatal("expected push token to be hidden/unset")
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+	listRec := httptest.NewRecorder()
+	handlers.ListDevices(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", listRec.Code)
+	}
+	if !strings.Contains(listRec.Body.String(), "Cinmou Android") {
+		t.Fatalf("unexpected list body: %s", listRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/devices/"+registered.Data.ID, nil)
+	deleteReq.SetPathValue("id", registered.Data.ID)
+	deleteRec := httptest.NewRecorder()
+	handlers.DeleteDevice(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", deleteRec.Code)
+	}
+}
+
+func TestRegisterDeviceRejectsInvalidPlatform(t *testing.T) {
+	handlers := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/register", strings.NewReader(`{"name":"Bad","platform":"beos","clientType":"flutter","pushProvider":"none","pushEnabled":false}`))
+	rec := httptest.NewRecorder()
+
+	handlers.RegisterDevice(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestTestPushReturnsConfiguredErrorForNoneProvider(t *testing.T) {
+	devices := &stubDeviceStore{
+		devices: map[string]store.DeviceRecord{
+			"dev-1": {ID: "dev-1", Name: "Device", Platform: "android", ClientType: "flutter", PushProvider: "none", PushEnabled: false, CreatedAt: 1, UpdatedAt: 1},
+		},
+	}
+	handlers := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", devices, stubNotifier{err: notify.ErrPushNotConfigured}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/dev-1/test-push", nil)
+	req.SetPathValue("id", "dev-1")
+	rec := httptest.NewRecorder()
+
+	handlers.TestPush(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "push_not_configured") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestGetServerStatus(t *testing.T) {
+	devices := &stubDeviceStore{devices: map[string]store.DeviceRecord{
+		"d1": {ID: "d1", Name: "One"},
+		"d2": {ID: "d2", Name: "Two"},
+	}}
+	syncState := map[string]string{
+		"last_sync_at":       "1717372800000",
+		"last_message_rowid": "4242",
+	}
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", devices, stubNotifier{},
+		config.Config{
+			HTTPAddr:             "127.0.0.1:3000",
+			AuthDisabled:         false,
+			DisableSyncLoop:      false,
+			SyncInterval:         5 * time.Second,
+			NotificationsEnabled: true,
+			NotificationProvider: "webhook",
+			NotificationPreview:  "sender",
+		},
+		StatusDeps{
+			APIStore:    "relaydb",
+			ClientCount: func() int { return 3 },
+			SyncState: func(key string) (string, bool, error) {
+				v, ok := syncState[key]
+				return v, ok, nil
+			},
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/server/status", nil)
+	rec := httptest.NewRecorder()
+	handlers.GetServerStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var status store.ServerStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+
+	if !status.OK {
+		t.Fatalf("expected ok=true")
+	}
+	if status.Version != serverVersion {
+		t.Fatalf("expected version %q, got %q", serverVersion, status.Version)
+	}
+	if status.Store != "relaydb" {
+		t.Fatalf("expected store relaydb, got %q", status.Store)
+	}
+	if !status.Auth.Enabled {
+		t.Fatalf("expected auth enabled")
+	}
+	if !status.Sync.LoopEnabled || status.Sync.IntervalSeconds != 5 {
+		t.Fatalf("unexpected sync status: %+v", status.Sync)
+	}
+	if status.Sync.LastSyncAt == nil || *status.Sync.LastSyncAt != 1717372800000 {
+		t.Fatalf("unexpected lastSyncAt: %+v", status.Sync.LastSyncAt)
+	}
+	if status.Sync.LastMessageRowID == nil || *status.Sync.LastMessageRowID != 4242 {
+		t.Fatalf("unexpected lastMessageRowId: %+v", status.Sync.LastMessageRowID)
+	}
+	if status.Devices.Count != 2 {
+		t.Fatalf("expected 2 devices, got %d", status.Devices.Count)
+	}
+	if status.WebSocket.Clients != 3 {
+		t.Fatalf("expected 3 ws clients, got %d", status.WebSocket.Clients)
+	}
+	if !status.Notifications.Enabled || status.Notifications.Provider != "webhook" {
+		t.Fatalf("unexpected notifications: %+v", status.Notifications)
+	}
+	if !contains(status.Notifications.Implemented, "webhook") || !contains(status.Notifications.Implemented, "none") {
+		t.Fatalf("expected none+webhook implemented, got %v", status.Notifications.Implemented)
+	}
+	if !contains(status.Notifications.Stub, "fcm") {
+		t.Fatalf("expected fcm in stub list, got %v", status.Notifications.Stub)
+	}
+	if status.Permissions.Automation.Status != "unknown" {
+		t.Fatalf("expected automation unknown, got %q", status.Permissions.Automation.Status)
+	}
+}
+
+func TestGetServerStatusTokenNeverExposed(t *testing.T) {
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000", AuthToken: "super-secret-token"},
+		StatusDeps{APIStore: "relaydb"},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/server/status", nil)
+	rec := httptest.NewRecorder()
+	handlers.GetServerStatus(rec, req)
+
+	if strings.Contains(rec.Body.String(), "super-secret-token") {
+		t.Fatalf("status response leaked the auth token: %s", rec.Body.String())
+	}
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
