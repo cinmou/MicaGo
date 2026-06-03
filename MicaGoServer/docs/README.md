@@ -77,6 +77,20 @@ individual feature specs add detail and rationale.
 | [`spec-v0.10.0-mac-companion.md`](spec-v0.10.0-mac-companion.md) | Native macOS SwiftUI companion + `GET /api/server/status`. Uses "Connection Endpoints" terminology (v0.11). |
 | [`spec-v0.10.1-swiftui-companion-redesign.md`](spec-v0.10.1-swiftui-companion-redesign.md) | **Planning:** sidebar-based companion redesign (Dashboard/Connections/Devices/Notifications/Permissions/Server/Logs/Advanced), informed by a BlueBubbles UI surface audit. |
 
+### Roadmap specs (planned / deferred phases)
+
+Productization roadmap after v0.11.x. Build order:
+v0.11.2 → v0.11.3 → v0.11.4 → v0.12 → v0.13. See
+[`CURRENT_PLAN.md`](CURRENT_PLAN.md).
+
+| Document | Phase |
+| --- | --- |
+| [`spec-v0.11.2-companion-runtime-deployment.md`](spec-v0.11.2-companion-runtime-deployment.md) | **Planned:** bundle the Go backend in the app; companion-owned lifecycle (start/stop/restart, crash + backoff auto-restart), launch-at-login/auto-start/silent launch, menu-bar item, clear Full Disk Access failure surfacing. |
+| [`spec-v0.11.3-sync-control-and-privacy-rules.md`](spec-v0.11.3-sync-control-and-privacy-rules.md) | **Planned:** per-chat/per-handle sync + push rules (whitelist/blacklist), Sync Control + Recent Messages management view; future-sync-only first (no historical deletion). |
+| [`spec-v0.11.4-contacts-enrichment.md`](spec-v0.11.4-contacts-enrichment.md) | **Planned:** read-only, local-only macOS Contacts to map handles → names for rule editing; never uploaded. |
+| [`spec-v0.12.0-firebase-self-host.md`](spec-v0.12.0-firebase-self-host.md) | **Planned:** self-host FCM push + optional Firestore **public-URL-only** sync; strict no-content/no-token privacy. |
+| [`spec-v0.13.0-scheduled-sending.md`](spec-v0.13.0-scheduled-sending.md) | **Deferred:** scheduled text sends; persistence, restart/sleep behavior, anti-misfire — sequenced last. |
+
 ### Status / gap reports
 
 | Document | Purpose |

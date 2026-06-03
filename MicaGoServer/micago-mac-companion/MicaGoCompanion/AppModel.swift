@@ -6,7 +6,7 @@ import Combine
 /// the window is visible.
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var controller = ServerController()
+    static let shared = AppModel()
 
     @Published var config: MicaConfig?
     @Published var reachable = false

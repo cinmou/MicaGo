@@ -23,6 +23,8 @@ enum MessagesApp {
 /// never in the Go relay core: it owns a conservative `caffeinate` child process.
 @MainActor
 final class RuntimeMonitor: ObservableObject {
+    static let shared = RuntimeMonitor()
+
     @Published private(set) var messagesRunning: Bool = MessagesApp.isRunning()
     @Published private(set) var keepAwakeActive: Bool = false
 

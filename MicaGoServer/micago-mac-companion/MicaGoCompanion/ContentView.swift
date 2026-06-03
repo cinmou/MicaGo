@@ -40,6 +40,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var runtime: RuntimeMonitor
+    @EnvironmentObject var backend: BackendController
     @State private var selection: SidebarItem? = .dashboard
 
     var body: some View {
@@ -64,17 +65,11 @@ struct ContentView: View {
                 }
             }
         }
-        // Concrete content size so the window is never zero-sized on launch.
         .frame(minWidth: 820, idealWidth: 1000, minHeight: 560, idealHeight: 720)
-        .task {
-            model.reloadConfig()
-            model.startPolling()
-            runtime.startMonitoring()
-        }
-        .onDisappear {
-            model.stopPolling()
-            runtime.stopMonitoring()
-        }
+        // Bootstrap (config/poll/auto-start/runtime) is owned by the AppDelegate
+        // so it runs even when launched silently with no window. Polling stays
+        // alive for the menu-bar surface; it is not torn down when the window
+        // closes.
     }
 
     @ViewBuilder private var detailContent: some View {
@@ -84,44 +79,83 @@ struct ContentView: View {
         case .devices: DevicesSection()
         case .notifications: NotificationsSection()
         case .permissions: PermissionsPage()
-        case .server: ServerControlSection()
-        case .logs: ServerLogSection()
+        case .server: ServerPage()
+        case .logs: LogsPage()
         case .advanced: AdvancedPage()
         }
     }
+}
+
+// MARK: - Shared display helpers
+
+@MainActor
+private func displayState(_ backend: BackendController, _ model: AppModel) -> ServerDisplayState {
+    serverDisplayState(process: backend.processState, reachable: model.reachable)
+}
+
+private func openFullDiskAccessSettings() {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+        NSWorkspace.shared.open(url)
+    }
+}
+
+/// Shown when the backend failed due to Full Disk Access, or the running server
+/// reports FDA denied. Clear remediation instead of raw "operation not permitted".
+private struct FullDiskAccessBanner: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "externaldrive.badge.exclamationmark").foregroundStyle(.red)
+                Text("Full Disk Access required").fontWeight(.semibold)
+            }
+            Text("MicaGo can't read the Messages database. Grant Full Disk Access to MicaGo Companion (and the bundled server), then start the server again.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open Full Disk Access Settings") { openFullDiskAccessSettings() }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.red.opacity(0.4), lineWidth: 1))
+    }
+}
+
+@MainActor
+private func fdaNeeded(_ backend: BackendController, _ model: AppModel) -> Bool {
+    if backend.failureKind == .fullDiskAccess { return true }
+    if model.status?.permissions.fullDiskAccess.status == "denied" { return true }
+    return false
 }
 
 // MARK: - Persistent status chip
 
 private struct ServerStatusChip: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
 
     var body: some View {
+        let state = displayState(backend, model)
         HStack(spacing: 8) {
-            StatusDot(on: model.reachable)
-            Text(statusText).font(.callout)
+            StatusDot(on: state.isHealthyDot)
+            Text(state.label).font(.callout)
             if let version = model.status?.version {
                 Text("v\(version)").font(.caption).foregroundStyle(.secondary)
             }
-            Button {
-                if model.controller.isRunning {
-                    model.controller.stop()
-                } else {
-                    model.controller.start()
-                }
-            } label: {
-                Image(systemName: model.controller.isRunning ? "stop.fill" : "play.fill")
-            }
-            .help(model.controller.isRunning ? "Stop server" : "Start server")
-            .disabled(!model.controller.isRunning && !model.controller.binaryExists)
+            startStopButton(state)
         }
     }
 
-    private var statusText: String {
-        if model.reachable {
-            return model.authValid ? "Running" : "Token rejected"
+    @ViewBuilder private func startStopButton(_ state: ServerDisplayState) -> some View {
+        switch backend.processState {
+        case .running, .starting:
+            Button { backend.stop() } label: { Image(systemName: "stop.fill") }
+                .help("Stop server")
+        default:
+            Button { backend.start() } label: { Image(systemName: "play.fill") }
+                .help("Start server")
+                .disabled(!backend.binaryExists || state == .externalUnmanaged)
         }
-        return model.controller.isRunning ? "Starting…" : "Stopped"
     }
 }
 
@@ -130,30 +164,39 @@ private struct ServerStatusChip: View {
 private struct DashboardPage: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var runtime: RuntimeMonitor
+    @EnvironmentObject var backend: BackendController
 
     var body: some View {
-        // Status
+        let state = displayState(backend, model)
+
+        if fdaNeeded(backend, model) {
+            FullDiskAccessBanner()
+        }
+
         SectionCard(title: "Status") {
             HStack(spacing: 10) {
-                StatusDot(on: model.reachable)
-                Text(statusText).font(.headline)
+                StatusDot(on: state.isHealthyDot)
+                Text(state.label).font(.headline)
                 Spacer()
                 if let s = model.status {
                     Text("v\(s.version) · up \(uptime(s.uptimeSeconds))").foregroundStyle(.secondary)
                 }
             }
+            LabeledRow(label: "Control", value: managedLabel(state))
             if let s = model.status {
                 LabeledRow(label: "Store", value: s.store)
                 LabeledRow(label: "Sync", value: s.sync.loopEnabled ? "every \(s.sync.intervalSeconds)s" : "loop off")
                 LabeledRow(label: "WebSocket clients", value: "\(s.websocket.clients)")
             }
-            if let error = model.lastError {
-                Text(error).font(.callout).foregroundStyle(.orange)
+            if case .failed(let reason) = backend.processState {
+                Text(reason).font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let next = backend.nextRestartInfo {
+                Text(next).font(.caption).foregroundStyle(.secondary)
             }
         }
 
-        // Endpoints (URLs only — no token here)
         SectionCard(title: "Endpoints") {
             CopyableRow(label: "Local", value: localURL)
             if let lan = model.urls?.lan, !lan.isEmpty {
@@ -168,7 +211,6 @@ private struct DashboardPage: View {
             }
         }
 
-        // Runtime & permissions summary
         SectionCard(title: "Runtime & Permissions") {
             SummaryRow(label: "Messages.app", ok: runtime.messagesRunning,
                        value: runtime.messagesRunning ? "running" : "not running")
@@ -183,15 +225,15 @@ private struct DashboardPage: View {
             }
         }
 
-        // Capabilities
         CapabilitiesCard()
     }
 
-    private var statusText: String {
-        if model.reachable {
-            return model.authValid ? "Running" : "Running (token rejected)"
+    private func managedLabel(_ state: ServerDisplayState) -> String {
+        switch state {
+        case .externalUnmanaged: return "external (not launched by the companion)"
+        case .running, .starting, .startingUnreachable, .stopping: return "managed by the companion"
+        default: return backend.binaryExists ? "managed by the companion" : "no backend installed"
         }
-        return model.controller.isRunning ? "Starting…" : "Stopped"
     }
 
     private var localURL: String {
@@ -301,7 +343,13 @@ private struct ConnectionsPage: View {
 // MARK: - Permissions page
 
 private struct PermissionsPage: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+
     var body: some View {
+        if fdaNeeded(backend, model) {
+            FullDiskAccessBanner()
+        }
         DiagnosticsSection()
         RuntimeCard()
     }
@@ -340,65 +388,40 @@ private struct RuntimeCard: View {
     }
 }
 
-// MARK: - Advanced page
+// MARK: - Server page (controls + binary + logs/exit reason)
 
-private struct AdvancedPage: View {
+private struct ServerPage: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
 
     var body: some View {
-        LaunchAtLoginSection()
-        CapabilitiesCard()
-        SectionCard(title: "Configuration") {
-            LabeledRow(label: "Config file", value: "~/.micago/config.yaml")
-            if let url = model.urls {
-                LabeledRow(label: "Preferred pairing", value: url.preferredPairingEndpoint)
-                LabeledRow(label: "Verify TLS (public)", value: url.public.verifyTls ? "yes" : "no")
-            }
-            Text("Edit advanced server settings in ~/.micago/config.yaml. Notification provider configuration and Firebase self-host (FCM) are planned for v0.12.")
-                .font(.caption2).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
+        let state = displayState(backend, model)
 
-// MARK: - Server control
-
-private struct ServerControlSection: View {
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
         SectionCard(title: "Server") {
             HStack(spacing: 10) {
-                StatusDot(on: model.reachable)
-                Text(statusText)
-                    .font(.headline)
+                StatusDot(on: state.isHealthyDot)
+                Text(state.label).font(.headline)
                 Spacer()
                 if let version = model.status?.version {
                     Text("v\(version)").foregroundStyle(.secondary)
                 }
             }
 
+            if state == .externalUnmanaged {
+                Text("A server is already reachable at this address but was not launched by the companion. It will not be stopped or restarted from here.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 12) {
-                Button {
-                    model.controller.start()
-                } label: { Label("Start", systemImage: "play.fill") }
-                    .disabled(model.controller.isRunning || !model.controller.binaryExists)
-
-                Button {
-                    model.controller.stop()
-                } label: { Label("Stop", systemImage: "stop.fill") }
-                    .disabled(!model.controller.isRunning)
-
-                Button {
-                    model.controller.restart()
-                } label: { Label("Restart", systemImage: "arrow.clockwise") }
-                    .disabled(!model.controller.binaryExists)
-
+                Button { backend.start() } label: { Label("Start", systemImage: "play.fill") }
+                    .disabled(!backend.binaryExists || backend.isProcessAlive || state == .externalUnmanaged)
+                Button { backend.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                    .disabled(!backend.isProcessAlive)
+                Button { backend.restart() } label: { Label("Restart", systemImage: "arrow.clockwise") }
+                    .disabled(!backend.binaryExists || state == .externalUnmanaged)
                 Spacer()
-
-                Button {
-                    Task { await model.refresh() }
-                } label: { Label("Refresh", systemImage: "arrow.triangle.2.circlepath") }
+                Button { Task { await model.refresh() } } label: { Label("Refresh", systemImage: "arrow.triangle.2.circlepath") }
             }
 
             BinaryPathRow()
@@ -408,35 +431,50 @@ private struct ServerControlSection: View {
                 LabeledRow(label: "Store", value: s.store)
             }
 
-            if let error = model.lastError {
-                Text(error)
-                    .font(.callout)
-                    .foregroundStyle(.orange)
+            if case .failed(let reason) = backend.processState {
+                Text("Exited: \(reason)").font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let code = backend.lastExitCode, backend.processState != .running {
+                Text("Last exit code: \(code)").font(.caption).foregroundStyle(.secondary)
+            }
+            if let next = backend.nextRestartInfo {
+                Text(next).font(.caption).foregroundStyle(.secondary)
+            }
         }
-    }
 
-    private var statusText: String {
-        if model.reachable {
-            return model.authValid ? "Running" : "Running (token rejected)"
+        if fdaNeeded(backend, model) {
+            FullDiskAccessBanner()
         }
-        return model.controller.isRunning ? "Starting…" : "Stopped"
+
+        RecentStderrCard()
     }
 }
 
 private struct BinaryPathRow: View {
-    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: model.controller.binaryExists ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(model.controller.binaryExists ? .green : .orange)
-            TextField("Path to micago server binary", text: $model.controller.binaryPath)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(.callout, design: .monospaced))
-            Button("Choose…") { chooseBinary() }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: backend.binaryExists ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(backend.binaryExists ? .green : .orange)
+                TextField("Backend path (leave empty to use the bundled binary)", text: $backend.userBinaryPath)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.callout, design: .monospaced))
+                Button("Choose…") { chooseBinary() }
+            }
+            Text(resolvedDescription)
+                .font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
         }
+    }
+
+    private var resolvedDescription: String {
+        if let r = backend.resolveBinary() {
+            return "Using \(r.source) binary: \(r.path)"
+        }
+        return "No runnable backend found (bundled binary missing and no valid path set)."
     }
 
     private func chooseBinary() {
@@ -445,7 +483,84 @@ private struct BinaryPathRow: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            model.controller.binaryPath = url.path
+            backend.userBinaryPath = url.path
+        }
+    }
+}
+
+private struct RecentStderrCard: View {
+    @EnvironmentObject var backend: BackendController
+
+    var body: some View {
+        SectionCard(title: "Recent Output") {
+            if backend.logLines.isEmpty {
+                Text("No output yet. Output appears when the companion launches the backend.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    Text(backend.logLines.suffix(60).joined(separator: "\n"))
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 160)
+            }
+        }
+    }
+}
+
+// MARK: - Logs page
+
+private struct LogsPage: View {
+    @EnvironmentObject var backend: BackendController
+
+    var body: some View {
+        SectionCard(title: "Server Log") {
+            if backend.logLines.isEmpty {
+                Text("No output yet. The log shows output from a server started by this companion. Tokens are redacted.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    Text(backend.logLines.joined(separator: "\n"))
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 320)
+            }
+        }
+    }
+}
+
+// MARK: - Advanced page (launch/login/silent/auto-restart settings)
+
+private struct AdvancedPage: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+
+    var body: some View {
+        SectionCard(title: "Startup & Lifecycle") {
+            Toggle("Start server automatically when the companion launches", isOn: $backend.autoStart)
+            Toggle("Restart the server automatically if it crashes", isOn: $backend.autoRestart)
+            Toggle("Launch hidden (menu-bar only; no window at launch)", isOn: $backend.launchHidden)
+            Text("Auto-restart uses exponential backoff and stops after repeated crashes. It never restarts after you Stop the server, and never restarts a Full Disk Access failure.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        LaunchAtLoginSection()
+        CapabilitiesCard()
+
+        SectionCard(title: "Configuration") {
+            LabeledRow(label: "Config file", value: "~/.micago/config.yaml")
+            LabeledRow(label: "Backend source", value: backend.binarySource)
+            if let url = model.urls {
+                LabeledRow(label: "Preferred pairing", value: url.preferredPairingEndpoint)
+                LabeledRow(label: "Verify TLS (public)", value: url.public.verifyTls ? "yes" : "no")
+            }
+            Text("Notification provider configuration and Firebase self-host (FCM) are planned for v0.12.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -775,29 +890,6 @@ private struct LaunchAtLoginSection: View {
     }
 }
 
-// MARK: - Server log
-
-private struct ServerLogSection: View {
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
-        SectionCard(title: "Server Log") {
-            if model.controller.logLines.isEmpty {
-                Text("No output yet. The log shows output from a server started by this companion.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ScrollView {
-                    Text(model.controller.logLines.joined(separator: "\n"))
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(height: 240)
-            }
-        }
-    }
-}
-
 // MARK: - Reusable pieces
 
 struct SectionCard<Content: View>: View {
@@ -869,4 +961,5 @@ func copyToPasteboard(_ value: String) {
     ContentView()
         .environmentObject(AppModel())
         .environmentObject(RuntimeMonitor())
+        .environmentObject(BackendController.shared)
 }
