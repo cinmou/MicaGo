@@ -457,6 +457,126 @@ func (q *Queries) ListSyncRecentMessagesSince(ctx context.Context, afterRowID in
 	return messages, nil
 }
 
+// ListMessageUpdatesSince returns iMessage rows whose creation date falls within
+// the lookback window (afterUnixMilli, using the indexed message.date column), so
+// the v0.11.x update pass can detect mutable-state changes. Version-sensitive
+// columns (date_edited, date_retracted, error) are selected ONLY when caps allow,
+// so missing columns never cause a query error. Unlike the new-message queries,
+// this does NOT apply a renderable-content filter, so retracted/edited (possibly
+// empty) rows are still returned.
+func (q *Queries) ListMessageUpdatesSince(ctx context.Context, afterUnixMilli int64, limit int, caps SchemaCapabilities) ([]MessageUpdateRow, error) {
+	cols := []string{
+		"c.guid AS chat_guid",
+		"m.guid",
+		"m.text",
+		"m.attributedBody",
+		"m.subject",
+		"m.service",
+		"m.date",
+		"m.date_read",
+		"m.date_delivered",
+		"m.is_from_me",
+		"m.is_read",
+		"m.is_delivered",
+		"m.cache_has_attachments",
+		"h.id AS handle_id_value",
+		"h.service AS handle_service",
+	}
+	// Optional, capability-gated columns appended in a fixed order.
+	if caps.EditedMessages {
+		cols = append(cols, "m.date_edited")
+	}
+	if caps.UnsentMessages {
+		cols = append(cols, "m.date_retracted")
+	}
+	if caps.SendError {
+		cols = append(cols, "m.error")
+	}
+
+	sqlText := "SELECT DISTINCT\n  " + strings.Join(cols, ",\n  ") + `
+FROM message AS m
+JOIN chat_message_join AS cmj
+  ON cmj.message_id = m.ROWID
+JOIN chat AS c
+  ON c.ROWID = cmj.chat_id
+LEFT JOIN handle AS h
+  ON h.ROWID = m.handle_id
+WHERE c.service_name = 'iMessage'
+  AND m.date >= ?
+ORDER BY m.date ASC
+LIMIT ?;`
+
+	afterApple := timeutil.UnixMilliToAppleNanos(afterUnixMilli)
+	rows, err := q.db.QueryContext(ctx, sqlText, afterApple, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var updates []MessageUpdateRow
+	for rows.Next() {
+		// Base scan targets.
+		var (
+			chatGUID                        *string
+			guid                            string
+			text                            *string
+			attributedBody                  []byte
+			subject, service                *string
+			dateRaw                         int64
+			dateReadRaw, dateDeliveredRaw   *int64
+			isFromMe, isRead, isDelivered   int64
+			hasAttachments                  int64
+			handleValue, handleService      *string
+			dateEditedRaw, dateRetractedRaw *int64
+			errorCode                       sql.NullInt64
+		)
+		targets := []any{
+			&chatGUID, &guid, &text, &attributedBody, &subject, &service, &dateRaw,
+			&dateReadRaw, &dateDeliveredRaw, &isFromMe, &isRead, &isDelivered,
+			&hasAttachments, &handleValue, &handleService,
+		}
+		if caps.EditedMessages {
+			targets = append(targets, &dateEditedRaw)
+		}
+		if caps.UnsentMessages {
+			targets = append(targets, &dateRetractedRaw)
+		}
+		if caps.SendError {
+			targets = append(targets, &errorCode)
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("scan message update row: %w", err)
+		}
+		if chatGUID == nil {
+			continue
+		}
+
+		updates = append(updates, MessageUpdateRow{
+			GUID:                guid,
+			ChatGUID:            *chatGUID,
+			Text:                ExtractMessageText(text, attributedBody),
+			Subject:             subject,
+			Service:             service,
+			DateCreated:         timeutil.AppleMicrosToUnixMilli(dateRaw),
+			DateRead:            timeutil.AppleMicrosToUnixMilliPtr(dateReadRaw),
+			DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(dateDeliveredRaw),
+			DateEdited:          timeutil.AppleMicrosToUnixMilliPtr(dateEditedRaw),
+			DateRetracted:       timeutil.AppleMicrosToUnixMilliPtr(dateRetractedRaw),
+			ErrorCode:           errorCode.Int64,
+			IsFromMe:            isFromMe != 0,
+			IsRead:              isRead != 0,
+			IsDelivered:         isDelivered != 0,
+			HandleID:            handleValue,
+			HandleService:       handleService,
+			CacheHasAttachments: hasAttachments != 0,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return updates, nil
+}
+
 func (q *Queries) ListSyncAttachmentsForMessages(ctx context.Context, messageGUIDs []string) ([]SyncAttachmentRow, error) {
 	if len(messageGUIDs) == 0 {
 		return nil, nil

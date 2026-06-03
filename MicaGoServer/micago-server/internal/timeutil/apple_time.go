@@ -36,3 +36,12 @@ func AppleMicrosToUnixMilliPtr(raw *int64) *int64 {
 	}
 	return AppleMicrosToUnixMilli(*raw)
 }
+
+// UnixMilliToAppleNanos converts a Unix epoch millisecond value into nanoseconds
+// since the Apple Core Data epoch (2001-01-01 UTC), the unit used by
+// message.date on modern macOS (High Sierra+). Used to build an indexed lower
+// bound for the sync lookback window.
+func UnixMilliToAppleNanos(unixMilli int64) int64 {
+	deltaMillis := unixMilli - appleEpoch.UnixMilli()
+	return deltaMillis * 1_000_000
+}

@@ -58,6 +58,19 @@ func (db *DB) Migrate() error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		);`,
+		// v0.11.x: persisted event-state cache for the lookback update pass.
+		`CREATE TABLE IF NOT EXISTS message_state (
+			guid TEXT PRIMARY KEY,
+			is_read INTEGER,
+			date_read INTEGER,
+			is_delivered INTEGER,
+			date_delivered INTEGER,
+			date_edited INTEGER,
+			date_retracted INTEGER,
+			error INTEGER,
+			fingerprint TEXT NOT NULL,
+			updated_at INTEGER NOT NULL
+		);`,
 	}
 
 	for _, statement := range statements {

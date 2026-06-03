@@ -13,6 +13,33 @@ type SyncResult struct {
 	LastMessageDateCreated   int64
 	NewMessages              []store.MessageJSON
 	NotificationEvents       []NotificationEvent
+	// v0.11.x lookback update pass results.
+	Updates []MessageUpdate
+	Unsent  []UnsentEvent
+}
+
+// MessageUpdate is an old-row state change detected by the lookback update pass
+// (read/delivered/edited/send-error). Emitted as the WebSocket `message:update`
+// event with the changed field names.
+type MessageUpdate struct {
+	Message store.MessageJSON
+	Changed []string
+}
+
+// UnsentEvent is a retracted/unsent message detected by the update pass. Emitted
+// as the WebSocket `message:unsend` event.
+type UnsentEvent struct {
+	GUID          string
+	ChatGUID      string
+	DateRetracted *int64
+}
+
+// UpdatePassResult holds the events produced by a single lookback update pass.
+type UpdatePassResult struct {
+	Updates []MessageUpdate
+	Unsent  []UnsentEvent
+	Scanned int
+	Seeded  int
 }
 
 type NotificationEvent struct {

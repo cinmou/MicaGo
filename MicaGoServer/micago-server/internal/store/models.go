@@ -110,6 +110,42 @@ type SyncMessageRow struct {
 	CacheHasAttachments bool
 }
 
+// MessageUpdateRow is a chat.db row fetched by the v0.11.x lookback update pass.
+// Mutable-state fields are populated only when the corresponding capability is
+// available; otherwise they remain nil/zero and are ignored. Dates are Unix ms.
+type MessageUpdateRow struct {
+	GUID                string
+	ChatGUID            string
+	Text                *string
+	Subject             *string
+	Service             *string
+	DateCreated         *int64
+	DateRead            *int64
+	DateDelivered       *int64
+	DateEdited          *int64
+	DateRetracted       *int64
+	ErrorCode           int64
+	IsFromMe            bool
+	IsRead              bool
+	IsDelivered         bool
+	HandleID            *string
+	HandleService       *string
+	CacheHasAttachments bool
+}
+
+// State extracts the mutable MessageState used for fingerprinting/diffing.
+func (r MessageUpdateRow) State() MessageState {
+	return MessageState{
+		IsRead:        r.IsRead,
+		DateRead:      r.DateRead,
+		IsDelivered:   r.IsDelivered,
+		DateDelivered: r.DateDelivered,
+		DateEdited:    r.DateEdited,
+		DateRetracted: r.DateRetracted,
+		ErrorCode:     r.ErrorCode,
+	}
+}
+
 type SyncAttachmentRow struct {
 	GUID           string
 	MessageGUID    string

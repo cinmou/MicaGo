@@ -85,6 +85,15 @@ func Run(options Options) error {
 	}
 	defer relay.Close()
 
+	// Probe chat.db schema once so the update pass and status diagnostics know
+	// which version-sensitive columns are available (v0.11.x).
+	capabilities, err := store.ProbeCapabilities(ctx, db)
+	if err != nil {
+		log.Printf("chat.db schema probe failed (capabilities default to false): %v", err)
+	} else {
+		log.Printf("chat.db capabilities: %+v", capabilities)
+	}
+
 	log.Printf("relay.db path: %s", cfg.RelayDBPath)
 	hub := realtime.NewHub()
 	defer hub.Close()
@@ -93,7 +102,20 @@ func Run(options Options) error {
 	runSync := func(ctx context.Context) (relaydb.SyncResult, error) {
 		syncMu.Lock()
 		defer syncMu.Unlock()
-		return relaydb.SyncOnce(ctx, queries, relay, cfg.InitialSyncLimit)
+		result, err := relaydb.SyncOnce(ctx, queries, relay, cfg.InitialSyncLimit)
+		if err != nil {
+			return result, err
+		}
+		// v0.11.x: bounded lookback update pass for old-row changes. Non-fatal;
+		// new-message sync results are still returned on update-pass failure.
+		updates, upErr := relaydb.UpdatePass(ctx, queries, relay, capabilities, cfg.UpdateLookback)
+		if upErr != nil {
+			log.Printf("update pass failed: %v", upErr)
+		} else {
+			result.Updates = updates.Updates
+			result.Unsent = updates.Unsent
+		}
+		return result, nil
 	}
 
 	if cfg.SyncOnce {
@@ -144,13 +166,6 @@ func Run(options Options) error {
 			return err
 		},
 		Events: hub,
-	}
-
-	capabilities, err := store.ProbeCapabilities(ctx, db)
-	if err != nil {
-		log.Printf("chat.db schema probe failed (capabilities default to false): %v", err)
-	} else {
-		log.Printf("chat.db capabilities: %+v", capabilities)
 	}
 
 	statusDeps := httpapi.StatusDeps{
@@ -238,6 +253,26 @@ func broadcastSyncResult(ctx context.Context, hub *realtime.Hub, result relaydb.
 		_ = hub.Broadcast(ctx, realtime.Event{
 			Type: "message:new",
 			Data: message,
+		})
+	}
+	// v0.11.x update-pass events.
+	for _, update := range result.Updates {
+		_ = hub.Broadcast(ctx, realtime.Event{
+			Type: "message:update",
+			Data: map[string]any{
+				"message": update.Message,
+				"changed": update.Changed,
+			},
+		})
+	}
+	for _, unsent := range result.Unsent {
+		_ = hub.Broadcast(ctx, realtime.Event{
+			Type: "message:unsend",
+			Data: map[string]any{
+				"guid":          unsent.GUID,
+				"chatGuid":      unsent.ChatGUID,
+				"dateRetracted": unsent.DateRetracted,
+			},
 		})
 	}
 }

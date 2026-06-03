@@ -23,6 +23,7 @@ const (
 	defaultDefaultAPIStore  = "relaydb"
 	tokenBytes              = 32
 	defaultPreferredPairing = "auto"
+	defaultUpdateLookback   = 168 * time.Hour // 7 days
 )
 
 // ValidPairingPreferences lists the accepted values for
@@ -59,6 +60,7 @@ type Config struct {
 	InitialSyncLimit         int
 	DefaultAPIStore          string
 	SyncInterval             time.Duration
+	UpdateLookback           time.Duration
 	DisableSyncLoop          bool
 	SyncOnce                 bool
 	NotificationsEnabled     bool
@@ -97,7 +99,8 @@ type fileConfig struct {
 		Token string
 	}
 	Sync struct {
-		Interval string
+		Interval       string
+		UpdateLookback string
 	}
 	Notifications struct {
 		Enabled  bool
@@ -147,6 +150,18 @@ func Load(opts Options) (Config, error) {
 		}
 	}
 
+	// Lookback window for the v0.11.x update pass. Empty -> default; "0" disables.
+	updateLookback := defaultUpdateLookback
+	if raw := strings.TrimSpace(fileCfg.Sync.UpdateLookback); raw != "" {
+		updateLookback, err = time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse sync.update_lookback: %w", err)
+		}
+		if updateLookback < 0 {
+			return Config{}, fmt.Errorf("sync.update_lookback must not be negative")
+		}
+	}
+
 	cfg := Config{
 		ConfigPath:      cfgPath,
 		DBPath:          filepath.Join(home, "Library", "Messages", "chat.db"),
@@ -164,6 +179,7 @@ func Load(opts Options) (Config, error) {
 		InitialSyncLimit:         defaultInitialSyncLimit,
 		DefaultAPIStore:          valueOrDefault(opts.APIStore, "", defaultDefaultAPIStore),
 		SyncInterval:             syncInterval,
+		UpdateLookback:           updateLookback,
 		DisableSyncLoop:          opts.DisableSyncLoop,
 		SyncOnce:                 opts.SyncOnce,
 		NotificationsEnabled:     fileCfg.Notifications.Enabled,
@@ -364,6 +380,7 @@ func defaultFileConfig(token string) fileConfig {
 	cfg.Network.PreferredPairingEndpoint = defaultPreferredPairing
 	cfg.Auth.Token = token
 	cfg.Sync.Interval = defaultSyncInterval.String()
+	cfg.Sync.UpdateLookback = defaultUpdateLookback.String()
 	cfg.Notifications.Enabled = false
 	cfg.Notifications.Provider = defaultNotificationProv
 	cfg.Notifications.Preview = defaultNotificationPrev
@@ -394,6 +411,7 @@ func renderConfig(cfg fileConfig) string {
 		"",
 		"sync:",
 		fmt.Sprintf("  interval: %s", quoteYAML(cfg.Sync.Interval)),
+		fmt.Sprintf("  update_lookback: %s", quoteYAML(cfg.Sync.UpdateLookback)),
 		"",
 		"notifications:",
 		fmt.Sprintf("  enabled: %t", cfg.Notifications.Enabled),
@@ -462,8 +480,11 @@ func parseConfig(body string) (fileConfig, error) {
 				cfg.Auth.Token = value
 			}
 		case "sync":
-			if key == "interval" {
+			switch key {
+			case "interval":
 				cfg.Sync.Interval = value
+			case "update_lookback":
+				cfg.Sync.UpdateLookback = value
 			}
 		case "notifications":
 			switch key {
