@@ -169,6 +169,8 @@ func Run(options Options) error {
 		// Send-error fast-fail reads message.error from chat.db directly (the
 		// relay schema has no error column), so it works in both api-store modes.
 		ErrorFinder: queries,
+		// Fast precondition: Messages.app must be running for AppleScript send.
+		MessagesRunning: micasend.MessagesRunning,
 	}
 
 	statusDeps := httpapi.StatusDeps{

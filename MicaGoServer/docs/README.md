@@ -75,6 +75,7 @@ individual feature specs add detail and rationale.
 | Document | Area |
 | --- | --- |
 | [`spec-v0.10.0-mac-companion.md`](spec-v0.10.0-mac-companion.md) | Native macOS SwiftUI companion + `GET /api/server/status`. Uses "Connection Endpoints" terminology (v0.11). |
+| [`spec-v0.10.1-swiftui-companion-redesign.md`](spec-v0.10.1-swiftui-companion-redesign.md) | **Planning:** sidebar-based companion redesign (Dashboard/Connections/Devices/Notifications/Permissions/Server/Logs/Advanced), informed by a BlueBubbles UI surface audit. |
 
 ### Status / gap reports
 

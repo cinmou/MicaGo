@@ -1,8 +1,20 @@
 # MicaGoServer v0.11.x — Server Reliability
 
-Status: **Planned** (spec only; no code in this pass). Derived from
-[`bluebubbles-source-audit-v2.md`](bluebubbles-source-audit-v2.md) and
-[`server-gap-after-bluebubbles-source-review.md`](server-gap-after-bluebubbles-source-review.md).
+Status: **Implemented** (runtime keep-awake is companion-side). Derived from
+[`bluebubbles-source-audit-v2.md`](bluebubbles-source-audit-v2.md),
+[`server-gap-after-bluebubbles-source-review.md`](server-gap-after-bluebubbles-source-review.md),
+and confirmed by [`v0.11.x-reliability-crosscheck.md`](v0.11.x-reliability-crosscheck.md).
+
+### Implementation status
+
+| Item | Status | Where |
+| --- | --- | --- |
+| §3 Schema probing + `capabilities` in `/api/server/status` | **Done** | `internal/store/capabilities.go`; commit `38205fc` |
+| §1 Bounded lookback update pass + event-state cache (`message:update`/`message:unsend`) | **Done** | `internal/relaydb/updatepass.go`, `internal/store/fingerprint.go`; commit `f8d2185` |
+| §2 Send-error fast-fail via `message.error` | **Done** | `internal/store/queries.go` (`FindOutgoingMessageError`), `internal/httpapi/handlers.go`; commit `9cee7ed` |
+| §4 Messages.app-running precondition (server) | **Done** | `internal/send/messages.go`, `internal/httpapi/handlers.go` |
+| §4 Companion runtime UX (Messages status, Keep-Awake, FDA/Automation summary) | **Done** | `micago-mac-companion/.../Services/RuntimeStatus.swift`, `ContentView.swift` |
+| §1 Group/system events (`chat:event`) | **Deferred** | future slice, behind `groupActions` capability |
 
 ## Goal
 

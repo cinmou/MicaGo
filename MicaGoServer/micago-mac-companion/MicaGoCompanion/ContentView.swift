@@ -13,6 +13,7 @@ struct ContentView: View {
                 DevicesSection()
                 NotificationsSection()
                 DiagnosticsSection()
+                RuntimeSection()
                 LaunchAtLoginSection()
                 ServerLogSection()
             }
@@ -397,6 +398,92 @@ private struct PermissionRow: View {
     }
     private var color: Color {
         switch check.status {
+        case "ok": return .green
+        case "denied": return .red
+        default: return .secondary
+        }
+    }
+}
+
+// MARK: - Runtime (Messages.app + Keep Awake + permission summary)
+
+private struct RuntimeSection: View {
+    @EnvironmentObject var model: AppModel
+    @StateObject private var keepAwake = KeepAwakeController()
+    @State private var messagesRunning = MessagesApp.isRunning()
+
+    var body: some View {
+        SectionCard(title: "Runtime") {
+            // Messages.app — required for sending.
+            HStack(spacing: 8) {
+                StatusDot(on: messagesRunning)
+                Text("Messages.app")
+                Text(messagesRunning ? "running" : "not running")
+                    .font(.caption)
+                    .foregroundStyle(messagesRunning ? Color.secondary : Color.orange)
+                Spacer()
+                if !messagesRunning {
+                    Button("Open Messages") { MessagesApp.open() }
+                }
+            }
+            Text("Messages.app must be running to send via AppleScript.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            Divider()
+
+            // Keep Awake — conservative caffeinate owned by the companion.
+            Toggle(isOn: Binding(
+                get: { keepAwake.active },
+                set: { keepAwake.setActive($0) }
+            )) {
+                Text("Keep this Mac awake while serving")
+            }
+            Text("Status: \(keepAwake.active ? "active (caffeinate)" : "off")")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            Divider()
+
+            // Permission summary (sourced from the server's status diagnostics).
+            if let p = model.status?.permissions {
+                RuntimePermissionRow(label: "Full Disk Access", status: p.fullDiskAccess.status)
+                RuntimePermissionRow(label: "Automation", status: p.automation.status)
+            } else {
+                Text("Start the server to read Full Disk Access / Automation status.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .task {
+            // Lightweight local poll for Messages.app running state.
+            while !Task.isCancelled {
+                messagesRunning = MessagesApp.isRunning()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
+    }
+}
+
+private struct RuntimePermissionRow: View {
+    let label: String
+    let status: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(color)
+            Text(label)
+            Spacer()
+            Text(status).font(.caption).foregroundStyle(color)
+        }
+    }
+
+    private var icon: String {
+        switch status {
+        case "ok": return "checkmark.circle.fill"
+        case "denied": return "xmark.circle.fill"
+        default: return "questionmark.circle.fill"
+        }
+    }
+    private var color: Color {
+        switch status {
         case "ok": return .green
         case "denied": return .red
         default: return .secondary

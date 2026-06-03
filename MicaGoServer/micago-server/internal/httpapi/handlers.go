@@ -60,6 +60,10 @@ type SendDependencies struct {
 	// reported before the timeout (v0.11.x). Only consulted when the
 	// SendError schema capability is present. May be nil.
 	ErrorFinder outgoingErrorFinder
+	// MessagesRunning is a fast, macOS-local precondition checked before an
+	// AppleScript send (Messages.app must be open). Nil skips the check; a probe
+	// error is logged and the send proceeds rather than being wrongly blocked.
+	MessagesRunning func(ctx context.Context) (bool, error)
 }
 
 type outgoingErrorFinder interface {
@@ -517,6 +521,20 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.send.Pending.Remove(req.TempGUID)
+
+	// Fast precondition: AppleScript send needs Messages.app running. Detect and
+	// return a clear error instead of waiting out the send timeout.
+	if h.send.MessagesRunning != nil {
+		running, err := h.send.MessagesRunning(r.Context())
+		if err != nil {
+			h.logInternal("messages running check", err) // probe failed; proceed
+		} else if !running {
+			const msg = "Messages.app is not running; open Messages and retry"
+			h.broadcastSendError(r.Context(), req.TempGUID, guid, "messages_app_not_running", msg)
+			writeAPIError(w, http.StatusConflict, "messages_app_not_running", msg)
+			return
+		}
+	}
 
 	if err := h.send.Sender.SendText(r.Context(), guid, req.Message); err != nil {
 		h.broadcastSendError(r.Context(), req.TempGUID, guid, "send_failed", "failed to send message")

@@ -545,6 +545,61 @@ func (s *stubErrorFinder) FindOutgoingMessageError(_ context.Context, _ string, 
 	return s.code, s.found, nil
 }
 
+func TestSendTextFailsFastWhenMessagesNotRunning(t *testing.T) {
+	// errorSender would yield send_failed if reached; the precondition must
+	// short-circuit before the sender is invoked.
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0),
+		&SendDependencies{
+			Pending:         &fakePendingManager{},
+			Sender:          errorSender{},
+			MessagesRunning: func(context.Context) (bool, error) { return false, nil },
+		},
+		nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"},
+		StatusDeps{},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/chat-1/send",
+		strings.NewReader(`{"tempGuid":"t1","message":"hello"}`))
+	req.SetPathValue("guid", "chat-1")
+	rec := httptest.NewRecorder()
+	handlers.SendText(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "messages_app_not_running") {
+		t.Fatalf("expected messages_app_not_running, got: %s", rec.Body.String())
+	}
+}
+
+func TestSendTextProbeErrorDoesNotBlockSend(t *testing.T) {
+	// If the probe itself errors, the send should proceed (here the sender then
+	// fails, yielding send_failed — proving we did NOT block on the probe error).
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0),
+		&SendDependencies{
+			Pending:         &fakePendingManager{},
+			Sender:          errorSender{},
+			MessagesRunning: func(context.Context) (bool, error) { return false, errors.New("pgrep missing") },
+		},
+		nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"},
+		StatusDeps{},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/chat-1/send",
+		strings.NewReader(`{"tempGuid":"t1","message":"hello"}`))
+	req.SetPathValue("guid", "chat-1")
+	rec := httptest.NewRecorder()
+	handlers.SendText(rec, req)
+
+	if !strings.Contains(rec.Body.String(), "send_failed") {
+		t.Fatalf("probe error must not block send; expected send_failed, got: %s", rec.Body.String())
+	}
+}
+
 func TestSendTextFastFailsOnMessageError(t *testing.T) {
 	finder := &stubErrorFinder{code: 22, found: true}
 	handlers := NewHandlers(
