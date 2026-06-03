@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"mime"
 	"net"
@@ -55,6 +56,14 @@ type SendDependencies struct {
 	Sender  micasend.Sender
 	SyncNow func(context.Context) error
 	Events  eventBroadcaster
+	// ErrorFinder reads message.error from chat.db so a failed send can be
+	// reported before the timeout (v0.11.x). Only consulted when the
+	// SendError schema capability is present. May be nil.
+	ErrorFinder outgoingErrorFinder
+}
+
+type outgoingErrorFinder interface {
+	FindOutgoingMessageError(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64) (int64, bool, error)
 }
 
 type attachmentService interface {
@@ -533,6 +542,21 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 			h.broadcastSendMatch(r.Context(), req.TempGUID, *match)
 			writeJSON(w, http.StatusOK, match)
 			return
+		}
+
+		// Fast-fail: if the message landed in chat.db with a non-zero error,
+		// report it immediately instead of waiting out the timeout. Gated by the
+		// SendError schema capability so we never touch m.error when absent.
+		if h.status.Capabilities.SendError && h.send.ErrorFinder != nil {
+			code, found, err := h.send.ErrorFinder.FindOutgoingMessageError(r.Context(), guid, pending.NormalizedMessage, pending.SentAtUnixMilli)
+			if err != nil {
+				h.logInternal("find outgoing message error", err)
+			} else if found {
+				message := fmt.Sprintf("message failed to send (error %d)", code)
+				h.broadcastSendError(r.Context(), req.TempGUID, guid, "send_error", message)
+				writeAPIError(w, http.StatusBadGateway, "send_error", message)
+				return
+			}
 		}
 
 		select {

@@ -334,6 +334,59 @@ LIMIT 100;
 	return nil, nil
 }
 
+// FindOutgoingMessageError looks for an outgoing message in the chat that
+// matches the just-sent text/time AND carries a non-zero message.error, so the
+// send path can fail fast instead of waiting out the timeout (v0.11.x §2). It
+// references the m.error column, so callers MUST only invoke it when
+// SchemaCapabilities.SendError is true. Returns (errorCode, found, err).
+func (q *Queries) FindOutgoingMessageError(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64) (int64, bool, error) {
+	rows, err := q.db.QueryContext(ctx, `
+SELECT
+  m.text,
+  m.attributedBody,
+  m.date,
+  m.error
+FROM message AS m
+JOIN chat_message_join AS cmj
+  ON cmj.message_id = m.ROWID
+JOIN chat AS c
+  ON c.ROWID = cmj.chat_id
+WHERE c.guid = ?
+  AND m.is_from_me = 1
+  AND m.error != 0
+ORDER BY m.date DESC
+LIMIT 100;
+`, guid)
+	if err != nil {
+		return 0, false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			text           *string
+			attributedBody []byte
+			dateRaw        int64
+			errorCode      int64
+		)
+		if err := rows.Scan(&text, &attributedBody, &dateRaw, &errorCode); err != nil {
+			return 0, false, err
+		}
+		created := timeutil.AppleMicrosToUnixMilli(dateRaw)
+		if created == nil || *created < sentAtUnixMilli {
+			continue
+		}
+		resolved := ExtractMessageText(text, attributedBody)
+		if send.NormalizeText(stringValue(resolved)) == normalizedText {
+			return errorCode, true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, false, err
+	}
+	return 0, false, nil
+}
+
 func (q *Queries) ListSyncChats(ctx context.Context) ([]SyncChatRow, error) {
 	rows, err := q.db.QueryContext(ctx, syncChatsSQL)
 	if err != nil {

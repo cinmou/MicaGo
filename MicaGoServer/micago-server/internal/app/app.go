@@ -166,6 +166,9 @@ func Run(options Options) error {
 			return err
 		},
 		Events: hub,
+		// Send-error fast-fail reads message.error from chat.db directly (the
+		// relay schema has no error column), so it works in both api-store modes.
+		ErrorFinder: queries,
 	}
 
 	statusDeps := httpapi.StatusDeps{

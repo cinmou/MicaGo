@@ -534,6 +534,73 @@ func TestGetServerStatusTokenNeverExposed(t *testing.T) {
 	}
 }
 
+type stubErrorFinder struct {
+	code  int64
+	found bool
+	calls int
+}
+
+func (s *stubErrorFinder) FindOutgoingMessageError(_ context.Context, _ string, _ string, _ int64) (int64, bool, error) {
+	s.calls++
+	return s.code, s.found, nil
+}
+
+func TestSendTextFastFailsOnMessageError(t *testing.T) {
+	finder := &stubErrorFinder{code: 22, found: true}
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0),
+		&SendDependencies{Pending: &fakePendingManager{}, Sender: noopSender{}, ErrorFinder: finder},
+		nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"},
+		StatusDeps{Capabilities: store.SchemaCapabilities{SendError: true}},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/chat-1/send",
+		strings.NewReader(`{"tempGuid":"t1","message":"hello"}`))
+	req.SetPathValue("guid", "chat-1")
+	rec := httptest.NewRecorder()
+	handlers.SendText(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "send_error") || !strings.Contains(body, "error 22") {
+		t.Fatalf("expected send_error with code 22, got: %s", body)
+	}
+	if finder.calls == 0 {
+		t.Fatalf("error finder should have been consulted")
+	}
+}
+
+func TestSendTextSkipsErrorCheckWhenCapabilityOff(t *testing.T) {
+	finder := &stubErrorFinder{code: 22, found: true}
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0),
+		&SendDependencies{Pending: &fakePendingManager{}, Sender: noopSender{}, ErrorFinder: finder},
+		nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"},
+		StatusDeps{Capabilities: store.SchemaCapabilities{SendError: false}},
+	)
+
+	// Short context so the wait loop exits quickly via cancellation instead of
+	// the 120s timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/chat-1/send",
+		strings.NewReader(`{"tempGuid":"t2","message":"hello"}`)).WithContext(ctx)
+	req.SetPathValue("guid", "chat-1")
+	rec := httptest.NewRecorder()
+	handlers.SendText(rec, req)
+
+	if finder.calls != 0 {
+		t.Fatalf("error finder must NOT be called when SendError capability is off, got %d calls", finder.calls)
+	}
+	if !strings.Contains(rec.Body.String(), "send_failed") {
+		t.Fatalf("expected send_failed (canceled), got: %s", rec.Body.String())
+	}
+}
+
 func TestGetServerStatusIncludesCapabilities(t *testing.T) {
 	caps := store.SchemaCapabilities{
 		EditedMessages:  true,
