@@ -12,6 +12,7 @@ struct RuleTarget: Identifiable {
 
 struct SyncControlPage: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var contacts: ContactsStore
     @State private var editorTarget: RuleTarget?
 
     var body: some View {
@@ -26,15 +27,99 @@ struct SyncControlPage: View {
                 }
             }
 
+            ContactsCard()
             DefaultPolicyCard()
+            ContactSearchCard(editorTarget: $editorTarget)
             RecentMessagesCard(editorTarget: $editorTarget)
             ChatsCard(editorTarget: $editorTarget)
             RulesOverviewCard()
         }
-        .task { await model.loadSyncControl() }
+        .task {
+            await model.loadSyncControl()
+            await contacts.loadIfAuthorized()
+        }
         .sheet(item: $editorTarget) { target in
             RuleEditorSheet(target: target)
                 .environmentObject(model)
+                .environmentObject(contacts)
+        }
+    }
+}
+
+// MARK: - Contacts permission
+
+private struct ContactsCard: View {
+    @EnvironmentObject var contacts: ContactsStore
+
+    var body: some View {
+        SectionCard(title: "Contacts") {
+            HStack(spacing: 8) {
+                Image(systemName: contacts.isAuthorized ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.questionmark")
+                    .foregroundStyle(contacts.isAuthorized ? Color.green : Color.secondary)
+                Text("Access: \(contacts.statusDescription)")
+                if contacts.isAuthorized {
+                    Text("· \(contacts.contactCount) contacts").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !contacts.isAuthorized {
+                    Button("Allow Contacts access") { contacts.requestAccess() }
+                        .disabled(contacts.status == .denied || contacts.status == .restricted)
+                }
+            }
+            if contacts.status == .denied || contacts.status == .restricted {
+                Text("Contacts access is off. The app still works with raw handles. Enable it in System Settings → Privacy & Security → Contacts.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Optional and local-only. Contacts are read on this Mac to show names for handles and help you create rules. They are never uploaded, stored in the relay, or sent in push.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+// MARK: - Contact search (create a handle rule)
+
+private struct ContactSearchCard: View {
+    @EnvironmentObject var contacts: ContactsStore
+    @Binding var editorTarget: RuleTarget?
+    @State private var query = ""
+
+    var body: some View {
+        SectionCard(title: "Find a Contact") {
+            if !contacts.isAuthorized {
+                Text("Allow Contacts access above to search for people and create handle rules.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                TextField("Search name, phone, or email", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                let rows = contacts.searchAddresses(query)
+                if rows.isEmpty {
+                    Text("No matches.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(rows.prefix(20)) { row in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(row.name).fontWeight(.medium).lineLimit(1)
+                                Text(row.address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            Button("Rule…") {
+                                editorTarget = RuleTarget(kind: "handle", value: row.address,
+                                                          label: "\(row.name) · \(row.address)")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(.vertical, 1)
+                        Divider()
+                    }
+                    if rows.count > 20 {
+                        Text("Showing first 20 of \(rows.count) matches; refine the search.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 }
@@ -116,6 +201,7 @@ private struct RecentMessagesCard: View {
 }
 
 private struct RecentMessageRow: View {
+    @EnvironmentObject var contacts: ContactsStore
     let message: RecentMessage
     @Binding var editorTarget: RuleTarget?
 
@@ -126,12 +212,15 @@ private struct RecentMessageRow: View {
                 .font(.caption)
             VStack(alignment: .leading, spacing: 2) {
                 Text(sender).font(.callout).fontWeight(.medium).lineLimit(1)
+                if let sub = subtitle {
+                    Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer()
             if let handle = message.handle, !handle.id.isEmpty {
                 Button("Rule…") {
-                    editorTarget = RuleTarget(kind: "handle", value: handle.id, label: "Handle \(handle.id)")
+                    editorTarget = RuleTarget(kind: "handle", value: handle.id, label: ruleLabel(handle.id))
                 }
                 .buttonStyle(.borderless)
             }
@@ -141,7 +230,17 @@ private struct RecentMessageRow: View {
 
     private var sender: String {
         if message.isFromMe { return "You" }
-        return message.handle?.id ?? "Unknown"
+        guard let id = message.handle?.id, !id.isEmpty else { return "Unknown" }
+        return contacts.displayName(forHandle: id) ?? id
+    }
+    // Show the raw address as a secondary line when a contact name was resolved.
+    private var subtitle: String? {
+        guard !message.isFromMe, let id = message.handle?.id, !id.isEmpty else { return nil }
+        return contacts.displayName(forHandle: id) != nil ? id : nil
+    }
+    private func ruleLabel(_ id: String) -> String {
+        if let name = contacts.displayName(forHandle: id) { return "\(name) · \(id)" }
+        return "Handle \(id)"
     }
     private var snippet: String {
         let t = (message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -153,6 +252,7 @@ private struct RecentMessageRow: View {
 
 private struct ChatsCard: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var contacts: ContactsStore
     @Binding var editorTarget: RuleTarget?
 
     var body: some View {
@@ -163,12 +263,12 @@ private struct ChatsCard: View {
                 ForEach(model.chatsList) { chat in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(chat.label).fontWeight(.medium).lineLimit(1)
+                            Text(label(for: chat)).fontWeight(.medium).lineLimit(1)
                             Text(ruleStatus(forChat: chat.guid)).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button("Rule…") {
-                            editorTarget = RuleTarget(kind: "chat", value: chat.guid, label: chat.label)
+                            editorTarget = RuleTarget(kind: "chat", value: chat.guid, label: label(for: chat))
                         }
                         .buttonStyle(.borderless)
                     }
@@ -177,6 +277,17 @@ private struct ChatsCard: View {
                 }
             }
         }
+    }
+
+    // Use the contact name when the chat has no display name and its identifier
+    // is a recognizable handle (1:1 chats).
+    private func label(for chat: ChatSummary) -> String {
+        if let display = chat.displayName, !display.isEmpty { return display }
+        if let ident = chat.chatIdentifier, !ident.isEmpty,
+           let name = contacts.displayName(forHandle: ident) {
+            return name
+        }
+        return chat.label
     }
 
     private func ruleStatus(forChat guid: String) -> String {
@@ -189,6 +300,7 @@ private struct ChatsCard: View {
 
 private struct RulesOverviewCard: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var contacts: ContactsStore
 
     var body: some View {
         SectionCard(title: "Active Rules") {
@@ -200,6 +312,9 @@ private struct RulesOverviewCard: View {
                 ForEach(rules) { rule in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
+                            if rule.targetKind == "handle", let name = contacts.displayName(forHandle: rule.targetValue) {
+                                Text(name).fontWeight(.medium).lineLimit(1)
+                            }
                             Text("\(rule.targetKind): \(rule.targetValue)")
                                 .font(.system(.caption, design: .monospaced))
                                 .lineLimit(1).truncationMode(.middle)
@@ -224,6 +339,7 @@ private struct RulesOverviewCard: View {
 
 struct RuleEditorSheet: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var contacts: ContactsStore
     @Environment(\.dismiss) private var dismiss
     let target: RuleTarget
 
@@ -233,6 +349,9 @@ struct RuleEditorSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Rule for \(target.kind)").font(.headline)
+            if target.kind == "handle", let name = contacts.displayName(forHandle: target.value) {
+                Text(name).fontWeight(.medium)
+            }
             Text(target.label)
                 .font(.system(.callout, design: .monospaced))
                 .foregroundStyle(.secondary)

@@ -9,6 +9,7 @@ struct MicaGoCompanionApp: App {
     @StateObject private var model = AppModel.shared
     @StateObject private var runtime = RuntimeMonitor.shared
     @StateObject private var backend = BackendController.shared
+    @StateObject private var contacts = ContactsStore()
 
     var body: some Scene {
         WindowGroup(id: "dashboard") {
@@ -16,6 +17,7 @@ struct MicaGoCompanionApp: App {
                 .environmentObject(model)
                 .environmentObject(runtime)
                 .environmentObject(backend)
+                .environmentObject(contacts)
         }
         .defaultSize(width: 1000, height: 720)
         .defaultPosition(.center)

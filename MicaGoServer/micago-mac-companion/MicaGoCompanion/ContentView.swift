@@ -970,4 +970,5 @@ func copyToPasteboard(_ value: String) {
         .environmentObject(AppModel())
         .environmentObject(RuntimeMonitor())
         .environmentObject(BackendController.shared)
+        .environmentObject(ContactsStore())
 }
