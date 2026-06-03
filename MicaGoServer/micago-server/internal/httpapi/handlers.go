@@ -149,7 +149,13 @@ type Handlers struct {
 	cfg             config.Config
 	status          StatusDeps
 	startedAt       int64
+	rules           ruleService
 }
+
+// SetRuleService wires the v0.11.3 sync-rule store after construction (kept off
+// the constructor to avoid churning every NewHandlers call site). Nil means the
+// rule endpoints are unavailable.
+func (h *Handlers) SetRuleService(rs ruleService) { h.rules = rs }
 
 func NewHandlers(
 	queries queryService,

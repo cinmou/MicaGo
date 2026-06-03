@@ -181,8 +181,11 @@ func Run(options Options) error {
 		Capabilities: capabilities,
 	}
 
+	handlers := httpapi.NewHandlers(apiQueries, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
+	handlers.SetRuleService(relay) // v0.11.3 sync rules backed by relay.db
+
 	handler := httpapi.NewRouter(
-		httpapi.NewHandlers(apiQueries, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps),
+		handlers,
 		hub,
 		httpapi.AuthConfig{Enabled: !cfg.AuthDisabled, Token: cfg.AuthToken},
 	)

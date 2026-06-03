@@ -58,6 +58,17 @@ func (db *DB) Migrate() error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		);`,
+		// v0.11.3: per-target sync/push rules (whitelist/blacklist overrides).
+		`CREATE TABLE IF NOT EXISTS sync_rules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			target_kind TEXT NOT NULL,
+			target_value TEXT NOT NULL,
+			sync_mode TEXT NOT NULL,
+			push_mode TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			UNIQUE(target_kind, target_value)
+		);`,
 		// v0.11.x: persisted event-state cache for the lookback update pass.
 		`CREATE TABLE IF NOT EXISTS message_state (
 			guid TEXT PRIMARY KEY,

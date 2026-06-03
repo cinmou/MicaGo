@@ -199,3 +199,78 @@ no BlueBubbles Electron/WebUI; no Socket.IO; no bundled tunnel management
 7. Endpoints unaffected: local/LAN/public still shown per the connection model.
 8. Logs never contain a bearer token; build: `xcodebuild … CODE_SIGNING_ALLOWED=NO build`
    succeeds.
+
+---
+
+## v0.11.2.1 — Polish follow-up: Hide Dock icon / menu-bar-only mode
+
+Status: **Planned** (small polish on top of the shipped v0.11.2 runtime work; not
+yet implemented). This extends the existing silent-launch / menu-bar surface, so
+it lives here rather than in v0.11.3 Sync Control.
+
+### Goal
+
+Let the user run MicaGo Companion as a **menu-bar-only** app with **no Dock
+icon**, while keeping the full Dashboard reachable on demand. Distinct from
+**Launch hidden** (which only controls whether a window opens *at launch*): this
+setting controls the **Dock presence while running**.
+
+### Behavior
+
+1. New setting (Advanced): **"Hide Dock icon when running in menu bar"**
+   (`hideDockIcon`, persisted in `UserDefaults`, default off).
+2. When enabled, the app runs as an **accessory** (`NSApp.setActivationPolicy(.accessory)`)
+   so it does not appear in the Dock or the ⌘-Tab switcher.
+3. The **menu-bar item remains visible** at all times (it is independent of
+   activation policy).
+4. **Open Dashboard** (menu bar) must always restore/show the main window:
+   set `.regular`, `NSApp.activate(ignoringOtherApps: true)`, then
+   `openWindow(id: "dashboard")`.
+5. When the Dashboard window is **closed again**, if `hideDockIcon` is still on,
+   the app returns to **`.accessory`** (menu-bar-only). Detect window close via
+   an `NSWindow.willCloseNotification` observer, then re-apply `.accessory` if no
+   other regular windows remain.
+6. **Quit** from the menu bar still quits the app and stops the
+   companion-managed backend cleanly (`backend.shutdownForQuit()` →
+   `NSApp.terminate`).
+
+### Activation-policy rules (single source of truth)
+
+A small helper centralizes policy so the inputs don't fight each other:
+
+- Effective policy = `.accessory` when `hideDockIcon` is on **and** no dashboard
+  window is currently visible; otherwise `.regular`.
+- `launchHidden` (existing) only affects whether a window is opened at launch; on
+  a hidden launch with `hideDockIcon` on, the app starts as `.accessory`.
+- Showing the Dashboard always forces `.regular` first (so the window can take
+  focus), then re-evaluates on close.
+
+### Must not break
+
+silent launch, Launch at Login, auto-start server, auto-restart (backoff),
+Keep Awake, external/unmanaged server detection, Dashboard/Connections — all
+remain driven by the AppDelegate bootstrap + shared controllers (independent of
+activation policy and window presence).
+
+### Implementation notes (when approved)
+
+- Add `hideDockIcon` to the settings store (alongside `autoStart`,
+  `autoRestart`, `launchHidden`).
+- Centralize policy in one `applyActivationPolicy()` called at launch, on the
+  setting's `onChange`, after `openWindow`, and on dashboard-window close.
+- Toggling the setting **off** must restore `.regular` immediately so the Dock
+  icon reappears without a relaunch.
+- Re-applying `.accessory` on window close must not terminate the app; assert
+  `applicationShouldTerminateAfterLastWindowClosed` returns `false`.
+
+### Manual test checklist (v0.11.2.1)
+
+1. Enable "Hide Dock icon": the Dock icon disappears, the menu-bar item stays.
+2. Open Dashboard from the menu bar → window appears and is focusable; Dock icon
+   returns while the window is open.
+3. Close the Dashboard window → with the setting on, Dock icon disappears again;
+   menu bar still works.
+4. Toggle the setting off while menu-bar-only → Dock icon reappears immediately.
+5. Quit from the menu bar → app quits; no orphaned `micago` backend.
+6. Regression: silent launch, Launch at Login, auto-start, auto-restart, Keep
+   Awake, external-server detection, and Dashboard/Connections all still work.

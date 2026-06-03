@@ -1,0 +1,288 @@
+import SwiftUI
+
+/// A target the rule editor can act on (a chat GUID or a normalized handle).
+struct RuleTarget: Identifiable {
+    let kind: String   // "chat" | "handle"
+    let value: String
+    let label: String
+    var id: String { "\(kind):\(value)" }
+}
+
+// MARK: - Sync Control page
+
+struct SyncControlPage: View {
+    @EnvironmentObject var model: AppModel
+    @State private var editorTarget: RuleTarget?
+
+    var body: some View {
+        Group {
+            SectionCard(title: "Sync Control") {
+                Text("Choose which conversations are saved to the relay and which send push notifications. This is a privacy/management view — **not** a chat client. Blocking a chat stops *future* sync; messages already synced are kept.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let error = model.lastError {
+                    Text(error).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            DefaultPolicyCard()
+            RecentMessagesCard(editorTarget: $editorTarget)
+            ChatsCard(editorTarget: $editorTarget)
+            RulesOverviewCard()
+        }
+        .task { await model.loadSyncControl() }
+        .sheet(item: $editorTarget) { target in
+            RuleEditorSheet(target: target)
+                .environmentObject(model)
+        }
+    }
+}
+
+// MARK: - Default policy
+
+private struct DefaultPolicyCard: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        SectionCard(title: "Default Policy") {
+            Picker("Default sync", selection: Binding(
+                get: { model.syncRules?.defaultSyncPolicy ?? "allow_all" },
+                set: { newValue in
+                    Task { await model.saveDefaultPolicy(sync: newValue, push: model.syncRules?.defaultPushPolicy ?? "enabled") }
+                }
+            )) {
+                Text("Allow all (block specific)").tag("allow_all")
+                Text("Block all (allowlist)").tag("block_all")
+            }
+            .pickerStyle(.menu)
+
+            Picker("Default push", selection: Binding(
+                get: { model.syncRules?.defaultPushPolicy ?? "enabled" },
+                set: { newValue in
+                    Task { await model.saveDefaultPolicy(sync: model.syncRules?.defaultSyncPolicy ?? "allow_all", push: newValue) }
+                }
+            )) {
+                Text("Enabled").tag("enabled")
+                Text("Muted").tag("muted")
+            }
+            .pickerStyle(.menu)
+
+            Text("Rules below override the default for a specific chat or handle. Chat rules win over handle rules; both win over the default.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Recent messages (management view)
+
+private struct RecentMessagesCard: View {
+    @EnvironmentObject var model: AppModel
+    @Binding var editorTarget: RuleTarget?
+
+    private let counts = [20, 50, 100, 500]
+
+    var body: some View {
+        SectionCard(title: "Recent Messages") {
+            HStack {
+                Text("Show").foregroundStyle(.secondary)
+                Picker("", selection: Binding(
+                    get: { model.recentCount },
+                    set: { newValue in Task { await model.setRecentCount(newValue) } }
+                )) {
+                    ForEach(counts, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 240)
+                Spacer()
+                Button { Task { await model.loadSyncControl() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless)
+            }
+
+            if model.recentMessages.isEmpty {
+                Text("No recent messages (or none synced yet).").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(model.recentMessages) { message in
+                    RecentMessageRow(message: message, editorTarget: $editorTarget)
+                    Divider()
+                }
+            }
+            Text("Read-only management view — no composing, threads, or media.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct RecentMessageRow: View {
+    let message: RecentMessage
+    @Binding var editorTarget: RuleTarget?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: message.isFromMe ? "arrow.up.right" : "arrow.down.left")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sender).font(.callout).fontWeight(.medium).lineLimit(1)
+                Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer()
+            if let handle = message.handle, !handle.id.isEmpty {
+                Button("Rule…") {
+                    editorTarget = RuleTarget(kind: "handle", value: handle.id, label: "Handle \(handle.id)")
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var sender: String {
+        if message.isFromMe { return "You" }
+        return message.handle?.id ?? "Unknown"
+    }
+    private var snippet: String {
+        let t = (message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "(no text)" : t
+    }
+}
+
+// MARK: - Chats (rule targets)
+
+private struct ChatsCard: View {
+    @EnvironmentObject var model: AppModel
+    @Binding var editorTarget: RuleTarget?
+
+    var body: some View {
+        SectionCard(title: "Chats (\(model.chatsList.count))") {
+            if model.chatsList.isEmpty {
+                Text("No chats synced yet.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(model.chatsList) { chat in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(chat.label).fontWeight(.medium).lineLimit(1)
+                            Text(ruleStatus(forChat: chat.guid)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Rule…") {
+                            editorTarget = RuleTarget(kind: "chat", value: chat.guid, label: chat.label)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(.vertical, 2)
+                    Divider()
+                }
+            }
+        }
+    }
+
+    private func ruleStatus(forChat guid: String) -> String {
+        guard let rule = model.storedRule(kind: "chat", value: guid) else { return "default policy" }
+        return "sync: \(rule.syncMode) · push: \(rule.pushMode)"
+    }
+}
+
+// MARK: - Rules overview
+
+private struct RulesOverviewCard: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        SectionCard(title: "Active Rules") {
+            let rules = model.syncRules?.rules ?? []
+            if rules.isEmpty {
+                Text("No overrides — the default policy applies to everything.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(rules) { rule in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(rule.targetKind): \(rule.targetValue)")
+                                .font(.system(.caption, design: .monospaced))
+                                .lineLimit(1).truncationMode(.middle)
+                            Text("sync: \(rule.syncMode) · push: \(rule.pushMode)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            Task { await model.clearSyncRule(targetKind: rule.targetKind, targetValue: rule.targetValue) }
+                        } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                    }
+                    .padding(.vertical, 2)
+                    Divider()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Rule editor sheet
+
+struct RuleEditorSheet: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let target: RuleTarget
+
+    @State private var syncMode = "inherit"
+    @State private var pushMode = "inherit"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rule for \(target.kind)").font(.headline)
+            Text(target.label)
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(2).truncationMode(.middle)
+
+            Picker("Sync", selection: $syncMode) {
+                Text("Inherit default").tag("inherit")
+                Text("Allow").tag("allow")
+                Text("Block").tag("block")
+            }
+            .pickerStyle(.segmented)
+
+            Picker("Push", selection: $pushMode) {
+                Text("Inherit default").tag("inherit")
+                Text("Enabled").tag("enabled")
+                Text("Muted").tag("muted")
+            }
+            .pickerStyle(.segmented)
+
+            Text("Blocking sync stops future messages for this target from being saved or pushed. Muting keeps sync but stops push.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Clear rule", role: .destructive) {
+                    Task {
+                        await model.clearSyncRule(targetKind: target.kind, targetValue: target.value)
+                        dismiss()
+                    }
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Save") {
+                    Task {
+                        await model.saveSyncRule(targetKind: target.kind, targetValue: target.value,
+                                                 syncMode: syncMode, pushMode: pushMode)
+                        dismiss()
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(model.syncBusy)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .onAppear {
+            if let existing = model.storedRule(kind: target.kind, value: target.value) {
+                syncMode = existing.syncMode
+                pushMode = existing.pushMode
+            }
+        }
+    }
+}

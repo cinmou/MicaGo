@@ -39,6 +39,12 @@ func UpdatePass(ctx context.Context, source updateSource, relay *DB, caps store.
 		return result, err
 	}
 
+	// v0.11.3: skip updates for blocked chats/handles (no insert/update/emit).
+	snapshot, err := relay.LoadRuleSnapshot(ctx)
+	if err != nil {
+		return result, err
+	}
+
 	tx, err := relay.sqlDB.BeginTx(ctx, nil)
 	if err != nil {
 		return result, err
@@ -62,6 +68,9 @@ func UpdatePass(ctx context.Context, source updateSource, relay *DB, caps store.
 		}
 		if !exists {
 			continue // not a message we track; new-message sync owns insertion
+		}
+		if !snapshot.SyncAllowed(row.ChatGUID, row.HandleID) {
+			continue // blocked target: no further updates/emits
 		}
 		result.Scanned++
 

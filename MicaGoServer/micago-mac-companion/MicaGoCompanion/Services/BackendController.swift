@@ -44,6 +44,9 @@ final class BackendController: ObservableObject {
     @Published var autoStart: Bool { didSet { defaults.set(autoStart, forKey: K.autoStart) } }
     @Published var autoRestart: Bool { didSet { defaults.set(autoRestart, forKey: K.autoRestart) } }
     @Published var launchHidden: Bool { didSet { defaults.set(launchHidden, forKey: K.launchHidden) } }
+    // v0.11.2.1: hide the Dock icon while running menu-bar-only (no window open).
+    // Persistence only — activation policy is applied centrally (applyActivationPolicy()).
+    @Published var hideDockIcon: Bool { didSet { defaults.set(hideDockIcon, forKey: K.hideDockIcon) } }
 
     private var process: Process?
     private var intentionalStop = false
@@ -61,6 +64,7 @@ final class BackendController: ObservableObject {
         static let autoStart = "autoStartServer"
         static let autoRestart = "autoRestartServer"
         static let launchHidden = "launchHidden"
+        static let hideDockIcon = "hideDockIcon"
     }
 
     init() {
@@ -68,6 +72,7 @@ final class BackendController: ObservableObject {
         autoStart = defaults.bool(forKey: K.autoStart)
         autoRestart = defaults.bool(forKey: K.autoRestart)
         launchHidden = defaults.bool(forKey: K.launchHidden)
+        hideDockIcon = defaults.bool(forKey: K.hideDockIcon)
         refreshInstalledState()
     }
 

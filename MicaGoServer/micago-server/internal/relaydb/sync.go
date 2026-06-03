@@ -51,8 +51,22 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int) (Syn
 		}
 	}
 
-	messageGUIDs := make([]string, 0, len(messages))
+	// v0.11.3: evaluate sync rules. Blocked messages are NOT inserted/broadcast/
+	// pushed, but the rowid watermark below still advances over the FULL set so
+	// blocked messages are not re-scanned forever.
+	snapshot, err := relay.LoadRuleSnapshot(ctx)
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("load sync rules: %w", err)
+	}
+	syncedMessages := make([]store.SyncMessageRow, 0, len(messages))
 	for _, message := range messages {
+		if snapshot.SyncAllowed(message.ChatGUID, message.HandleID) {
+			syncedMessages = append(syncedMessages, message)
+		}
+	}
+
+	messageGUIDs := make([]string, 0, len(syncedMessages))
+	for _, message := range syncedMessages {
 		messageGUIDs = append(messageGUIDs, message.GUID)
 	}
 
@@ -71,7 +85,7 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int) (Syn
 	if err := upsertChatsTx(tx, chats, now); err != nil {
 		return SyncResult{}, err
 	}
-	insertedGUIDs, err := upsertMessagesTx(tx, messages, now)
+	insertedGUIDs, err := upsertMessagesTx(tx, syncedMessages, now)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -125,13 +139,13 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int) (Syn
 		if err != nil {
 			return SyncResult{}, err
 		}
-		result.NotificationEvents = buildNotificationEvents(result.NewMessages, messages, chats)
+		result.NotificationEvents = buildNotificationEvents(result.NewMessages, syncedMessages, chats, snapshot)
 	}
 
 	return result, nil
 }
 
-func buildNotificationEvents(messages []store.MessageJSON, rows []store.SyncMessageRow, chats []store.SyncChatRow) []NotificationEvent {
+func buildNotificationEvents(messages []store.MessageJSON, rows []store.SyncMessageRow, chats []store.SyncChatRow, snapshot RuleSnapshot) []NotificationEvent {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -148,6 +162,10 @@ func buildNotificationEvents(messages []store.MessageJSON, rows []store.SyncMess
 	for _, message := range messages {
 		row, ok := messageRows[message.GUID]
 		if !ok {
+			continue
+		}
+		// v0.11.3: muted (but synced) messages are excluded from push dispatch.
+		if !snapshot.PushEnabled(row.ChatGUID, row.HandleID) {
 			continue
 		}
 		chat := chatRows[row.ChatGUID]

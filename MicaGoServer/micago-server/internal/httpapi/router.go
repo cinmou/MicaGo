@@ -26,6 +26,10 @@ func NewRouter(h *Handlers, hub *realtime.Hub, auth AuthConfig) http.Handler {
 	mux.Handle("POST /api/devices/{id}/heartbeat", auth.Wrap(http.HandlerFunc(h.DeviceHeartbeat)))
 	mux.Handle("DELETE /api/devices/{id}", auth.Wrap(http.HandlerFunc(h.DeleteDevice)))
 	mux.Handle("POST /api/devices/{id}/test-push", auth.Wrap(http.HandlerFunc(h.TestPush)))
+	mux.Handle("GET /api/sync/rules", auth.Wrap(http.HandlerFunc(h.GetSyncRules)))
+	mux.Handle("PUT /api/sync/rules", auth.Wrap(http.HandlerFunc(h.PutSyncRule)))
+	mux.Handle("DELETE /api/sync/rules/{kind}/{value}", auth.Wrap(http.HandlerFunc(h.DeleteSyncRule)))
+	mux.Handle("PUT /api/sync/policy", auth.Wrap(http.HandlerFunc(h.PutSyncPolicy)))
 	if hub != nil {
 		mux.Handle("GET /ws", websocketAuthHandler(hub, auth))
 	}

@@ -4,7 +4,7 @@ import AppKit
 // MARK: - Sidebar
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case dashboard, connections, devices, notifications, permissions, server, logs, advanced
+    case dashboard, connections, devices, syncControl, notifications, permissions, server, logs, advanced
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .dashboard: return "Dashboard"
         case .connections: return "Connections"
         case .devices: return "Devices"
+        case .syncControl: return "Sync Control"
         case .notifications: return "Notifications"
         case .permissions: return "Permissions"
         case .server: return "Server"
@@ -26,6 +27,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .dashboard: return "gauge.with.dots.needle.bottom.50percent"
         case .connections: return "network"
         case .devices: return "iphone.gen3"
+        case .syncControl: return "line.3.horizontal.decrease.circle"
         case .notifications: return "bell"
         case .permissions: return "lock.shield"
         case .server: return "server.rack"
@@ -77,6 +79,7 @@ struct ContentView: View {
         case .dashboard: DashboardPage()
         case .connections: ConnectionsPage()
         case .devices: DevicesSection()
+        case .syncControl: SyncControlPage()
         case .notifications: NotificationsSection()
         case .permissions: PermissionsPage()
         case .server: ServerPage()
@@ -543,7 +546,12 @@ private struct AdvancedPage: View {
             Toggle("Start server automatically when the companion launches", isOn: $backend.autoStart)
             Toggle("Restart the server automatically if it crashes", isOn: $backend.autoRestart)
             Toggle("Launch hidden (menu-bar only; no window at launch)", isOn: $backend.launchHidden)
-            Text("Auto-restart uses exponential backoff and stops after repeated crashes. It never restarts after you Stop the server, and never restarts a Full Disk Access failure.")
+            Toggle("Hide Dock icon when running in menu bar", isOn: $backend.hideDockIcon)
+                .onChange(of: backend.hideDockIcon) { _ in
+                    // Apply immediately: turning it off restores the Dock icon now.
+                    applyActivationPolicy()
+                }
+            Text("“Hide Dock icon” removes the Dock icon while no Dashboard window is open; the menu-bar item stays. Open Dashboard from the menu bar to show the window again. Auto-restart uses exponential backoff, stops after repeated crashes, never restarts after you Stop the server, and never restarts a Full Disk Access failure.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

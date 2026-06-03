@@ -51,13 +51,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let hidden = UserDefaults.standard.bool(forKey: "launchHidden")
         if hidden {
-            // Menu-bar accessory: no Dock icon, no window at launch.
-            NSApp.setActivationPolicy(.accessory)
+            // Silent launch: close the window opened by the WindowGroup.
             DispatchQueue.main.async {
-                for window in NSApp.windows where !(window is NSPanel) {
+                for window in NSApp.windows where window.styleMask.contains(.titled) {
                     window.close()
                 }
+                applyActivationPolicy()
             }
+        }
+
+        // Apply the Dock-icon policy now (and again whenever a window opens/closes).
+        applyActivationPolicy()
+
+        // Re-evaluate the policy whenever a window closes so the app can drop
+        // back to menu-bar-only (accessory) once the Dashboard is dismissed.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: nil, queue: .main
+        ) { _ in
+            // willClose fires before the window leaves the list; re-evaluate next tick.
+            DispatchQueue.main.async { applyActivationPolicy() }
         }
 
         // Bootstrap regardless of whether a window is shown.
@@ -74,6 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         BackendController.shared.shutdownForQuit()
     }
 
+    // Keep the app (and menu bar) alive when the Dashboard window closes.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { NSApp.activate(ignoringOtherApps: true) }
         return true
@@ -84,8 +101,26 @@ extension BackendController {
     static let shared = BackendController()
 }
 
+/// Whether a main Dashboard window (titled, visible) is currently on screen.
+/// The MenuBarExtra's status window is an untitled panel and is excluded.
+func hasVisibleDashboardWindow() -> Bool {
+    NSApp.windows.contains { $0.isVisible && $0.styleMask.contains(.titled) }
+}
+
+/// Single source of truth for the app's Dock presence. Accessory (no Dock icon)
+/// only when the user enabled "Hide Dock icon" AND no Dashboard window is open;
+/// otherwise regular. The menu-bar item is unaffected by activation policy.
+func applyActivationPolicy() {
+    let hideDock = UserDefaults.standard.bool(forKey: "hideDockIcon")
+    let target: NSApplication.ActivationPolicy = (hideDock && !hasVisibleDashboardWindow()) ? .accessory : .regular
+    if NSApp.activationPolicy() != target {
+        NSApp.setActivationPolicy(target)
+    }
+}
+
 /// Brings the app to the foreground and opens the dashboard window. Used by the
-/// menu-bar "Open Dashboard" action and after a silent launch.
+/// menu-bar "Open Dashboard" action and after a silent launch. Always restores
+/// the regular activation policy first so the window can take focus.
 @MainActor
 func presentDashboard(openWindow: OpenWindowAction) {
     NSApp.setActivationPolicy(.regular)

@@ -20,20 +20,27 @@ table in [`PROJECT_STATUS.md`](PROJECT_STATUS.md). Read
   [`v0.11.x-reliability-crosscheck.md`](v0.11.x-reliability-crosscheck.md).
 - **v0.10.1 companion redesign Slice 1** landed (NavigationSplitView shell,
   Dashboard, Connections, status chip, runtime card, capabilities display).
-- **Next milestone is v0.11.2 — Companion Runtime & Deployment**, then the
-  productization roadmap below. Firebase (v0.12) moved **after** the local
-  runtime, sync-control, and contacts foundations.
+- **v0.11.2 — Companion Runtime & Deployment is implemented and its manual tests
+  passed** (bundled backend, process manager, auto-start/restart with backoff,
+  Launch at Login, silent launch, menu-bar item, FDA banner).
+- **Next is a small polish — v0.11.2.1 (Hide Dock icon / menu-bar-only mode)** —
+  then the productization roadmap below. Firebase (v0.12) stays **after** the
+  local runtime, sync-control, and contacts foundations.
 
 ## Roadmap (next phases, in order)
 
 Each phase has a dedicated spec; build strictly in this order:
 
-1. **v0.11.2 — Companion Runtime & Deployment** —
-   [`spec-v0.11.2-companion-runtime-deployment.md`](spec-v0.11.2-companion-runtime-deployment.md).
-   Bundle the Go backend in the app; companion-owned lifecycle (start/stop/restart,
+1. **v0.11.2 — Companion Runtime & Deployment** — ✅ implemented, manual tests
+   passed. [`spec-v0.11.2-companion-runtime-deployment.md`](spec-v0.11.2-companion-runtime-deployment.md).
+   Bundled the Go backend in the app; companion-owned lifecycle (start/stop/restart,
    crash detection + exit reason, auto-restart with backoff), launch-at-login,
    auto-start, silent/hidden launch, **menu-bar status item**, and a clear **Full
    Disk Access** failure banner (not raw "operation not permitted").
+   - **1a. v0.11.2.1 — Hide Dock icon / menu-bar-only mode** (small polish; spec
+     in the v0.11.2 doc's "Polish follow-up" section). A `hideDockIcon` setting
+     toggles `.accessory`/`.regular` activation policy while keeping the menu-bar
+     item and an always-reachable Dashboard. Do this before v0.11.3.
 2. **v0.11.3 — Sync Control / Privacy Rules** —
    [`spec-v0.11.3-sync-control-and-privacy-rules.md`](spec-v0.11.3-sync-control-and-privacy-rules.md).
    Per-chat / per-handle **sync allow/block** and **push enable/mute** rules

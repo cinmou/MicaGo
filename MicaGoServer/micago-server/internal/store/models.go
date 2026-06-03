@@ -230,6 +230,26 @@ type ServerFeatures struct {
 	Notifications bool `json:"notifications"`
 }
 
+// SyncRuleJSON is a per-target sync/push rule (v0.11.3). targetKind is
+// "chat" | "handle"; syncMode is "allow" | "block" | "inherit"; pushMode is
+// "enabled" | "muted" | "inherit".
+type SyncRuleJSON struct {
+	TargetKind  string `json:"targetKind"`
+	TargetValue string `json:"targetValue"`
+	SyncMode    string `json:"syncMode"`
+	PushMode    string `json:"pushMode"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
+}
+
+// SyncRulesResponse is the GET /api/sync/rules payload. defaultSyncPolicy is
+// "allow_all" | "block_all"; defaultPushPolicy is "enabled" | "muted".
+type SyncRulesResponse struct {
+	DefaultSyncPolicy string         `json:"defaultSyncPolicy"`
+	DefaultPushPolicy string         `json:"defaultPushPolicy"`
+	Rules             []SyncRuleJSON `json:"rules"`
+}
+
 // ServerStatusResponse is the runtime control/status payload consumed by the
 // native macOS companion app (see docs/spec-v0.10.0-mac-companion.md). It is
 // intentionally read-only and local-control oriented; it never returns the

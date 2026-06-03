@@ -684,6 +684,87 @@ func TestGetServerStatusIncludesCapabilities(t *testing.T) {
 	}
 }
 
+type stubRuleService struct {
+	rules      []store.SyncRuleJSON
+	syncPolicy string
+	pushPolicy string
+}
+
+func (s *stubRuleService) ListSyncRules(_ context.Context) ([]store.SyncRuleJSON, error) {
+	return s.rules, nil
+}
+func (s *stubRuleService) UpsertSyncRule(_ context.Context, rule store.SyncRuleJSON) error {
+	s.rules = append(s.rules, rule)
+	return nil
+}
+func (s *stubRuleService) DeleteSyncRule(_ context.Context, _, _ string) error { return nil }
+func (s *stubRuleService) DefaultPolicies(_ context.Context) (string, string, error) {
+	sp := s.syncPolicy
+	if sp == "" {
+		sp = "allow_all"
+	}
+	pp := s.pushPolicy
+	if pp == "" {
+		pp = "enabled"
+	}
+	return sp, pp, nil
+}
+func (s *stubRuleService) SetDefaultPolicies(_ context.Context, sync, push string) error {
+	s.syncPolicy, s.pushPolicy = sync, push
+	return nil
+}
+
+func newRuleHandlers(rs ruleService) *Handlers {
+	h := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+	h.SetRuleService(rs)
+	return h
+}
+
+func TestPutAndGetSyncRules(t *testing.T) {
+	h := newRuleHandlers(&stubRuleService{})
+
+	put := httptest.NewRequest(http.MethodPut, "/api/sync/rules",
+		strings.NewReader(`{"targetKind":"chat","targetValue":"iMessage;-;+1555","syncMode":"block","pushMode":"inherit"}`))
+	rec := httptest.NewRecorder()
+	h.PutSyncRule(rec, put)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT rule expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/sync/rules", nil)
+	grec := httptest.NewRecorder()
+	h.GetSyncRules(grec, get)
+	var resp store.SyncRulesResponse
+	if err := json.Unmarshal(grec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.DefaultSyncPolicy != "allow_all" || len(resp.Rules) != 1 || resp.Rules[0].SyncMode != "block" {
+		t.Fatalf("unexpected rules response: %+v", resp)
+	}
+}
+
+func TestPutSyncRuleRejectsInvalidKind(t *testing.T) {
+	h := newRuleHandlers(&stubRuleService{})
+	req := httptest.NewRequest(http.MethodPut, "/api/sync/rules",
+		strings.NewReader(`{"targetKind":"group","targetValue":"x","syncMode":"block","pushMode":"inherit"}`))
+	rec := httptest.NewRecorder()
+	h.PutSyncRule(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid targetKind, got %d", rec.Code)
+	}
+}
+
+func TestSyncRulesUnavailableWhenUnset(t *testing.T) {
+	h := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+	rec := httptest.NewRecorder()
+	h.GetSyncRules(rec, httptest.NewRequest(http.MethodGet, "/api/sync/rules", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when rule service unset, got %d", rec.Code)
+	}
+}
+
 func contains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {

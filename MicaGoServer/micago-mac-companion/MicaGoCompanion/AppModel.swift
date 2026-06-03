@@ -34,6 +34,13 @@ final class AppModel: ObservableObject {
         reloadConfig()
     }
 
+    // Sync control (v0.11.3)
+    @Published var syncRules: SyncRulesResponse?
+    @Published var recentMessages: [RecentMessage] = []
+    @Published var chatsList: [ChatSummary] = []
+    @Published var recentCount: Int = 50
+    @Published var syncBusy = false
+
     var baseURL: URL? {
         guard let config else { return nil }
         return ConfigReader.baseURL(for: config)
@@ -193,5 +200,76 @@ final class AppModel: ObservableObject {
         } catch {
             lastError = "Could not validate public URL: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Sync control actions (v0.11.3)
+
+    func loadSyncControl() async {
+        guard let baseURL else { return }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            async let rules = client.syncRules()
+            async let chats = client.chats()
+            async let recent = client.recentMessages(limit: recentCount)
+            syncRules = try await rules
+            chatsList = try await chats
+            recentMessages = try await recent
+            lastError = nil
+        } catch {
+            lastError = "Sync control: \(error.localizedDescription)"
+        }
+    }
+
+    func setRecentCount(_ count: Int) async {
+        recentCount = count
+        guard let baseURL else { return }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do { recentMessages = try await client.recentMessages(limit: count) }
+        catch { lastError = "Recent messages: \(error.localizedDescription)" }
+    }
+
+    func saveSyncRule(targetKind: String, targetValue: String, syncMode: String, pushMode: String) async {
+        guard let baseURL else { return }
+        syncBusy = true
+        defer { syncBusy = false }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            syncRules = try await client.putSyncRule(targetKind: targetKind, targetValue: targetValue,
+                                                     syncMode: syncMode, pushMode: pushMode)
+            lastError = nil
+        } catch {
+            lastError = "Save rule: \(error.localizedDescription)"
+        }
+    }
+
+    func clearSyncRule(targetKind: String, targetValue: String) async {
+        guard let baseURL else { return }
+        syncBusy = true
+        defer { syncBusy = false }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            syncRules = try await client.deleteSyncRule(targetKind: targetKind, targetValue: targetValue)
+            lastError = nil
+        } catch {
+            lastError = "Clear rule: \(error.localizedDescription)"
+        }
+    }
+
+    func saveDefaultPolicy(sync: String, push: String) async {
+        guard let baseURL else { return }
+        syncBusy = true
+        defer { syncBusy = false }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            syncRules = try await client.setSyncPolicy(defaultSync: sync, defaultPush: push)
+            lastError = nil
+        } catch {
+            lastError = "Save policy: \(error.localizedDescription)"
+        }
+    }
+
+    /// The stored rule for a target, if any (exact match; chat by GUID).
+    func storedRule(kind: String, value: String) -> SyncRule? {
+        syncRules?.rules.first { $0.targetKind == kind && $0.targetValue == value }
     }
 }
