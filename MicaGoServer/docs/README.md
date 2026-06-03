@@ -68,6 +68,7 @@ individual feature specs add detail and rationale.
 | [`spec-v0.8.0-notification-provider.md`](spec-v0.8.0-notification-provider.md) | Notification provider abstraction (webhook real; FCM/HMS/ntfy stubs). |
 | [`spec-v0.9.0-client-api-contract.md`](spec-v0.9.0-client-api-contract.md) | **Canonical** stable client API contract (REST + WS + models). |
 | [`spec-v0.11.0-connection-endpoints.md`](spec-v0.11.0-connection-endpoints.md) | Aggregated connection endpoints (local/LAN/optional public) + `/api/server/urls`. |
+| [`spec-v0.11.x-server-reliability.md`](spec-v0.11.x-server-reliability.md) | **Planned next milestone:** sync fidelity (update detection), send-error fast-fail, `chat.db` schema/version safety, runtime preconditions. |
 
 ### Companion app spec (current source of truth)
 
@@ -80,6 +81,8 @@ individual feature specs add detail and rationale.
 | Document | Purpose |
 | --- | --- |
 | [`v0.9.0-gap-analysis.md`](v0.9.0-gap-analysis.md) | Contract-vs-implementation gap analysis (now mostly resolved; see notes inside). |
+| [`bluebubbles-source-audit-v2.md`](bluebubbles-source-audit-v2.md) | Source-level audit of BlueBubbles vs MicaGoServer across 10 server areas (informs v0.11.x). |
+| [`server-gap-after-bluebubbles-source-review.md`](server-gap-after-bluebubbles-source-review.md) | Prioritized (P0/P1/P2) gap list and recommended next milestone from the source audit. |
 | [`v0.1.1-live-test-report.md`](v0.1.1-live-test-report.md) | Historical live-test run on the author's Mac (v0.1.1). |
 
 ### Background / historical (reference, not source of truth)
