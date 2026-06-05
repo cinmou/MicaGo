@@ -94,6 +94,14 @@ func (db *DB) Migrate() error {
 		return err
 	}
 
+	// v0.11.5: attachment fidelity — Apple UTI + sticker flag (additive).
+	if err := db.ensureColumn("attachments", "uti", "TEXT"); err != nil {
+		return err
+	}
+	if err := db.ensureColumn("attachments", "is_sticker", "INTEGER"); err != nil {
+		return err
+	}
+
 	return nil
 }
 

@@ -3,7 +3,10 @@ package notify
 import (
 	"context"
 	"errors"
+	"log"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"micagoserver/internal/config"
@@ -12,53 +15,174 @@ import (
 )
 
 type Dispatcher struct {
-	enabled     bool
-	previewMode string
-	providers   map[string]Provider
+	mu              sync.RWMutex
+	enabled         bool
+	previewMode     string
+	defaultProvider string
+	providers       map[string]Provider
+	fcmActive       bool
+	firestore       *FirestoreURLSync
+	pruneFunc       func(deviceID string)
 }
 
 func NewDispatcher(cfg config.Config) *Dispatcher {
+	d := &Dispatcher{}
+	d.apply(cfg)
+	return d
+}
+
+// Reload rebuilds providers/state from a fresh config (used by the
+// notifications-config write endpoint so changes take effect without restart).
+func (d *Dispatcher) Reload(cfg config.Config) {
+	d.apply(cfg)
+}
+
+// SetPruneFunc wires the dead-token pruning callback (clears a device's push
+// token). Called once after the device store is available.
+func (d *Dispatcher) SetPruneFunc(fn func(deviceID string)) {
+	d.mu.Lock()
+	d.pruneFunc = fn
+	d.mu.Unlock()
+}
+
+func (d *Dispatcher) apply(cfg config.Config) {
 	providers := map[string]Provider{
 		"none":         NoneProvider{},
 		"webhook":      WebhookProvider{URL: cfg.WebhookURL},
-		"fcm":          FCMStubProvider{},
 		"hms":          NewHMSStubProvider("hms"),
 		"harmony_push": NewHMSStubProvider("harmony_push"),
 		"ntfy":         NtfyStubProvider{},
 	}
-	return &Dispatcher{
-		enabled:     cfg.NotificationsEnabled,
-		previewMode: cfg.NotificationPreview,
-		providers:   providers,
+
+	fcmActive := false
+	var firestore *FirestoreURLSync
+	if cfg.FCM.Enabled && strings.TrimSpace(cfg.FCM.ServiceAccountPath) != "" {
+		sa, err := LoadServiceAccount(cfg.FCM.ServiceAccountPath)
+		if err != nil {
+			log.Printf("fcm: service account not loaded (%v); fcm push disabled", err)
+			providers["fcm"] = FCMStubProvider{}
+		} else {
+			projectID := cfg.FCM.ProjectID
+			if projectID == "" {
+				projectID = sa.ProjectID
+			}
+			httpClient := &http.Client{Timeout: 15 * time.Second}
+			tokens := NewTokenSource(sa, httpClient, scopeFCM, scopeFirestore)
+			providers["fcm"] = NewFCMProvider(projectID, tokens, httpClient, 24*time.Hour, func(id string) {
+				d.invokePrune(id)
+			})
+			fcmActive = true
+			if cfg.Firebase.PublicURLSync {
+				firestore = NewFirestoreURLSync(projectID, cfg.Firebase.URLCollection, cfg.Firebase.URLDocument, tokens, httpClient)
+			}
+		}
+	} else {
+		providers["fcm"] = FCMStubProvider{}
+	}
+
+	d.mu.Lock()
+	d.enabled = cfg.NotificationsEnabled
+	d.previewMode = cfg.NotificationPreview
+	d.defaultProvider = cfg.NotificationProvider
+	d.providers = providers
+	d.fcmActive = fcmActive
+	d.firestore = firestore
+	d.mu.Unlock()
+}
+
+// Enabled reports whether notifications are enabled (live; reflects Reload).
+func (d *Dispatcher) Enabled() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.enabled
+}
+
+// PreviewMode returns the current preview level (none|sender|sender_and_text).
+func (d *Dispatcher) PreviewMode() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.previewMode
+}
+
+// DefaultProvider returns the configured default notification provider.
+func (d *Dispatcher) DefaultProvider() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.defaultProvider
+}
+
+func (d *Dispatcher) invokePrune(id string) {
+	d.mu.RLock()
+	fn := d.pruneFunc
+	d.mu.RUnlock()
+	if fn != nil {
+		fn(id)
 	}
 }
 
+// ProviderNames is the set of provider names accepted at device registration.
 func (d *Dispatcher) ProviderNames() []string {
 	return []string{"none", "webhook", "fcm", "hms", "harmony_push", "ntfy"}
 }
 
+// ImplementedProviders lists providers that actually deliver right now. `fcm` is
+// included only when a valid service account is configured.
+func (d *Dispatcher) ImplementedProviders() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := []string{"none", "webhook"}
+	if d.fcmActive {
+		out = append(out, "fcm")
+	}
+	return out
+}
+
+// FirestoreSyncEnabled reports whether optional public-URL sync is active.
+func (d *Dispatcher) FirestoreSyncEnabled() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.firestore != nil
+}
+
+// SyncPublicURL writes the public URL to Firestore when the optional sync is
+// enabled+configured; a no-op otherwise.
+func (d *Dispatcher) SyncPublicURL(ctx context.Context, publicURL string) {
+	d.mu.RLock()
+	fs := d.firestore
+	d.mu.RUnlock()
+	if fs == nil || strings.TrimSpace(publicURL) == "" {
+		return
+	}
+	if err := fs.SetPublicURL(ctx, publicURL); err != nil {
+		log.Printf("firestore public-url sync: %v", err)
+	}
+}
+
 func (d *Dispatcher) DispatchNewMessages(ctx context.Context, devices []store.DeviceRecord, events []relaydb.NotificationEvent) error {
-	if !d.enabled {
+	d.mu.RLock()
+	enabled := d.enabled
+	previewMode := d.previewMode
+	providers := d.providers
+	d.mu.RUnlock()
+	if !enabled {
 		return nil
 	}
+
 	for _, event := range events {
 		if event.Message.IsFromMe {
 			continue
 		}
-		notification := d.buildNotification(event)
+		notification := buildNotification(event, previewMode)
 		for _, device := range devices {
-			if !device.PushEnabled {
+			if !device.PushEnabled || device.PushProvider == "none" {
 				continue
 			}
-			if device.PushProvider == "none" {
-				continue
-			}
-			provider, ok := d.providers[device.PushProvider]
+			provider, ok := providers[device.PushProvider]
 			if !ok {
 				continue
 			}
 			if err := provider.Send(ctx, device, notification); err != nil && !errors.Is(err, ErrPushNotConfigured) {
-				return err
+				log.Printf("push dispatch (%s): %v", device.PushProvider, err)
 			}
 		}
 	}
@@ -66,13 +190,18 @@ func (d *Dispatcher) DispatchNewMessages(ctx context.Context, devices []store.De
 }
 
 func (d *Dispatcher) SendTest(ctx context.Context, device store.DeviceRecord) error {
-	if !d.enabled {
+	d.mu.RLock()
+	enabled := d.enabled
+	previewMode := d.previewMode
+	provider, ok := d.providers[device.PushProvider]
+	d.mu.RUnlock()
+
+	if !enabled {
 		return ErrPushNotConfigured
 	}
 	if !device.PushEnabled || device.PushProvider == "none" {
 		return ErrPushNotConfigured
 	}
-	provider, ok := d.providers[device.PushProvider]
 	if !ok {
 		return ErrNotImplemented
 	}
@@ -80,17 +209,17 @@ func (d *Dispatcher) SendTest(ctx context.Context, device store.DeviceRecord) er
 		Type:        "test",
 		Title:       "MicaGoServer test notification",
 		Body:        "Notifications are configured for this device",
-		PreviewMode: d.previewMode,
+		PreviewMode: previewMode,
 		CreatedAt:   time.Now().UnixMilli(),
 	})
 }
 
-func (d *Dispatcher) buildNotification(event relaydb.NotificationEvent) Notification {
+func buildNotification(event relaydb.NotificationEvent, previewMode string) Notification {
 	title := "New iMessage"
 	body := ""
 	sender := event.ChatLabel()
 
-	switch d.previewMode {
+	switch previewMode {
 	case "sender":
 		body = sender
 	case "sender_and_text":
@@ -109,7 +238,7 @@ func (d *Dispatcher) buildNotification(event relaydb.NotificationEvent) Notifica
 		ChatGUID:    event.ChatGUID,
 		Title:       title,
 		Body:        body,
-		PreviewMode: d.previewMode,
+		PreviewMode: previewMode,
 		CreatedAt:   time.Now().UnixMilli(),
 	}
 }

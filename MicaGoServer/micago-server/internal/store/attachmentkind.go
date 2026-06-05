@@ -1,0 +1,209 @@
+package store
+
+import (
+	"mime"
+	"path/filepath"
+	"strings"
+)
+
+// Attachment kind values returned in AttachmentJSON.AttachmentKind. These are a
+// small, stable, additive classification derived from the MIME type, Apple UTI,
+// the is_sticker flag, and the file extension. They are advisory only: clients
+// that need precision should still inspect mimeType/uti.
+const (
+	AttachmentKindImage   = "image"
+	AttachmentKindVideo   = "video"
+	AttachmentKindAudio   = "audio"
+	AttachmentKindFile    = "file"
+	AttachmentKindSticker = "sticker"
+	AttachmentKindUnknown = "unknown"
+)
+
+// utiMimeOverrides maps Apple UTIs that Go's mime package can't resolve (or that
+// have an Apple-specific container) to a sensible MIME type. Kept intentionally
+// small and read-only.
+var utiMimeOverrides = map[string]string{
+	"public.jpeg":                  "image/jpeg",
+	"public.png":                   "image/png",
+	"public.heic":                  "image/heic",
+	"public.heif":                  "image/heif",
+	"public.tiff":                  "image/tiff",
+	"com.compuserve.gif":           "image/gif",
+	"public.mpeg-4":                "video/mp4",
+	"com.apple.quicktime-movie":    "video/quicktime",
+	"public.mpeg":                  "video/mpeg",
+	"public.mp3":                   "audio/mp3",
+	"public.aac-audio":             "audio/aac",
+	"com.apple.m4a-audio":          "audio/m4a",
+	"com.apple.coreaudio-format":   "audio/x-caf",
+	"com.adobe.pdf":                "application/pdf",
+	"public.vcard":                 "text/vcard",
+	"com.apple.coreaudio.caf":      "audio/x-caf",
+	"com.microsoft.waveform-audio": "audio/wav",
+}
+
+// extMimeOverrides gives deterministic MIME types for common attachment
+// extensions, independent of the host's (possibly empty) MIME database. Checked
+// before mime.TypeByExtension.
+var extMimeOverrides = map[string]string{
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png":  "image/png",
+	".gif":  "image/gif",
+	".heic": "image/heic",
+	".heif": "image/heif",
+	".tiff": "image/tiff",
+	".tif":  "image/tiff",
+	".webp": "image/webp",
+	".bmp":  "image/bmp",
+	".mov":  "video/quicktime",
+	".mp4":  "video/mp4",
+	".m4v":  "video/mp4",
+	".3gp":  "video/3gpp",
+	".avi":  "video/x-msvideo",
+	".mp3":  "audio/mpeg",
+	".m4a":  "audio/mp4",
+	".aac":  "audio/aac",
+	".wav":  "audio/wav",
+	".aiff": "audio/aiff",
+	".caf":  "audio/x-caf",
+	".pdf":  "application/pdf",
+	".txt":  "text/plain",
+	".vcf":  "text/vcard",
+	".zip":  "application/zip",
+}
+
+// voiceMessageUTIs / voiceMessageMIMEs identify the canonical iMessage voice
+// memo container (CAF). A standalone .mp3/.m4a a user attaches is treated as a
+// regular audio file, not a "voice message".
+var voiceMessageUTIs = map[string]struct{}{
+	"com.apple.coreaudio-format": {},
+	"com.apple.coreaudio.caf":    {},
+}
+
+// InferMimeType returns the best-known MIME type for an attachment. The stored
+// MIME (from chat.db) is authoritative and returned unchanged when present.
+// Otherwise it falls back to the UTI, then the file extension of transferName
+// or filename. Returns nil only when nothing can be inferred.
+func InferMimeType(mimeType, uti, transferName, filename *string) *string {
+	if v := strings.TrimSpace(deref(mimeType)); v != "" {
+		return mimeType
+	}
+
+	if u := strings.TrimSpace(deref(uti)); u != "" {
+		if m, ok := utiMimeOverrides[u]; ok {
+			return strPtr(m)
+		}
+	}
+
+	for _, name := range []string{deref(transferName), deref(filename)} {
+		if m := mimeFromExtension(name); m != "" {
+			return strPtr(m)
+		}
+	}
+
+	return nil
+}
+
+// AttachmentKind classifies an attachment into a coarse, stable bucket.
+func AttachmentKind(isSticker bool, mimeType, uti, transferName, filename *string) string {
+	if isSticker {
+		return AttachmentKindSticker
+	}
+
+	effective := strings.ToLower(strings.TrimSpace(deref(mimeType)))
+	if effective == "" {
+		if m := InferMimeType(nil, uti, transferName, filename); m != nil {
+			effective = strings.ToLower(strings.TrimSpace(*m))
+		}
+	}
+
+	switch {
+	case strings.HasPrefix(effective, "image/"):
+		return AttachmentKindImage
+	case strings.HasPrefix(effective, "video/"):
+		return AttachmentKindVideo
+	case strings.HasPrefix(effective, "audio/"):
+		return AttachmentKindAudio
+	}
+
+	// UTI-based fallback when MIME was unhelpful.
+	u := strings.ToLower(strings.TrimSpace(deref(uti)))
+	switch {
+	case strings.HasPrefix(u, "public.image") || u == "public.jpeg" || u == "public.png" || u == "public.heic" || u == "public.heif" || u == "public.tiff" || u == "com.compuserve.gif":
+		return AttachmentKindImage
+	case strings.HasPrefix(u, "public.movie") || strings.HasPrefix(u, "public.video") || u == "com.apple.quicktime-movie" || u == "public.mpeg-4" || u == "public.mpeg":
+		return AttachmentKindVideo
+	case strings.HasPrefix(u, "public.audio") || u == "com.apple.coreaudio-format" || u == "com.apple.coreaudio.caf" || u == "public.mp3" || u == "public.aac-audio" || u == "com.apple.m4a-audio":
+		return AttachmentKindAudio
+	}
+
+	// We have *some* identifying info (name/mime/uti) but it's not media: file.
+	if effective != "" || u != "" || strings.TrimSpace(deref(transferName)) != "" || strings.TrimSpace(deref(filename)) != "" {
+		return AttachmentKindFile
+	}
+
+	return AttachmentKindUnknown
+}
+
+// IsVoiceMessage reports whether the attachment is an iMessage voice memo,
+// identified by the CAF container UTI/MIME. This is the reliable signal
+// available at the attachment level without reading message.is_audio_message.
+func IsVoiceMessage(uti, mimeType *string) bool {
+	if u := strings.TrimSpace(deref(uti)); u != "" {
+		if _, ok := voiceMessageUTIs[u]; ok {
+			return true
+		}
+	}
+	if m := strings.ToLower(strings.TrimSpace(deref(mimeType))); m == "audio/x-caf" || m == "audio/caf" {
+		return true
+	}
+	return false
+}
+
+// DecorateAttachmentJSON fills the additive, derived fields on an AttachmentJSON
+// from its already-populated raw fields (MimeType, Uti, TransferName, Filename,
+// IsSticker). The stored MimeType is preserved when present and only filled in
+// when it was empty, so no raw data is lost.
+func DecorateAttachmentJSON(a *AttachmentJSON) {
+	if a == nil {
+		return
+	}
+	a.MimeType = InferMimeType(a.MimeType, a.Uti, a.TransferName, a.Filename)
+	a.AttachmentKind = AttachmentKind(a.IsSticker, a.MimeType, a.Uti, a.TransferName, a.Filename)
+	a.IsVoiceMessage = IsVoiceMessage(a.Uti, a.MimeType)
+}
+
+func mimeFromExtension(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == "" {
+		return ""
+	}
+	if m, ok := extMimeOverrides[ext]; ok {
+		return m
+	}
+	m := mime.TypeByExtension(ext)
+	if m == "" {
+		return ""
+	}
+	// Strip any "; charset=..." parameter for a clean type.
+	if idx := strings.IndexByte(m, ';'); idx >= 0 {
+		m = strings.TrimSpace(m[:idx])
+	}
+	return m
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func strPtr(s string) *string {
+	return &s
+}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -98,6 +99,16 @@ func Run(options Options) error {
 	hub := realtime.NewHub()
 	defer hub.Close()
 	dispatcher := notify.NewDispatcher(cfg)
+	// v0.12: prune dead FCM tokens reported by Google (clears the device's token).
+	dispatcher.SetPruneFunc(func(id string) {
+		if err := relay.ClearDevicePushToken(context.Background(), id); err != nil {
+			log.Printf("prune push token for device %s: %v", id, err)
+		}
+	})
+	// v0.12: optional Firestore public-URL sync at startup (when enabled+set).
+	if cfg.Firebase.PublicURLSync && strings.TrimSpace(cfg.PublicBaseURL) != "" {
+		dispatcher.SyncPublicURL(ctx, cfg.PublicBaseURL)
+	}
 	var syncMu sync.Mutex
 	runSync := func(ctx context.Context) (relaydb.SyncResult, error) {
 		syncMu.Lock()
@@ -173,16 +184,23 @@ func Run(options Options) error {
 		MessagesRunning: micasend.MessagesRunning,
 	}
 
+	netController := httpapi.NewNetworkController(cfg)
+	// v0.12: when the public URL changes, sync it to Firestore (if enabled).
+	netController.SetOnChange(func(ctx context.Context, publicURL string) {
+		dispatcher.SyncPublicURL(ctx, publicURL)
+	})
+
 	statusDeps := httpapi.StatusDeps{
 		APIStore:     apiStore,
 		ClientCount:  hub.ClientCount,
 		SyncState:    relay.GetSyncState,
-		Network:      httpapi.NewNetworkController(cfg),
+		Network:      netController,
 		Capabilities: capabilities,
 	}
 
 	handlers := httpapi.NewHandlers(apiQueries, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
-	handlers.SetRuleService(relay) // v0.11.3 sync rules backed by relay.db
+	handlers.SetRuleService(relay)                   // v0.11.3 sync rules backed by relay.db
+	handlers.SetNotificationConfigurator(dispatcher) // v0.12 live FCM/Firebase config
 
 	handler := httpapi.NewRouter(
 		handlers,

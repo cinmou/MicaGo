@@ -69,6 +69,7 @@ individual feature specs add detail and rationale.
 | [`spec-v0.9.0-client-api-contract.md`](spec-v0.9.0-client-api-contract.md) | **Canonical** stable client API contract (REST + WS + models). |
 | [`spec-v0.11.0-connection-endpoints.md`](spec-v0.11.0-connection-endpoints.md) | Aggregated connection endpoints (local/LAN/optional public) + `/api/server/urls`. |
 | [`spec-v0.11.x-server-reliability.md`](spec-v0.11.x-server-reliability.md) | **Planned next milestone:** sync fidelity (update detection), send-error fast-fail, `chat.db` schema/version safety, runtime preconditions. |
+| [`spec-v0.11.5-message-fidelity.md`](spec-v0.11.5-message-fidelity.md) | **Implemented:** attachment kind/voice/UTI + MIME inference; typedstream `+!`/`+$` text-extraction fix. Additive `Attachment` fields. |
 
 ### Companion app spec (current source of truth)
 
@@ -88,7 +89,7 @@ v0.11.2 → v0.11.3 → v0.11.4 → v0.12 → v0.13. See
 | [`spec-v0.11.2-companion-runtime-deployment.md`](spec-v0.11.2-companion-runtime-deployment.md) | **Planned:** bundle the Go backend in the app; companion-owned lifecycle (start/stop/restart, crash + backoff auto-restart), launch-at-login/auto-start/silent launch, menu-bar item, clear Full Disk Access failure surfacing. |
 | [`spec-v0.11.3-sync-control-and-privacy-rules.md`](spec-v0.11.3-sync-control-and-privacy-rules.md) | **Planned:** per-chat/per-handle sync + push rules (whitelist/blacklist), Sync Control + Recent Messages management view; future-sync-only first (no historical deletion). |
 | [`spec-v0.11.4-contacts-enrichment.md`](spec-v0.11.4-contacts-enrichment.md) | **Planned:** read-only, local-only macOS Contacts to map handles → names for rule editing; never uploaded. |
-| [`spec-v0.12.0-firebase-self-host.md`](spec-v0.12.0-firebase-self-host.md) | **Planned:** self-host FCM push + optional Firestore **public-URL-only** sync; strict no-content/no-token privacy. |
+| [`spec-v0.12.0-firebase-self-host.md`](spec-v0.12.0-firebase-self-host.md) | Self-host FCM push + optional Firestore **public-URL-only** sync; strict no-content/no-token privacy. **Implemented (in validation).** User setup guide: [`setup/firebase/`](setup/firebase/README.md). |
 | [`spec-v0.13.0-scheduled-sending.md`](spec-v0.13.0-scheduled-sending.md) | **Deferred:** scheduled text sends; persistence, restart/sleep behavior, anti-misfire — sequenced last. |
 
 ### Status / gap reports

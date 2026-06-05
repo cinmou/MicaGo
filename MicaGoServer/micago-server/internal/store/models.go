@@ -16,6 +16,12 @@ type AttachmentJSON struct {
 	TransferName *string `json:"transferName"`
 	TotalBytes   int64   `json:"totalBytes"`
 	DownloadURL  string  `json:"downloadUrl"`
+	// v0.11.5 message-fidelity additive fields. All are derived read-only;
+	// clients that predate them simply ignore the extra keys.
+	Uti            *string `json:"uti"`
+	IsSticker      bool    `json:"isSticker"`
+	AttachmentKind string  `json:"attachmentKind"`
+	IsVoiceMessage bool    `json:"isVoiceMessage"`
 }
 
 type ChatJSON struct {
@@ -157,6 +163,8 @@ type SyncAttachmentRow struct {
 	IsOutgoing     bool
 	HideAttachment bool
 	CreatedAt      *int64
+	Uti            *string
+	IsSticker      bool
 }
 
 type AttachmentMeta struct {
@@ -170,6 +178,8 @@ type AttachmentMeta struct {
 	IsOutgoing     bool
 	HideAttachment bool
 	CreatedAt      *int64
+	Uti            *string
+	IsSticker      bool
 }
 
 type ChatInfo struct {

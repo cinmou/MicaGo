@@ -3,6 +3,7 @@ package relaydb
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"micagoserver/internal/store"
 )
@@ -138,5 +139,16 @@ WHERE id = ?;
 
 func (db *DB) DeleteDevice(ctx context.Context, id string) error {
 	_, err := db.sqlDB.ExecContext(ctx, `DELETE FROM devices WHERE id = ?`, id)
+	return err
+}
+
+// ClearDevicePushToken removes a device's push token and disables push (v0.12),
+// used to prune dead/unregistered FCM tokens reported by Google.
+func (db *DB) ClearDevicePushToken(ctx context.Context, id string) error {
+	_, err := db.sqlDB.ExecContext(ctx, `
+UPDATE devices
+SET push_token = NULL, push_enabled = 0, updated_at = ?
+WHERE id = ?;
+`, time.Now().UnixMilli(), id)
 	return err
 }

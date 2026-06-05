@@ -278,8 +278,8 @@ ON CONFLICT(guid) DO UPDATE SET
 func upsertAttachmentsTx(tx *sql.Tx, attachments []store.SyncAttachmentRow, createdAt int64) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO attachments (
-	guid, message_guid, filename, mime_type, transfer_name, total_bytes, local_path, is_outgoing, hide_attachment, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	guid, message_guid, filename, mime_type, transfer_name, total_bytes, local_path, is_outgoing, hide_attachment, created_at, uti, is_sticker
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(guid) DO UPDATE SET
 	message_guid = excluded.message_guid,
 	filename = excluded.filename,
@@ -289,7 +289,9 @@ ON CONFLICT(guid) DO UPDATE SET
 	local_path = excluded.local_path,
 	is_outgoing = excluded.is_outgoing,
 	hide_attachment = excluded.hide_attachment,
-	created_at = excluded.created_at;
+	created_at = excluded.created_at,
+	uti = excluded.uti,
+	is_sticker = excluded.is_sticker;
 `)
 	if err != nil {
 		return err
@@ -312,6 +314,8 @@ ON CONFLICT(guid) DO UPDATE SET
 			boolToInt(attachment.IsOutgoing),
 			boolToInt(attachment.HideAttachment),
 			created,
+			attachment.Uti,
+			boolToInt(attachment.IsSticker),
 		); err != nil {
 			return err
 		}

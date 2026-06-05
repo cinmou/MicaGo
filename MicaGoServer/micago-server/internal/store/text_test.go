@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	micasend "micagoserver/internal/send"
@@ -41,6 +42,46 @@ func TestMessageHasRenderableContentWithAttributedBodyText(t *testing.T) {
 	extracted := ExtractMessageText(nil, syntheticAttributedBody("sent from applescript"))
 	if !MessageHasRenderableContent(extracted, false) {
 		t.Fatal("expected attributedBody-backed message to pass clean filter")
+	}
+}
+
+// TestExtractMessageTextNoTypedStreamLengthPrefixLeak guards against the "+!" /
+// "+$" prefix bug: in Apple's typedstream encoding the byte after the 0x2b
+// marker is the string length, which is printable ASCII for lengths 32..126
+// (e.g. 33 = 0x21 = '!', 36 = 0x24 = '$'). The decoder must consume that length
+// byte, not surface it as a visible prefix.
+func TestExtractMessageTextNoTypedStreamLengthPrefixLeak(t *testing.T) {
+	// Lengths chosen so the typedstream length byte is a printable char.
+	for _, length := range []int{33 /* '!' */, 36 /* '$' */, 32, 65, 126} {
+		text := strings.Repeat("a", length)
+		extracted := ExtractMessageText(nil, syntheticAttributedBody(text))
+		if extracted == nil {
+			t.Fatalf("len %d: expected extracted text", length)
+		}
+		if *extracted != text {
+			t.Fatalf("len %d: expected %q, got %q (length-prefix leak?)", length, text, *extracted)
+		}
+		if strings.HasPrefix(*extracted, "+") {
+			t.Fatalf("len %d: extracted text still has typedstream prefix: %q", length, *extracted)
+		}
+	}
+}
+
+// TestExtractMessageTextSpecificPrefixStrings reproduces the exact reported
+// symptoms with human-readable content.
+func TestExtractMessageTextSpecificPrefixStrings(t *testing.T) {
+	cases := []string{
+		"Running late, be there in about ten!", // 36 chars -> '$'
+		"Can you grab milk on the way home",    // 33 chars -> '!'
+	}
+	for _, text := range cases {
+		if got := len(text); got != 33 && got != 36 {
+			t.Fatalf("fixture %q has length %d; expected 33 or 36", text, got)
+		}
+		extracted := ExtractMessageText(nil, syntheticAttributedBody(text))
+		if extracted == nil || *extracted != text {
+			t.Fatalf("expected %q, got %v", text, extracted)
+		}
 	}
 }
 

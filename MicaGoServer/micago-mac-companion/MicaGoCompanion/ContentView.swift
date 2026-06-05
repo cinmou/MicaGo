@@ -80,7 +80,7 @@ struct ContentView: View {
         case .connections: ConnectionsPage()
         case .devices: DevicesSection()
         case .syncControl: SyncControlPage()
-        case .notifications: NotificationsSection()
+        case .notifications: NotificationsPage()
         case .permissions: PermissionsPage()
         case .server: ServerPage()
         case .logs: LogsPage()
@@ -770,18 +770,28 @@ private struct DevicesSection: View {
                 Text("No devices registered.").foregroundStyle(.secondary)
             } else {
                 ForEach(model.devices) { device in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(device.name).fontWeight(.medium)
-                            Spacer()
-                            Text(device.platform).foregroundStyle(.secondary)
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(device.name).fontWeight(.medium)
+                                Text(device.platform).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text("\(device.clientType) · push: \(device.pushProvider)\(device.pushEnabled ? " (on)" : "")\(device.pushTokenSet ? " · token set" : "")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        Text("\(device.clientType) · push: \(device.pushProvider)\(device.pushEnabled ? " (on)" : "")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Test Push") { Task { await model.testPush(deviceID: device.id) } }
+                            .buttonStyle(.borderless)
+                            .disabled(model.notifBusy || !device.pushEnabled)
                     }
                     .padding(.vertical, 4)
                     Divider()
+                }
+                if let result = model.notifResult {
+                    Text(result).font(.caption)
+                        .foregroundStyle(result.contains("sent") ? .green : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

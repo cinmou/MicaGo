@@ -63,15 +63,67 @@ func decodeAttributedBodyText(attributedBody []byte) *string {
 }
 
 func decodeNSStringPayload(data []byte) string {
-	for i := 0; i+2 < len(data); i++ {
-		if data[i] == '+' && !isPrintableByte(data[i+1]) {
-			if candidate := firstPrintableRun(data[i+2:]); candidate != "" {
-				return candidate
-			}
+	// In Apple's typedstream (NSArchiver) encoding, an NSString's bytes are
+	// preceded by a 0x2b ('+') marker followed by a length-prefix using the
+	// typedstream integer encoding:
+	//   - a single byte    : length 0x00..0x80
+	//   - 0x81 + uint16(LE) : longer lengths
+	//   - 0x82 + uint32(LE) : very long lengths
+	// We must consume that length prefix and slice exactly that many bytes.
+	// A naive "skip the marker then read printable runs" heuristic breaks when
+	// the length byte itself is printable ASCII (string lengths 32..126), which
+	// leaks the marker + length as a visible prefix such as "+!" (len 33, 0x21)
+	// or "+$" (len 36, 0x24).
+	for i := 0; i+1 < len(data); i++ {
+		if data[i] != '+' {
+			continue
+		}
+		if candidate, ok := decodeTypedStreamString(data[i+1:]); ok && candidate != "" {
+			return candidate
 		}
 	}
 
+	// Fallback: best-effort printable-run scan for payloads that don't match
+	// the length-prefixed layout (older/edge encodings).
 	return firstPrintableRun(data)
+}
+
+// decodeTypedStreamString reads a typedstream length-prefixed string starting
+// at the length byte (i.e. immediately after the 0x2b marker). It returns the
+// decoded UTF-8 string and true only when the length is sane, in-bounds, and
+// the sliced bytes are valid UTF-8.
+func decodeTypedStreamString(data []byte) (string, bool) {
+	if len(data) == 0 {
+		return "", false
+	}
+
+	length := int(data[0])
+	offset := 1
+	switch data[0] {
+	case 0x81:
+		if len(data) < 3 {
+			return "", false
+		}
+		length = int(data[1]) | int(data[2])<<8
+		offset = 3
+	case 0x82:
+		if len(data) < 5 {
+			return "", false
+		}
+		length = int(data[1]) | int(data[2])<<8 | int(data[3])<<16 | int(data[4])<<24
+		offset = 5
+	}
+
+	if length <= 0 || offset+length > len(data) {
+		return "", false
+	}
+
+	candidate := string(data[offset : offset+length])
+	if !utf8.ValidString(candidate) {
+		return "", false
+	}
+
+	return candidate, true
 }
 
 func firstPrintableRun(data []byte) string {
@@ -115,8 +167,4 @@ func isPrintableMessageRune(r rune) bool {
 		return true
 	}
 	return unicode.IsPrint(r)
-}
-
-func isPrintableByte(b byte) bool {
-	return b >= 0x20 && b <= 0x7e
 }

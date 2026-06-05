@@ -172,7 +172,11 @@ models.
   "mimeType": "image/heic",
   "transferName": "IMG_0001.HEIC",
   "totalBytes": 1048576,
-  "downloadUrl": "http://127.0.0.1:3000/api/attachments/AT-..."
+  "downloadUrl": "http://127.0.0.1:3000/api/attachments/AT-...",
+  "uti": "public.heic",
+  "isSticker": false,
+  "attachmentKind": "image",
+  "isVoiceMessage": false
 }
 ```
 
@@ -180,10 +184,17 @@ models.
 | --- | --- | --- |
 | `guid` | string | Attachment identifier; use in the download URL. |
 | `filename` | string \| null | Stored filename. |
-| `mimeType` | string \| null | Best-known MIME type; may be null. |
+| `mimeType` | string \| null | Best-known MIME type; may be null. Since v0.11.5, filled by UTI/extension inference when chat.db has none. |
 | `transferName` | string \| null | Display/transfer name. |
 | `totalBytes` | int | Declared size; `0` if unknown. |
 | `downloadUrl` | string | Absolute URL to fetch the bytes (Bearer required). |
+| `uti` | string \| null | *(v0.11.5, additive)* Apple Uniform Type Identifier from chat.db. |
+| `isSticker` | bool | *(v0.11.5, additive)* True for sticker attachments. |
+| `attachmentKind` | string | *(v0.11.5, additive)* Coarse class: `image`/`video`/`audio`/`file`/`sticker`/`unknown`. Advisory; inspect `mimeType`/`uti` for precision. |
+| `isVoiceMessage` | bool | *(v0.11.5, additive)* True only for the iMessage voice-memo container (CAF). A user-attached `.mp3`/`.m4a` is `audio` but not a voice message. |
+
+> **Backward compatibility:** the v0.11.5 fields are purely additive. Clients
+> built against earlier contracts ignore the extra keys.
 
 ### `Chat`
 

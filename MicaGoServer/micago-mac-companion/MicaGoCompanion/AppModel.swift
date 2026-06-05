@@ -34,6 +34,19 @@ final class AppModel: ObservableObject {
         reloadConfig()
     }
 
+    // Notifications / FCM config (v0.12)
+    @Published var notifEnabled = false
+    @Published var notifProvider = "none"
+    @Published var notifPreview = "sender"
+    @Published var fcmEnabled = false
+    @Published var fcmProjectID = ""
+    @Published var serviceAccountPath = ""
+    @Published var firestoreURLSync = false
+    @Published var notifBusy = false
+    @Published var notifResult: String?
+    @Published var firestoreSyncActive = false
+    private var didSeedNotif = false
+
     // Sync control (v0.11.3)
     @Published var syncRules: SyncRulesResponse?
     @Published var recentMessages: [RecentMessage] = []
@@ -132,10 +145,22 @@ final class AppModel: ObservableObject {
             devices = try await client.devices()
             let fetched = try await client.serverURLs()
             applyURLs(fetched)
+            seedNotificationsForm()
             lastError = nil
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    // Seed the notifications form once from the server status (the
+    // service-account path is never returned, so it stays user-entered).
+    private func seedNotificationsForm() {
+        guard !didSeedNotif, let n = status?.notifications else { return }
+        notifEnabled = n.enabled
+        notifProvider = n.provider
+        notifPreview = n.preview
+        fcmEnabled = n.implemented.contains("fcm")
+        didSeedNotif = true
     }
 
     private func applyURLs(_ fetched: ServerURLs) {
@@ -271,5 +296,46 @@ final class AppModel: ObservableObject {
     /// The stored rule for a target, if any (exact match; chat by GUID).
     func storedRule(kind: String, value: String) -> SyncRule? {
         syncRules?.rules.first { $0.targetKind == kind && $0.targetValue == value }
+    }
+
+    // MARK: - Notifications / FCM config actions (v0.12)
+
+    func saveNotificationsConfig() async {
+        guard let baseURL else { return }
+        notifBusy = true
+        defer { notifBusy = false }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            let resp = try await client.setNotificationsConfig(
+                enabled: notifEnabled, provider: notifProvider, preview: notifPreview,
+                fcmEnabled: fcmEnabled, fcmProjectID: fcmProjectID,
+                serviceAccountPath: serviceAccountPath, publicURLSync: firestoreURLSync)
+            firestoreSyncActive = resp.firestoreSyncEnabled
+            let fcmReady = resp.implemented.contains("fcm")
+            notifResult = "Saved. FCM \(fcmReady ? "configured" : (fcmEnabled ? "config invalid" : "off"))."
+            await refresh()
+            lastError = nil
+        } catch {
+            notifResult = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    func clearNotificationsConfig() async {
+        notifProvider = "none"
+        notifEnabled = false
+        fcmEnabled = false
+        serviceAccountPath = ""
+        fcmProjectID = ""
+        firestoreURLSync = false
+        await saveNotificationsConfig()
+        notifResult = "Firebase configuration cleared."
+    }
+
+    func testPush(deviceID: String) async {
+        guard let baseURL else { return }
+        notifBusy = true
+        defer { notifBusy = false }
+        let client = APIClient(baseURL: baseURL, token: token)
+        notifResult = await client.testPush(deviceID: deviceID)
     }
 }

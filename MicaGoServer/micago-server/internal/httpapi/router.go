@@ -30,6 +30,7 @@ func NewRouter(h *Handlers, hub *realtime.Hub, auth AuthConfig) http.Handler {
 	mux.Handle("PUT /api/sync/rules", auth.Wrap(http.HandlerFunc(h.PutSyncRule)))
 	mux.Handle("DELETE /api/sync/rules/{kind}/{value}", auth.Wrap(http.HandlerFunc(h.DeleteSyncRule)))
 	mux.Handle("PUT /api/sync/policy", auth.Wrap(http.HandlerFunc(h.PutSyncPolicy)))
+	mux.Handle("POST /api/server/notifications", auth.Wrap(http.HandlerFunc(h.PutNotificationsConfig)))
 	if hub != nil {
 		mux.Handle("GET /ws", websocketAuthHandler(hub, auth))
 	}

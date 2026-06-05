@@ -89,6 +89,17 @@ type eventBroadcaster interface {
 type notificationDispatcher interface {
 	SendTest(ctx context.Context, device store.DeviceRecord) error
 	ProviderNames() []string
+	ImplementedProviders() []string
+	Enabled() bool
+	PreviewMode() string
+	DefaultProvider() string
+}
+
+// notificationConfigurator lets the notifications-config endpoint apply changes
+// to the live dispatcher without a restart (implemented by *notify.Dispatcher).
+type notificationConfigurator interface {
+	Reload(cfg config.Config)
+	FirestoreSyncEnabled() bool
 }
 
 type sendRequest struct {
@@ -150,12 +161,17 @@ type Handlers struct {
 	status          StatusDeps
 	startedAt       int64
 	rules           ruleService
+	notifyConfig    notificationConfigurator
 }
 
 // SetRuleService wires the v0.11.3 sync-rule store after construction (kept off
 // the constructor to avoid churning every NewHandlers call site). Nil means the
 // rule endpoints are unavailable.
 func (h *Handlers) SetRuleService(rs ruleService) { h.rules = rs }
+
+// SetNotificationConfigurator wires the v0.12 live dispatcher reload used by the
+// notifications-config write endpoint. Nil means that endpoint is unavailable.
+func (h *Handlers) SetNotificationConfigurator(c notificationConfigurator) { h.notifyConfig = c }
 
 func NewHandlers(
 	queries queryService,
@@ -271,19 +287,33 @@ func (h *Handlers) deviceCount(ctx context.Context) int {
 
 func (h *Handlers) notificationStatus() store.ServerNotificationStatus {
 	providers := h.serverInfo.NotificationProviders
+
+	// Prefer the live dispatcher (reflects runtime config reloads); fall back to
+	// static config when no dispatcher is wired (e.g. in tests).
+	enabled := h.cfg.NotificationsEnabled
+	provider := h.cfg.NotificationProvider
+	preview := h.cfg.NotificationPreview
+	implementedSet := implementedNotificationProviders
+	if h.notify != nil {
+		enabled = h.notify.Enabled()
+		provider = h.notify.DefaultProvider()
+		preview = h.notify.PreviewMode()
+		implementedSet = h.notify.ImplementedProviders()
+	}
+
 	implemented := make([]string, 0, len(providers))
 	stub := make([]string, 0, len(providers))
 	for _, p := range providers {
-		if slices.Contains(implementedNotificationProviders, p) {
+		if slices.Contains(implementedSet, p) {
 			implemented = append(implemented, p)
 		} else {
 			stub = append(stub, p)
 		}
 	}
 	return store.ServerNotificationStatus{
-		Enabled:     h.cfg.NotificationsEnabled,
-		Provider:    h.cfg.NotificationProvider,
-		Preview:     h.cfg.NotificationPreview,
+		Enabled:     enabled,
+		Provider:    provider,
+		Preview:     preview,
 		Providers:   providers,
 		Implemented: implemented,
 		Stub:        stub,
@@ -639,8 +669,10 @@ func (h *Handlers) GetAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := "application/octet-stream"
-	if meta.MimeType != nil && strings.TrimSpace(*meta.MimeType) != "" {
-		contentType = *meta.MimeType
+	if inferred := store.InferMimeType(meta.MimeType, meta.Uti, meta.TransferName, meta.Filename); inferred != nil {
+		if v := strings.TrimSpace(*inferred); v != "" {
+			contentType = v
+		}
 	}
 	w.Header().Set("Content-Type", contentType)
 

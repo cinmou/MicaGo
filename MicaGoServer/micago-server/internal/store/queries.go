@@ -171,7 +171,9 @@ SELECT
   a.filename AS local_path,
   a.is_outgoing,
   a.hide_attachment,
-  a.created_date
+  a.created_date,
+  a.uti,
+  a.is_sticker
 FROM attachment AS a
 JOIN message_attachment_join AS maj
   ON maj.attachment_id = a.ROWID
@@ -659,6 +661,8 @@ func (q *Queries) ListSyncAttachmentsForMessages(ctx context.Context, messageGUI
 			IsOutgoing:     row.IsOutgoing,
 			HideAttachment: row.HideAttachment,
 			CreatedAt:      timeutil.AppleMicrosToUnixMilliPtr(row.CreatedRaw),
+			Uti:            row.Uti,
+			IsSticker:      row.IsSticker,
 		})
 	}
 
@@ -872,11 +876,14 @@ type attachmentRow struct {
 	IsOutgoing     bool
 	HideAttachment bool
 	CreatedRaw     *int64
+	Uti            *string
+	IsSticker      bool
 }
 
 func scanAttachmentRow(rows *sql.Rows) (attachmentRow, error) {
 	var row attachmentRow
 	var isOutgoing, hideAttachment int64
+	var isSticker sql.NullInt64
 	err := rows.Scan(
 		&row.GUID,
 		&row.MessageGUID,
@@ -888,12 +895,15 @@ func scanAttachmentRow(rows *sql.Rows) (attachmentRow, error) {
 		&isOutgoing,
 		&hideAttachment,
 		&row.CreatedRaw,
+		&row.Uti,
+		&isSticker,
 	)
 	if err != nil {
 		return attachmentRow{}, fmt.Errorf("scan attachment row: %w", err)
 	}
 	row.IsOutgoing = isOutgoing != 0
 	row.HideAttachment = hideAttachment != 0
+	row.IsSticker = isSticker.Valid && isSticker.Int64 != 0
 	return row, nil
 }
 
@@ -914,14 +924,18 @@ func (q *Queries) attachMessageAttachments(ctx context.Context, messages []Messa
 
 	grouped := make(map[string][]AttachmentJSON, len(messages))
 	for _, attachment := range attachments {
-		grouped[attachment.MessageGUID] = append(grouped[attachment.MessageGUID], AttachmentJSON{
+		item := AttachmentJSON{
 			GUID:         attachment.GUID,
 			Filename:     attachment.Filename,
 			MimeType:     attachment.MimeType,
 			TransferName: attachment.TransferName,
 			TotalBytes:   attachment.TotalBytes,
 			DownloadURL:  "/api/attachments/" + attachment.GUID,
-		})
+			Uti:          attachment.Uti,
+			IsSticker:    attachment.IsSticker,
+		}
+		DecorateAttachmentJSON(&item)
+		grouped[attachment.MessageGUID] = append(grouped[attachment.MessageGUID], item)
 	}
 
 	for i := range messages {

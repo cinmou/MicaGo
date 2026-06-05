@@ -57,10 +57,6 @@ func TestDispatcherSendTestUsesWebhookProvider(t *testing.T) {
 }
 
 func TestDispatcherBuildsNotificationPreview(t *testing.T) {
-	dispatcher := NewDispatcher(config.Config{
-		NotificationsEnabled: true,
-		NotificationPreview:  "sender_and_text",
-	})
 	text := "hello"
 	event := relaydb.NotificationEvent{
 		ChatGUID:       "chat-1",
@@ -70,7 +66,7 @@ func TestDispatcherBuildsNotificationPreview(t *testing.T) {
 			Text: &text,
 		},
 	}
-	notification := dispatcher.buildNotification(event)
+	notification := buildNotification(event, "sender_and_text")
 	if notification.Title != "chat@example.com" {
 		t.Fatalf("expected sender title, got %q", notification.Title)
 	}

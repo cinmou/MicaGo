@@ -108,6 +108,16 @@ type NetworkController struct {
 	authToken     string // used only for the outbound reachability probe
 	lastReachable Reachability
 	lastCheckedAt int64
+	// onChange is an optional hook fired (off the lock) after the public URL
+	// changes — used by v0.12 to sync the URL to Firestore when enabled.
+	onChange func(ctx context.Context, publicURL string)
+}
+
+// SetOnChange registers a callback invoked after the public URL is updated.
+func (c *NetworkController) SetOnChange(fn func(ctx context.Context, publicURL string)) {
+	c.mu.Lock()
+	c.onChange = fn
+	c.mu.Unlock()
 }
 
 func NewNetworkController(cfg config.Config) *NetworkController {
@@ -151,12 +161,17 @@ func (c *NetworkController) SetPublicURL(publicBaseURL string, verifyTLS bool, p
 		return err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.publicBaseURL = trimmed
 	c.verifyTLS = verifyTLS
 	c.preferred = preferred
 	c.lastReachable = reachableUnknown() // URL changed; previous result is stale
 	c.lastCheckedAt = 0
+	onChange := c.onChange
+	c.mu.Unlock()
+
+	if onChange != nil && trimmed != "" {
+		onChange(context.Background(), trimmed)
+	}
 	return nil
 }
 

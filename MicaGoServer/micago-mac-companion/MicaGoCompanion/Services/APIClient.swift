@@ -163,6 +163,46 @@ struct APIClient {
         return try JSONDecoder().decode(ChatListResponse.self, from: data).data
     }
 
+    // MARK: - Notifications / FCM config (v0.12)
+
+    @discardableResult
+    func setNotificationsConfig(enabled: Bool, provider: String, preview: String,
+                                fcmEnabled: Bool, fcmProjectID: String,
+                                serviceAccountPath: String, publicURLSync: Bool) async throws -> NotificationsConfigResponse {
+        let req = try jsonRequest("api/server/notifications", method: "POST", body: [
+            "enabled": enabled,
+            "provider": provider,
+            "preview": preview,
+            "fcmEnabled": fcmEnabled,
+            "fcmProjectId": fcmProjectID,
+            "serviceAccountPath": serviceAccountPath,
+            "publicUrlSync": publicURLSync,
+        ])
+        let (data, response) = try await Self.session().data(for: req)
+        // Surface the server's validation message on 4xx (e.g. invalid service account).
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data) {
+                throw APIError.message(env.error.message)
+            }
+            throw APIError.status(http.statusCode)
+        }
+        return try JSONDecoder().decode(NotificationsConfigResponse.self, from: data)
+    }
+
+    /// Sends a real test push to a device; returns a human-readable result.
+    func testPush(deviceID: String) async -> String {
+        let req = request("api/devices/\(deviceID)/test-push", method: "POST")
+        guard let (data, response) = try? await Self.session().data(for: req),
+              let http = response as? HTTPURLResponse else {
+            return "Test push failed: could not reach server."
+        }
+        if http.statusCode == 200 { return "Test push sent." }
+        if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data) {
+            return "Test push failed: \(env.error.message)"
+        }
+        return "Test push failed: HTTP \(http.statusCode)."
+    }
+
     private static func validate(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.badResponse
@@ -176,11 +216,13 @@ struct APIClient {
 enum APIError: LocalizedError {
     case badResponse
     case status(Int)
+    case message(String)
 
     var errorDescription: String? {
         switch self {
         case .badResponse: return "Unexpected response from the server."
         case .status(let code): return "Server returned HTTP \(code)."
+        case .message(let msg): return msg
         }
     }
 }

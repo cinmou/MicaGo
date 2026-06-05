@@ -114,6 +114,10 @@ func (s stubNotifier) SendTest(context.Context, store.DeviceRecord) error { retu
 func (s stubNotifier) ProviderNames() []string {
 	return []string{"none", "webhook", "fcm", "hms", "harmony_push", "ntfy"}
 }
+func (s stubNotifier) ImplementedProviders() []string { return []string{"none", "webhook"} }
+func (s stubNotifier) Enabled() bool                  { return true }
+func (s stubNotifier) PreviewMode() string            { return "sender" }
+func (s stubNotifier) DefaultProvider() string        { return "none" }
 
 func newTestHandlers(queries *stubQueries) *Handlers {
 	return NewHandlers(
@@ -505,7 +509,9 @@ func TestGetServerStatus(t *testing.T) {
 	if status.WebSocket.Clients != 3 {
 		t.Fatalf("expected 3 ws clients, got %d", status.WebSocket.Clients)
 	}
-	if !status.Notifications.Enabled || status.Notifications.Provider != "webhook" {
+	// Notification status is sourced from the dispatcher (stubNotifier here):
+	// enabled=true, provider="none", preview="sender".
+	if !status.Notifications.Enabled || status.Notifications.Provider != "none" {
 		t.Fatalf("unexpected notifications: %+v", status.Notifications)
 	}
 	if !contains(status.Notifications.Implemented, "webhook") || !contains(status.Notifications.Implemented, "none") {

@@ -69,6 +69,7 @@ type Config struct {
 	WebhookURL               string
 	FCM                      FCMConfig
 	HMS                      HMSConfig
+	Firebase                 FirebaseConfig
 	FirstRun                 bool
 }
 
@@ -76,6 +77,14 @@ type FCMConfig struct {
 	Enabled            bool
 	ProjectID          string
 	ServiceAccountPath string
+}
+
+// FirebaseConfig controls the optional Firestore public-URL sync (v0.12). It
+// reuses the FCM service account/project for credentials. Off by default.
+type FirebaseConfig struct {
+	PublicURLSync bool
+	URLCollection string
+	URLDocument   string
 }
 
 type HMSConfig struct {
@@ -120,6 +129,11 @@ type fileConfig struct {
 		AppID          string
 		AppSecret      string
 		TokenCachePath string
+	}
+	Firebase struct {
+		PublicURLSync bool
+		URLCollection string
+		URLDocument   string
 	}
 }
 
@@ -196,6 +210,11 @@ func Load(opts Options) (Config, error) {
 			AppID:          fileCfg.HMS.AppID,
 			AppSecret:      fileCfg.HMS.AppSecret,
 			TokenCachePath: expandPath(home, valueOrDefault("", fileCfg.HMS.TokenCachePath, "~/.micago/hms-token.json")),
+		},
+		Firebase: FirebaseConfig{
+			PublicURLSync: fileCfg.Firebase.PublicURLSync,
+			URLCollection: valueOrDefault("", fileCfg.Firebase.URLCollection, "server"),
+			URLDocument:   valueOrDefault("", fileCfg.Firebase.URLDocument, "config"),
 		},
 		FirstRun: firstRun,
 	}
@@ -279,6 +298,52 @@ func UpdatePublicBaseURL(cfgPath, publicBaseURL string, verifyTLS bool, preferre
 	fileCfg.Network.PublicBaseURL = trimmed
 	fileCfg.Network.VerifyTLS = verifyTLS
 	fileCfg.Network.PreferredPairingEndpoint = preferredPairing
+	if err := os.WriteFile(cfgPath, []byte(renderConfig(fileCfg)), 0o600); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+	return nil
+}
+
+// NotificationsUpdate carries the notification/FCM/Firebase settings written by
+// the companion via POST /api/server/notifications (v0.12). It never carries the
+// service-account contents — only a path to the JSON file on the Mac.
+type NotificationsUpdate struct {
+	Enabled            bool
+	Provider           string
+	Preview            string
+	FCMEnabled         bool
+	FCMProjectID       string
+	ServiceAccountPath string
+	PublicURLSync      bool
+}
+
+// UpdateNotificationsConfig persists notification/FCM/Firebase settings, leaving
+// all other config untouched. Validates the preview level and provider name.
+func UpdateNotificationsConfig(cfgPath string, u NotificationsUpdate) error {
+	if u.Preview != "none" && u.Preview != "sender" && u.Preview != "sender_and_text" {
+		return fmt.Errorf("invalid notifications.preview %q", u.Preview)
+	}
+	switch u.Provider {
+	case "none", "webhook", "fcm", "hms", "harmony_push", "ntfy":
+	default:
+		return fmt.Errorf("invalid notifications.provider %q", u.Provider)
+	}
+
+	body, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return fmt.Errorf("read config file: %w", err)
+	}
+	fileCfg, err := parseConfig(string(body))
+	if err != nil {
+		return err
+	}
+	fileCfg.Notifications.Enabled = u.Enabled
+	fileCfg.Notifications.Provider = u.Provider
+	fileCfg.Notifications.Preview = u.Preview
+	fileCfg.FCM.Enabled = u.FCMEnabled
+	fileCfg.FCM.ProjectID = strings.TrimSpace(u.FCMProjectID)
+	fileCfg.FCM.ServiceAccountPath = strings.TrimSpace(u.ServiceAccountPath)
+	fileCfg.Firebase.PublicURLSync = u.PublicURLSync
 	if err := os.WriteFile(cfgPath, []byte(renderConfig(fileCfg)), 0o600); err != nil {
 		return fmt.Errorf("write config file: %w", err)
 	}
@@ -392,6 +457,9 @@ func defaultFileConfig(token string) fileConfig {
 	cfg.HMS.AppID = ""
 	cfg.HMS.AppSecret = ""
 	cfg.HMS.TokenCachePath = "~/.micago/hms-token.json"
+	cfg.Firebase.PublicURLSync = false
+	cfg.Firebase.URLCollection = "server"
+	cfg.Firebase.URLDocument = "config"
 	return cfg
 }
 
@@ -431,6 +499,11 @@ func renderConfig(cfg fileConfig) string {
 		fmt.Sprintf("  app_id: %s", quoteYAML(cfg.HMS.AppID)),
 		fmt.Sprintf("  app_secret: %s", quoteYAML(cfg.HMS.AppSecret)),
 		fmt.Sprintf("  token_cache_path: %s", quoteYAML(cfg.HMS.TokenCachePath)),
+		"",
+		"firebase:",
+		fmt.Sprintf("  public_url_sync: %t", cfg.Firebase.PublicURLSync),
+		fmt.Sprintf("  url_collection: %s", quoteYAML(cfg.Firebase.URLCollection)),
+		fmt.Sprintf("  url_document: %s", quoteYAML(cfg.Firebase.URLDocument)),
 		"",
 	}, "\n")
 }
@@ -518,6 +591,15 @@ func parseConfig(body string) (fileConfig, error) {
 				cfg.HMS.AppSecret = value
 			case "token_cache_path":
 				cfg.HMS.TokenCachePath = value
+			}
+		case "firebase":
+			switch key {
+			case "public_url_sync":
+				cfg.Firebase.PublicURLSync = parseBool(value)
+			case "url_collection":
+				cfg.Firebase.URLCollection = value
+			case "url_document":
+				cfg.Firebase.URLDocument = value
 			}
 		}
 	}

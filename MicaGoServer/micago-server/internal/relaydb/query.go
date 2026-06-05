@@ -165,10 +165,11 @@ ORDER BY source_rowid ASC, date_created ASC;
 
 func (db *DB) GetAttachmentByGUID(ctx context.Context, guid string) (*store.AttachmentMeta, error) {
 	var meta store.AttachmentMeta
-	var filename, mimeType, transferName, localPath *string
+	var filename, mimeType, transferName, localPath, uti *string
 	var isOutgoing, hideAttachment int64
+	var isSticker sql.NullInt64
 	err := db.sqlDB.QueryRowContext(ctx, `
-SELECT guid, message_guid, filename, mime_type, transfer_name, total_bytes, local_path, is_outgoing, hide_attachment, created_at
+SELECT guid, message_guid, filename, mime_type, transfer_name, total_bytes, local_path, is_outgoing, hide_attachment, created_at, uti, is_sticker
 FROM attachments
 WHERE guid = ?
 LIMIT 1;
@@ -183,6 +184,8 @@ LIMIT 1;
 		&isOutgoing,
 		&hideAttachment,
 		&meta.CreatedAt,
+		&uti,
+		&isSticker,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -197,6 +200,8 @@ LIMIT 1;
 	meta.LocalPath = localPath
 	meta.IsOutgoing = isOutgoing != 0
 	meta.HideAttachment = hideAttachment != 0
+	meta.Uti = uti
+	meta.IsSticker = isSticker.Valid && isSticker.Int64 != 0
 	return &meta, nil
 }
 
@@ -293,7 +298,7 @@ func (db *DB) loadAttachmentsByMessageGUID(ctx context.Context, guids []string) 
 	}
 
 	rows, err := db.sqlDB.QueryContext(ctx, `
-SELECT guid, message_guid, filename, mime_type, transfer_name, total_bytes
+SELECT guid, message_guid, filename, mime_type, transfer_name, total_bytes, uti, is_sticker
 FROM attachments
 WHERE message_guid IN (`+strings.Join(placeholders, ", ")+`)
 ORDER BY created_at ASC, guid ASC;
@@ -307,6 +312,7 @@ ORDER BY created_at ASC, guid ASC;
 	for rows.Next() {
 		var attachment store.AttachmentJSON
 		var messageGUID string
+		var isSticker sql.NullInt64
 		if err := rows.Scan(
 			&attachment.GUID,
 			&messageGUID,
@@ -314,10 +320,14 @@ ORDER BY created_at ASC, guid ASC;
 			&attachment.MimeType,
 			&attachment.TransferName,
 			&attachment.TotalBytes,
+			&attachment.Uti,
+			&isSticker,
 		); err != nil {
 			return nil, err
 		}
+		attachment.IsSticker = isSticker.Valid && isSticker.Int64 != 0
 		attachment.DownloadURL = "/api/attachments/" + attachment.GUID
+		store.DecorateAttachmentJSON(&attachment)
 		grouped[messageGUID] = append(grouped[messageGUID], attachment)
 	}
 
