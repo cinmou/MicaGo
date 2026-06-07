@@ -96,7 +96,7 @@ change. Clients branch on `code`, never on `message`.
 | 500 | `internal_error` | Unexpected server error. |
 | 500 | `send_failed` | AppleScript send failed or request canceled. |
 | 501 | `not_implemented` | Notification provider not implemented (stub). |
-| 504 | `send_timeout` | Timed out waiting for the sent message to appear. |
+| 504 | `send_confirmation_timeout` | AppleScript completed but no matching outgoing row appeared in `chat.db` before the confirmation timeout (15s). Carries a `details` object: `{tempGuid, chatGuid, text}`. (Renamed from `send_timeout` in v0.12.0.) |
 
 ### Pagination
 
@@ -370,11 +370,14 @@ Responses:
 - `404 not_found` → unknown chat GUID.
 - `409 conflict` → a send with the same `tempGuid` is already pending.
 - `500 send_failed` → AppleScript failed or the request was canceled.
-- `504 send_timeout` → confirmation not observed before the deadline.
+- `504 send_confirmation_timeout` → AppleScript completed but the matching
+  outgoing row was not observed in `chat.db` before the 15s deadline. The error
+  envelope includes `details: {tempGuid, chatGuid, text}`.
 
-Clients should also subscribe to the WebSocket to receive `send:match` /
-`send:error` for the same `tempGuid` (useful if the HTTP request is dropped).
-See [`spec-v0.3.0-send.md`](spec-v0.3.0-send.md).
+Clients should also subscribe to the WebSocket to receive `send:pending`,
+`send:match`, and `send:error` for the same `tempGuid` (useful if the HTTP
+request is dropped). See [`spec-v0.3.0-send.md`](spec-v0.3.0-send.md) and
+[`spec-v0.12.0-reliable-send-pipeline.md`](spec-v0.12.0-reliable-send-pipeline.md).
 
 ### Attachments
 
@@ -480,6 +483,19 @@ Every frame is a JSON text message:
 `data` is a full `Message` object. Emitted once per newly inserted relay row
 during a sync run (incoming or outgoing).
 
+#### `send:pending`
+Emitted right after a send request is accepted and its pending record is
+created (before AppleScript runs). Lets async clients show an optimistic
+"sending" state. Always followed by a `send:match` or `send:error` for the same
+`tempGuid`.
+
+```json
+{
+  "type": "send:pending",
+  "data": { "tempGuid": "client-generated-id", "chatGuid": "iMessage;-;+15551234567" }
+}
+```
+
 #### `send:match`
 Emitted when a pending send is confirmed against the database.
 
@@ -499,13 +515,16 @@ Emitted when an AppleScript send fails or confirmation times out.
   "data": {
     "tempGuid": "client-generated-id",
     "chatGuid": "iMessage;-;+15551234567",
-    "code": "send_timeout",
-    "message": "timed out waiting for sent message"
+    "code": "send_confirmation_timeout",
+    "message": "AppleScript completed but no matching outgoing message appeared in chat.db before the confirmation timeout",
+    "text": "hello world"
   }
 }
 ```
 
-`code` matches the REST send error codes (`send_failed`, `send_timeout`).
+`code` matches the REST send error codes (`send_failed`, `send_error`,
+`messages_app_not_running`, `send_confirmation_timeout`). The timeout event
+additionally carries `text` (the original message body).
 
 #### `sync:error`
 Emitted when a non-startup periodic sync run fails.

@@ -32,17 +32,31 @@ struct MicaGoCompanionApp: App {
                 .environmentObject(runtime)
                 .environmentObject(backend)
         } label: {
-            Image(systemName: menuBarSymbol)
+            Image(menuBarAsset)
+                .renderingMode(.template)
+                .opacity(menuBarOpacity)
         }
     }
 
-    private var menuBarSymbol: String {
-        switch backend.processState {
-        case .running: return "bolt.horizontal.circle.fill"
-        case .starting, .stopping: return "bolt.horizontal.circle"
-        case .failed, .exited: return "exclamationmark.triangle.fill"
-        case .notInstalled: return "bolt.horizontal.circle"
-        case .stopped: return model.reachable ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle"
+    /// Resolved user-facing state (process lifecycle + reachability).
+    private var menuBarState: ServerDisplayState {
+        serverDisplayState(process: backend.processState, reachable: model.reachable)
+    }
+
+    /// Custom menu-bar asset: `mica.error` for error states, `mica` otherwise.
+    private var menuBarAsset: String {
+        switch menuBarState {
+        case .crashed: return "mica.error"
+        default: return "mica"
+        }
+    }
+
+    /// Full opacity for running / external / error; weakened (gray) for the
+    /// non-running states (stopped, starting, stopping, not installed).
+    private var menuBarOpacity: Double {
+        switch menuBarState {
+        case .running, .externalUnmanaged, .crashed: return 1.0
+        default: return 0.4
         }
     }
 }

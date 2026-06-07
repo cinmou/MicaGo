@@ -61,10 +61,23 @@ struct ContentView: View {
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .navigationTitle(selection?.title ?? "MicaGo")
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) { ServerStatusChip() }
+                // Custom top-right server status controls. Deliberately NOT a
+                // `.toolbar` item: on macOS 26 the system wraps toolbar items in a
+                // single Liquid-Glass group, which fused the capsule + button into
+                // one pill. As a top safe-area inset they float top-right with no
+                // parent background, and reserve space so page content is never
+                // covered (even while scrolling).
+                .safeAreaInset(edge: .top) {
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        ServerStatusCapsule()
+                        ServerActionButton()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
                 }
+                .navigationTitle(selection?.title ?? "MicaGo")
             }
         }
         .frame(minWidth: 820, idealWidth: 1000, minHeight: 560, idealHeight: 720)
@@ -133,32 +146,75 @@ private func fdaNeeded(_ backend: BackendController, _ model: AppModel) -> Bool 
 
 // MARK: - Persistent status chip
 
-private struct ServerStatusChip: View {
+/// Standalone status capsule: dot + text (+ optional version) inside one
+/// Capsule. The dot lives *inside* the capsule padding, never clipped to the
+/// edge. This is its own toolbar item — there is no parent background.
+private struct ServerStatusCapsule: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
         let state = displayState(backend, model)
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             StatusDot(on: state.isHealthyDot)
-            Text(state.label).font(.callout)
+            Text(state.compactLabel)
+                .font(.callout)
+                .lineLimit(1)
             if let version = model.status?.version {
-                Text("v\(version)").font(.caption).foregroundStyle(.secondary)
+                Text("v\(version)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            startStopButton(state)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        .help(state.label)
+    }
+}
+
+/// Standalone circular Start/Stop action. Its own toolbar item, a fixed square
+/// frame clipped to a Circle — visually separate from the status capsule.
+private struct ServerActionButton: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+
+    var body: some View {
+        let state = displayState(backend, model)
+        let isStopping = backend.processState == .stopping
+        let canStop: Bool = {
+            switch backend.processState {
+            case .running, .starting, .stopping: return true
+            default: return false
+            }
+        }()
+        let canStart = backend.binaryExists && state != .externalUnmanaged
+        let disabled = canStop ? isStopping : !canStart
+
+        Button {
+            if canStop { backend.stop() } else { backend.start() }
+        } label: {
+            Image(systemName: canStop ? "stop.fill" : "play.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(disabled ? Color.secondary : (canStop ? Color.red : Color.accentColor))
+                .frame(width: 38, height: 38)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(disabled ? 0.45 : 1)
+        .disabled(disabled)
+        .help(actionHelp(canStop: canStop, canStart: canStart, isStopping: isStopping))
     }
 
-    @ViewBuilder private func startStopButton(_ state: ServerDisplayState) -> some View {
-        switch backend.processState {
-        case .running, .starting:
-            Button { backend.stop() } label: { Image(systemName: "stop.fill") }
-                .help("Stop server")
-        default:
-            Button { backend.start() } label: { Image(systemName: "play.fill") }
-                .help("Start server")
-                .disabled(!backend.binaryExists || state == .externalUnmanaged)
-        }
+    private func actionHelp(canStop: Bool, canStart: Bool, isStopping: Bool) -> String {
+        if isStopping { return "Stopping server…" }
+        if canStop { return "Stop server" }
+        if !backend.binaryExists { return "No backend binary installed" }
+        if !canStart { return "An external server is running; the companion can't control it" }
+        return "Start server"
     }
 }
 

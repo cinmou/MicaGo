@@ -55,7 +55,7 @@ func (s *stubQueries) ListChatMessages(_ context.Context, _ string, _ int, _ int
 	return []store.MessageJSON{}, nil
 }
 
-func (s *stubQueries) FindOutgoingMessageMatch(_ context.Context, _ string, _ string, _ int64) (*store.MessageJSON, error) {
+func (s *stubQueries) FindOutgoingMessageMatch(_ context.Context, _ string, _ string, _ int64, _ map[string]struct{}) (*store.MessageJSON, error) {
 	return s.match, nil
 }
 
@@ -210,9 +210,12 @@ func TestGetChatMessagesIncludeEmptyParsing(t *testing.T) {
 
 type duplicatePendingManager struct{}
 
-func (duplicatePendingManager) Add(micasend.PendingSend) error { return micasend.ErrDuplicateTempGUID }
-func (duplicatePendingManager) Remove(string)                  {}
-func (duplicatePendingManager) Has(string) bool                { return true }
+func (duplicatePendingManager) Add(micasend.PendingSend) error       { return micasend.ErrDuplicateTempGUID }
+func (duplicatePendingManager) Remove(string)                        {}
+func (duplicatePendingManager) Has(string) bool                      { return true }
+func (duplicatePendingManager) Resolve(string, string, int64) bool   { return true }
+func (duplicatePendingManager) Reject(string, string)                {}
+func (duplicatePendingManager) ClaimedSnapshot() map[string]struct{} { return nil }
 
 type noopSender struct{}
 
@@ -240,8 +243,10 @@ func TestSendTextRejectsDuplicateTempGUID(t *testing.T) {
 }
 
 type fakePendingManager struct {
-	added   map[string]bool
-	removed []string
+	added    map[string]bool
+	removed  []string
+	claimed  map[string]string
+	rejected map[string]string
 }
 
 func (m *fakePendingManager) Add(p micasend.PendingSend) error {
@@ -261,6 +266,32 @@ func (m *fakePendingManager) Remove(tempGUID string) {
 }
 
 func (m *fakePendingManager) Has(tempGUID string) bool { return m.added[tempGUID] }
+
+func (m *fakePendingManager) Resolve(tempGUID, matchedGUID string, _ int64) bool {
+	if m.claimed == nil {
+		m.claimed = map[string]string{}
+	}
+	if owner, ok := m.claimed[matchedGUID]; ok && owner != tempGUID {
+		return false
+	}
+	m.claimed[matchedGUID] = tempGUID
+	return true
+}
+
+func (m *fakePendingManager) Reject(tempGUID, reason string) {
+	if m.rejected == nil {
+		m.rejected = map[string]string{}
+	}
+	m.rejected[tempGUID] = reason
+}
+
+func (m *fakePendingManager) ClaimedSnapshot() map[string]struct{} {
+	out := map[string]struct{}{}
+	for guid := range m.claimed {
+		out[guid] = struct{}{}
+	}
+	return out
+}
 
 type errorSender struct{}
 
@@ -285,6 +316,36 @@ func TestSendTextCleansPendingOnFailure(t *testing.T) {
 	}
 	if pending.Has("one") {
 		t.Fatal("expected pending tempGuid to be removed after failure")
+	}
+}
+
+func TestSendTextConfirmsWhenMatchFound(t *testing.T) {
+	matchGUID := "msg-123"
+	text := "hello world"
+	queries := &stubQueries{match: &store.MessageJSON{GUID: matchGUID, Text: &text}}
+	pending := &fakePendingManager{}
+	handlers := NewHandlers(queries, log.New(io.Discard, "", 0), &SendDependencies{
+		Pending: pending,
+		Sender:  noopSender{},
+	}, nil, "", &stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/chat-guid/send", strings.NewReader(`{"tempGuid":"ok","message":"hello world"}`))
+	req.SetPathValue("guid", "chat-guid")
+	rec := httptest.NewRecorder()
+
+	handlers.SendText(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), matchGUID) {
+		t.Fatalf("expected matched message in body, got %s", rec.Body.String())
+	}
+	if owner := pending.claimed[matchGUID]; owner != "ok" {
+		t.Fatalf("expected matched row claimed by 'ok', got %q", owner)
+	}
+	if pending.Has("ok") {
+		t.Fatal("expected pending tempGuid removed after confirmation")
 	}
 }
 

@@ -70,6 +70,7 @@ individual feature specs add detail and rationale.
 | [`spec-v0.11.0-connection-endpoints.md`](spec-v0.11.0-connection-endpoints.md) | Aggregated connection endpoints (local/LAN/optional public) + `/api/server/urls`. |
 | [`spec-v0.11.x-server-reliability.md`](spec-v0.11.x-server-reliability.md) | **Planned next milestone:** sync fidelity (update detection), send-error fast-fail, `chat.db` schema/version safety, runtime preconditions. |
 | [`spec-v0.11.5-message-fidelity.md`](spec-v0.11.5-message-fidelity.md) | **Implemented:** attachment kind/voice/UTI + MIME inference; typedstream `+!`/`+$` text-extraction fix. Additive `Attachment` fields. |
+| [`spec-v0.12.0-reliable-send-pipeline.md`](spec-v0.12.0-reliable-send-pipeline.md) | **Implemented:** hardened plain-text send — richer pending-send manager (status/resolve/reject/claim), 15s confirmation, `send:pending` event, structured `send_confirmation_timeout`. (Note: `v0.12.0` also used by the Firebase spec.) |
 
 ### Companion app spec (current source of truth)
 

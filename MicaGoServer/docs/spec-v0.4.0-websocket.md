@@ -37,6 +37,22 @@ Emitted when:
 
 - a sync run inserts a previously unseen message into `relay.db`
 
+### `send:pending`
+
+Payload:
+
+```json
+{
+  "tempGuid": "client-generated-id",
+  "chatGuid": "any;-;example@icloud.com"
+}
+```
+
+Emitted when:
+
+- a send request is accepted and its pending record is created (v0.12.0).
+  Always followed by a terminal `send:match` / `send:error`.
+
 ### `send:match`
 
 Payload:
@@ -60,10 +76,15 @@ Payload:
 {
   "tempGuid": "client-generated-id",
   "chatGuid": "any;-;example@icloud.com",
-  "code": "send_timeout",
-  "message": "timed out waiting for sent message"
+  "code": "send_confirmation_timeout",
+  "message": "AppleScript completed but no matching outgoing message appeared in chat.db before the confirmation timeout",
+  "text": "hello world"
 }
 ```
+
+`code` is one of `send_failed`, `send_error`, `messages_app_not_running`,
+`send_confirmation_timeout`. The timeout case adds `text` (v0.12.0; previously
+`send_timeout`).
 
 Emitted when:
 

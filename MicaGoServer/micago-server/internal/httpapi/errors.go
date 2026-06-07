@@ -7,8 +7,9 @@ type errorEnvelope struct {
 }
 
 type apiError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 func writeBadRequest(w http.ResponseWriter, message string) {
@@ -36,6 +37,19 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 		Error: apiError{
 			Code:    code,
 			Message: message,
+		},
+	})
+}
+
+// writeAPIErrorDetails is writeAPIError plus a structured `details` object
+// (omitted when nil), used by the send pipeline to return tempGuid/chatGuid/text
+// alongside the code/message.
+func writeAPIErrorDetails(w http.ResponseWriter, status int, code, message string, details map[string]any) {
+	writeJSON(w, status, errorEnvelope{
+		Error: apiError{
+			Code:    code,
+			Message: message,
+			Details: details,
 		},
 	})
 }

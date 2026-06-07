@@ -281,7 +281,7 @@ func (q *Queries) ListChatMessages(ctx context.Context, guid string, limit, offs
 	return q.attachMessageAttachments(ctx, messages)
 }
 
-func (q *Queries) FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64) (*MessageJSON, error) {
+func (q *Queries) FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*MessageJSON, error) {
 	rows, err := q.db.QueryContext(ctx, `
 SELECT
   m.guid,
@@ -322,6 +322,9 @@ LIMIT 100;
 		}
 		json := rowToMessageJSON(row)
 		if json.DateCreated == nil || *json.DateCreated < sentAtUnixMilli {
+			continue
+		}
+		if _, skip := excludedGUIDs[json.GUID]; skip {
 			continue
 		}
 		if send.NormalizeText(stringValue(json.Text)) == normalizedText {

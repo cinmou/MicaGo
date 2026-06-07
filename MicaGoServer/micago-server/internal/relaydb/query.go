@@ -106,7 +106,7 @@ LIMIT ? OFFSET ?;
 	return db.scanRelayMessagesWithAttachments(ctx, rows)
 }
 
-func (db *DB) FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64) (*store.MessageJSON, error) {
+func (db *DB) FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*store.MessageJSON, error) {
 	rows, err := db.sqlDB.QueryContext(ctx, `
 SELECT guid, text, subject, service, date_created, date_read, date_delivered,
        is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments
@@ -128,6 +128,9 @@ LIMIT 100;
 	}
 
 	for _, message := range messages {
+		if _, skip := excludedGUIDs[message.GUID]; skip {
+			continue
+		}
 		if send.NormalizeText(stringValue(message.Text)) == normalizedText {
 			return &message, nil
 		}

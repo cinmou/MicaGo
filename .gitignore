@@ -65,6 +65,33 @@ smoke-output/
 # Kept locally for analysis only; never committed to this repo.
 MicaGoServer/bluebubbles server/
 
+# Open-source reference clients cloned for study only (BlueBubbles app,
+# FluffyChat, Stream samples). Never committed; not git submodules.
+_references/
+
+# --- Flutter client (MicaGoFlutterClient) — local/build artifacts ------------
+# Track lib/ + pubspec + platform config; ignore tool/build output.
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/generated_plugin_registrant.dart
+# Android build artifacts inside the client
+MicaGoFlutterClient/**/build/
+MicaGoFlutterClient/**/android/.gradle/
+MicaGoFlutterClient/**/android/app/debug/
+MicaGoFlutterClient/**/android/app/profile/
+MicaGoFlutterClient/**/android/app/release/
+MicaGoFlutterClient/**/android/local.properties
+MicaGoFlutterClient/**/android/key.properties
+MicaGoFlutterClient/**/*.keystore
+MicaGoFlutterClient/**/*.jks
+# Local secrets / env for the client
+MicaGoFlutterClient/**/.env
+MicaGoFlutterClient/**/.env.*
+!MicaGoFlutterClient/**/.env.example
+
 # --- macOS -------------------------------------------------------------------
 .DS_Store
 .AppleDouble

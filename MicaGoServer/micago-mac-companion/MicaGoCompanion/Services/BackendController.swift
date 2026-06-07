@@ -348,6 +348,20 @@ enum ServerDisplayState: Equatable {
         }
     }
 
+    /// Short label for the compact toolbar status capsule (e.g. "Running",
+    /// "Stopped", "External"). The longer `label` is used elsewhere.
+    var compactLabel: String {
+        switch self {
+        case .notInstalled: return "Not installed"
+        case .stopped: return "Stopped"
+        case .starting, .startingUnreachable: return "Starting…"
+        case .running: return "Running"
+        case .stopping: return "Stopping…"
+        case .externalUnmanaged: return "External"
+        case .crashed: return "Crashed"
+        }
+    }
+
     var isHealthyDot: Bool {
         switch self {
         case .running, .externalUnmanaged: return true

@@ -42,13 +42,16 @@ type queryService interface {
 	ChatExists(ctx context.Context, guid string) (bool, error)
 	GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, error)
 	ListChatMessages(ctx context.Context, guid string, limit, offset int, includeEmpty bool) ([]store.MessageJSON, error)
-	FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64) (*store.MessageJSON, error)
+	FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*store.MessageJSON, error)
 }
 
 type pendingSendManager interface {
 	Add(micasend.PendingSend) error
 	Remove(string)
 	Has(string) bool
+	Resolve(tempGUID, matchedGUID string, matchedROWID int64) bool
+	Reject(tempGUID, reason string)
+	ClaimedSnapshot() map[string]struct{}
 }
 
 type SendDependencies struct {
@@ -538,14 +541,21 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const confirmationTimeout = 15 * time.Second
+
+	now := time.Now()
 	pending := micasend.PendingSend{
 		TempGUID:          req.TempGUID,
 		ChatGUID:          guid,
 		OriginalMessage:   req.Message,
 		NormalizedMessage: micasend.NormalizeText(req.Message),
-		SentAtUnixMilli:   time.Now().Add(-10 * time.Second).UnixMilli(),
-		Timeout:           120 * time.Second,
+		// Backdate slightly so clock skew / rounding never excludes the row.
+		SentAtUnixMilli: now.Add(-10 * time.Second).UnixMilli(),
+		CreatedAt:       now,
+		Timeout:         confirmationTimeout,
 	}
+
+	h.logSend(req.TempGUID, "request received", fmt.Sprintf("chat=%s len=%d", guid, len(req.Message)))
 
 	if err := h.send.Pending.Add(pending); err != nil {
 		if errors.Is(err, micasend.ErrDuplicateTempGUID) {
@@ -557,6 +567,8 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.send.Pending.Remove(req.TempGUID)
+	h.logSend(req.TempGUID, "pending created", "")
+	h.broadcastSendPending(r.Context(), req.TempGUID, guid)
 
 	// Fast precondition: AppleScript send needs Messages.app running. Detect and
 	// return a clear error instead of waiting out the send timeout.
@@ -566,17 +578,24 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 			h.logInternal("messages running check", err) // probe failed; proceed
 		} else if !running {
 			const msg = "Messages.app is not running; open Messages and retry"
+			h.send.Pending.Reject(req.TempGUID, "messages_app_not_running")
 			h.broadcastSendError(r.Context(), req.TempGUID, guid, "messages_app_not_running", msg)
 			writeAPIError(w, http.StatusConflict, "messages_app_not_running", msg)
 			return
 		}
 	}
 
+	// Single AppleScript attempt (conservative: no automatic Messages restart).
+	// osascript success only means "send requested", not "delivered".
+	h.logSend(req.TempGUID, "applescript started", "")
 	if err := h.send.Sender.SendText(r.Context(), guid, req.Message); err != nil {
+		h.logSend(req.TempGUID, "applescript failed", err.Error())
+		h.send.Pending.Reject(req.TempGUID, "send_failed")
 		h.broadcastSendError(r.Context(), req.TempGUID, guid, "send_failed", "failed to send message")
 		writeAPIError(w, http.StatusInternalServerError, "send_failed", "failed to send message")
 		return
 	}
+	h.logSend(req.TempGUID, "applescript ok", "")
 
 	if h.send.SyncNow != nil {
 		if err := h.send.SyncNow(r.Context()); err != nil {
@@ -584,18 +603,30 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	deadline := time.Now().Add(pending.Timeout)
+	// Confirmation: poll chat.db until the matching outgoing row appears or we
+	// time out. Exclude rows already claimed by other in-flight sends so two
+	// concurrent identical sends never confirm against the same message.
+	h.logSend(req.TempGUID, "confirmation poll started", fmt.Sprintf("timeout=%s", confirmationTimeout))
+	excluded := h.send.Pending.ClaimedSnapshot()
+	deadline := now.Add(pending.Timeout)
 	for time.Now().Before(deadline) {
-		match, err := h.queries.FindOutgoingMessageMatch(r.Context(), guid, pending.NormalizedMessage, pending.SentAtUnixMilli)
+		match, err := h.queries.FindOutgoingMessageMatch(r.Context(), guid, pending.NormalizedMessage, pending.SentAtUnixMilli, excluded)
 		if err != nil {
 			h.logInternal("find outgoing message match", err)
 			writeInternalError(w)
 			return
 		}
 		if match != nil {
-			h.broadcastSendMatch(r.Context(), req.TempGUID, *match)
-			writeJSON(w, http.StatusOK, match)
-			return
+			h.logSend(req.TempGUID, "candidate found", fmt.Sprintf("guid=%s", match.GUID))
+			if h.send.Pending.Resolve(req.TempGUID, match.GUID, 0) {
+				h.logSend(req.TempGUID, "confirmed", fmt.Sprintf("guid=%s", match.GUID))
+				h.broadcastSendMatch(r.Context(), req.TempGUID, *match)
+				writeJSON(w, http.StatusOK, match)
+				return
+			}
+			// Row already claimed by another send: skip it and keep looking.
+			excluded[match.GUID] = struct{}{}
+			continue
 		}
 
 		// Fast-fail: if the message landed in chat.db with a non-zero error,
@@ -607,6 +638,8 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 				h.logInternal("find outgoing message error", err)
 			} else if found {
 				message := fmt.Sprintf("message failed to send (error %d)", code)
+				h.logSend(req.TempGUID, "applescript failed", fmt.Sprintf("chat.db error=%d", code))
+				h.send.Pending.Reject(req.TempGUID, "send_error")
 				h.broadcastSendError(r.Context(), req.TempGUID, guid, "send_error", message)
 				writeAPIError(w, http.StatusBadGateway, "send_error", message)
 				return
@@ -615,6 +648,7 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 
 		select {
 		case <-r.Context().Done():
+			h.send.Pending.Reject(req.TempGUID, "canceled")
 			h.broadcastSendError(r.Context(), req.TempGUID, guid, "send_failed", "request canceled")
 			writeAPIError(w, http.StatusInternalServerError, "send_failed", "request canceled")
 			return
@@ -622,8 +656,13 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.broadcastSendError(r.Context(), req.TempGUID, guid, "send_timeout", "timed out waiting for sent message")
-	writeAPIError(w, http.StatusGatewayTimeout, "send_timeout", "timed out waiting for sent message")
+	// AppleScript completed but no matching outgoing row appeared in time.
+	const timeoutMsg = "AppleScript completed but no matching outgoing message appeared in chat.db before the confirmation timeout"
+	h.logSend(req.TempGUID, "timed out", fmt.Sprintf("chat=%s", guid))
+	h.send.Pending.Reject(req.TempGUID, "send_confirmation_timeout")
+	details := map[string]any{"tempGuid": req.TempGUID, "chatGuid": guid, "text": req.Message}
+	h.broadcastSendErrorDetails(r.Context(), req.TempGUID, guid, "send_confirmation_timeout", timeoutMsg, details)
+	writeAPIErrorDetails(w, http.StatusGatewayTimeout, "send_confirmation_timeout", timeoutMsg, details)
 }
 
 func (h *Handlers) GetAttachment(w http.ResponseWriter, r *http.Request) {
@@ -898,18 +937,54 @@ func (h *Handlers) broadcastSendMatch(ctx context.Context, tempGUID string, mess
 }
 
 func (h *Handlers) broadcastSendError(ctx context.Context, tempGUID, chatGUID, code, message string) {
+	h.broadcastSendErrorDetails(ctx, tempGUID, chatGUID, code, message, nil)
+}
+
+// broadcastSendErrorDetails emits a send:error event, merging optional extra
+// fields (e.g. the original text for a confirmation timeout) into the payload.
+func (h *Handlers) broadcastSendErrorDetails(ctx context.Context, tempGUID, chatGUID, code, message string, details map[string]any) {
+	if h.send == nil || h.send.Events == nil {
+		return
+	}
+	data := map[string]any{
+		"tempGuid": tempGUID,
+		"chatGuid": chatGUID,
+		"code":     code,
+		"message":  message,
+	}
+	for k, v := range details {
+		if _, reserved := data[k]; !reserved {
+			data[k] = v
+		}
+	}
+	_ = h.send.Events.Broadcast(ctx, realtime.Event{Type: "send:error", Data: data})
+}
+
+// broadcastSendPending emits a send:pending event so async WebSocket clients can
+// show an optimistic "sending" state before the confirmed/failed event.
+func (h *Handlers) broadcastSendPending(ctx context.Context, tempGUID, chatGUID string) {
 	if h.send == nil || h.send.Events == nil {
 		return
 	}
 	_ = h.send.Events.Broadcast(ctx, realtime.Event{
-		Type: "send:error",
+		Type: "send:pending",
 		Data: map[string]any{
 			"tempGuid": tempGUID,
 			"chatGuid": chatGUID,
-			"code":     code,
-			"message":  message,
 		},
 	})
+}
+
+// logSend writes a concise, single-line stage log for a send. `detail` may be
+// empty. Callers build `detail` with constant format strings to keep vet happy.
+func (h *Handlers) logSend(tempGUID, stage, detail string) {
+	if h.logger == nil {
+		return
+	}
+	if detail != "" {
+		detail = " " + detail
+	}
+	h.logger.Printf("send[%s] %s%s", tempGUID, stage, detail)
 }
 
 func resolveAttachmentPath(root string, localPath *string) (string, bool) {

@@ -100,7 +100,7 @@ func TestFindOutgoingMessageMatch(t *testing.T) {
 	db := openTestDB(t)
 	seedRelayData(t, db)
 
-	match, err := db.FindOutgoingMessageMatch(context.Background(), "chat-1", "world", 1500)
+	match, err := db.FindOutgoingMessageMatch(context.Background(), "chat-1", "world", 1500, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +109,22 @@ func TestFindOutgoingMessageMatch(t *testing.T) {
 	}
 	if match.GUID != "msg-2" {
 		t.Fatalf("expected msg-2, got %q", match.GUID)
+	}
+}
+
+func TestFindOutgoingMessageMatchExcludesClaimedRow(t *testing.T) {
+	db := openTestDB(t)
+	seedRelayData(t, db)
+
+	// Excluding the only matching row must yield no match (so a second
+	// concurrent identical send won't re-confirm an already-claimed message).
+	excluded := map[string]struct{}{"msg-2": {}}
+	match, err := db.FindOutgoingMessageMatch(context.Background(), "chat-1", "world", 1500, excluded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if match != nil {
+		t.Fatalf("expected no match when row is excluded, got %q", match.GUID)
 	}
 }
 

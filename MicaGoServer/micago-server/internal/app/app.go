@@ -39,7 +39,7 @@ type apiQueryService interface {
 	ChatExists(ctx context.Context, guid string) (bool, error)
 	GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, error)
 	ListChatMessages(ctx context.Context, guid string, limit, offset int, includeEmpty bool) ([]store.MessageJSON, error)
-	FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64) (*store.MessageJSON, error)
+	FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*store.MessageJSON, error)
 }
 
 func Run(options Options) error {
