@@ -8,7 +8,7 @@ and the Android client. Run the sections in order — each builds on the previou
 - `<TOKEN>` — your bearer token (from the Mac app). Keep it private.
 - `<PORT>` — the server port (default `3000`; use what the Mac app shows).
 - `<Mac-LAN-IP>` — your Mac's address on your Wi‑Fi (e.g. `192.168.1.23`).
-- `go.example.com` / `https://go.example.com` — your own public domain.
+- `micago.example.com` / `https://micago.example.com` — your own public domain.
 
 > ⚠️ The `curl` commands below include your token. Don't paste real output that
 > contains the token into screenshots, issues, or chats.
@@ -83,7 +83,7 @@ Complete the [Remote Access guide](remote-access-cloudflare.md) first.
 
    ```bash
    curl -H "Authorization: Bearer <TOKEN>" \
-     https://go.example.com/api/server/urls
+     https://micago.example.com/api/server/urls
    ```
 
    Expected: HTTP `200` and a JSON body listing your endpoints, for example:
@@ -96,15 +96,15 @@ Complete the [Remote Access guide](remote-access-cloudflare.md) first.
      "lan":   [ { "kind": "lan", "label": "LAN",
                   "baseUrl": "http://<Mac-LAN-IP>:<PORT>",
                   "wsUrl": "ws://<Mac-LAN-IP>:<PORT>/ws", "reachable": "unknown" } ],
-     "public": { "enabled": true, "baseUrl": "https://go.example.com",
-                 "wsUrl": "wss://go.example.com/ws", "reachable": true,
+     "public": { "enabled": true, "baseUrl": "https://micago.example.com",
+                 "wsUrl": "wss://micago.example.com/ws", "reachable": true,
                  "providerHint": "cloudflare_tunnel" },
      "preferredPairingEndpoint": "auto"
    }
    ```
 
 3. In the **Mac app**, set the **Public URL** to the bare origin
-   `https://go.example.com` and run **Validate Public URL**.
+   `https://micago.example.com` and run **Validate Public URL**.
 
    Expected result: the app reports the public URL is **reachable** and **auth
    passes**. (Behind the scenes this confirms the public URL loops back to this
@@ -120,7 +120,7 @@ See [Android Client Connection](android-client-connection.md) for details.
 1. **Install** the Android app (debug APK).
 2. Enter the **Server URL**:
    - LAN: `http://<Mac-LAN-IP>:<PORT>`
-   - Public: `https://go.example.com`
+   - Public: `https://micago.example.com`
    - (Not `127.0.0.1` — that's the phone itself.)
 3. Enter the **token** (`<TOKEN>`).
 4. Tap **Test connection**.
@@ -186,7 +186,7 @@ Record your results:
 | B1 | LAN health | `curl http://<Mac-LAN-IP>:<PORT>/api/health` | `{"ok":true}` | ☐ |
 | B2 | LAN auth | `POST` auth check over LAN | `200` | ☐ |
 | C1 | Tunnel running | `cloudflared tunnel run …` | connects | ☐ |
-| C2 | Public reachable + auth | `curl …https://go.example.com/api/server/urls` | `200` + JSON | ☐ |
+| C2 | Public reachable + auth | `curl …https://micago.example.com/api/server/urls` | `200` + JSON | ☐ |
 | C3 | Validate Public URL | Mac app "Validate" | reachable + auth OK | ☐ |
 | D1 | Android REST | App → Test connection | success | ☐ |
 | D2 | Android WebSocket | App home screen | "Connected" + events | ☐ |
@@ -199,3 +199,67 @@ If a row fails, jump to the Troubleshooting section of the relevant guide:
 [Getting Started](getting-started.md),
 [Remote Access](remote-access-cloudflare.md), or
 [Android Client Connection](android-client-connection.md).
+
+---
+
+## G. Android C2 client acceptance
+
+Run on a real Android device, ideally over the **public** URL (mobile data) so
+you exercise the full remote path. The current client does text + media
+**display** and read-only contacts matching; it does **not** send media or do
+push (by design).
+
+1. **Scan QR.** Mac → Connections → **Client Setup** → choose **Auto** (or
+   **Public**) → **Show QR code**. In the app tap **Scan QR code**, scan,
+   review the preview (token masked), tap **Use this server** → lands on Chats.
+2. **Connect over public URL.** With the phone on **mobile data**, confirm the
+   Connection tab → **Connection diagnostics** shows **REST health OK**, **Auth
+   OK**, **WebSocket Connected**. (Token is masked; tap reveal only if safe.)
+3. **Load chat list.** Chats tab shows rows with a clear title (contact name,
+   else handle, else GUID), a service/identifier subtitle, archived label where
+   applicable. No blank/broken rows. Pull to refresh works; a load failure shows
+   a Retry button.
+4. **Open a chat** → thread opens.
+5. **Load history** → messages appear **oldest→newest**, scrolled to the bottom.
+6. **Send text** → an optimistic "Sending…" bubble appears; on confirm it
+   becomes the real message ("Delivered"/"Read" if known). Empty text can't be
+   sent (send button disabled). A failure shows "Failed — tap to retry".
+7. **Receive text while the thread is open** → the new message appears (the
+   thread reloads on the realtime event; payloads have no chatGuid, so a
+   debounced reload is the documented fallback).
+8. **Receive text while on the chat list** → no crash. (The list does not
+   reorder/preview because the server's chat list exposes no last-message or
+   timestamp — documented gap. Pull to refresh re-fetches.)
+9. **Open an image attachment** → thumbnail in the bubble; tap → full-screen
+   zoomable preview.
+10. **Play an audio/voice attachment** → play/pause row; audio streams with the
+    bearer token in the header (not in the URL).
+11. **View a file attachment** → name, size, and type icon.
+12. **Attachment send is disabled** → the composer "+" button is greyed with the
+    tooltip "Attachments are not supported by this server yet."
+13. **Enable contacts matching.** People tab → **Enable contacts matching** →
+    grant the (read-only) permission → status **On**, count shown. Deny it and
+    confirm the app stays fully usable.
+14. **Same contact, two handles.** For a contact that has **both** a phone
+    number and an iMessage email, confirm both chats show the **same** local
+    display name (chat list + thread sender).
+
+### G. Pass / fail table
+
+| # | Check | Expected | Pass? |
+| --- | --- | --- | --- |
+| G1 | Scan QR → paired | Lands on Chats | ☐ |
+| G2 | Diagnostics over public | REST OK, Auth OK, WS Connected | ☐ |
+| G3 | Chat list | Clean rows, fallbacks, retry/refresh | ☐ |
+| G4 | History order | Oldest→newest, scrolled to bottom | ☐ |
+| G5 | Send text | Optimistic → confirmed | ☐ |
+| G6 | Empty send blocked | Send disabled when empty | ☐ |
+| G7 | Failed send | Shows "Failed — tap to retry" | ☐ |
+| G8 | Incoming (thread open) | Message appears | ☐ |
+| G9 | Incoming (chat list) | No crash | ☐ |
+| G10 | Image attachment | Thumbnail + full screen | ☐ |
+| G11 | Audio/voice attachment | Play/pause works | ☐ |
+| G12 | File attachment | Name/size/icon | ☐ |
+| G13 | Attachment send disabled | Tooltip shown | ☐ |
+| G14 | Contacts enable/deny | Works / app still usable | ☐ |
+| G15 | Same name for phone+email | Single display name | ☐ |

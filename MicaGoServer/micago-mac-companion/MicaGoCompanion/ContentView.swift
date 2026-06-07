@@ -4,7 +4,8 @@ import AppKit
 // MARK: - Sidebar
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case dashboard, connections, devices, syncControl, notifications, permissions, server, logs, advanced
+    // Devices + Permissions moved into the Dashboard (no longer separate items).
+    case dashboard, connections, syncControl, notifications, server, logs, tutorials, advanced
 
     var id: String { rawValue }
 
@@ -12,12 +13,11 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "Dashboard"
         case .connections: return "Connections"
-        case .devices: return "Devices"
         case .syncControl: return "Sync Control"
         case .notifications: return "Notifications"
-        case .permissions: return "Permissions"
         case .server: return "Server"
         case .logs: return "Logs"
+        case .tutorials: return "Tutorials"
         case .advanced: return "Advanced"
         }
     }
@@ -26,12 +26,11 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "gauge.with.dots.needle.bottom.50percent"
         case .connections: return "network"
-        case .devices: return "iphone.gen3"
         case .syncControl: return "line.3.horizontal.decrease.circle"
         case .notifications: return "bell"
-        case .permissions: return "lock.shield"
         case .server: return "server.rack"
         case .logs: return "text.alignleft"
+        case .tutorials: return "book"
         case .advanced: return "slider.horizontal.3"
         }
     }
@@ -39,15 +38,20 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
 // MARK: - Shell
 
+/// Shared sidebar selection so deep views can switch tabs (e.g. "Open Logs").
+@MainActor final class NavState: ObservableObject {
+    @Published var selection: SidebarItem? = .dashboard
+}
+
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var runtime: RuntimeMonitor
     @EnvironmentObject var backend: BackendController
-    @State private var selection: SidebarItem? = .dashboard
+    @StateObject private var nav = NavState()
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $selection) { item in
+            List(SidebarItem.allCases, selection: $nav.selection) { item in
                 Label(item.title, systemImage: item.symbol).tag(item)
             }
             .navigationTitle("MicaGo")
@@ -61,25 +65,18 @@ struct ContentView: View {
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // Custom top-right server status controls. Deliberately NOT a
-                // `.toolbar` item: on macOS 26 the system wraps toolbar items in a
-                // single Liquid-Glass group, which fused the capsule + button into
-                // one pill. As a top safe-area inset they float top-right with no
-                // parent background, and reserve space so page content is never
-                // covered (even while scrolling).
-                .safeAreaInset(edge: .top) {
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        ServerStatusCapsule()
-                        ServerActionButton()
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
+                .navigationTitle(nav.selection?.title ?? "MicaGo")
+                // Server status + primary control live in the native window
+                // toolbar (trailing). Two separate ToolbarItems so macOS 26
+                // gives each its own Liquid-Glass treatment instead of fusing
+                // them into one oversized capsule.
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) { ServerStatusToolbarPill() }
+                    ToolbarItem(placement: .primaryAction) { ServerPrimaryToolbarButton() }
                 }
-                .navigationTitle(selection?.title ?? "MicaGo")
             }
         }
+        .environmentObject(nav)
         .frame(minWidth: 820, idealWidth: 1000, minHeight: 560, idealHeight: 720)
         // Bootstrap (config/poll/auto-start/runtime) is owned by the AppDelegate
         // so it runs even when launched silently with no window. Polling stays
@@ -88,15 +85,14 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var detailContent: some View {
-        switch selection ?? .dashboard {
+        switch nav.selection ?? .dashboard {
         case .dashboard: DashboardPage()
         case .connections: ConnectionsPage()
-        case .devices: DevicesSection()
         case .syncControl: SyncControlPage()
         case .notifications: NotificationsPage()
-        case .permissions: PermissionsPage()
         case .server: ServerPage()
         case .logs: LogsPage()
+        case .tutorials: TutorialsPage()
         case .advanced: AdvancedPage()
         }
     }
@@ -144,76 +140,88 @@ private func fdaNeeded(_ backend: BackendController, _ model: AppModel) -> Bool 
     return false
 }
 
-// MARK: - Persistent status chip
+// MARK: - Toolbar server status + control
 
-/// Standalone status capsule: dot + text (+ optional version) inside one
-/// Capsule. The dot lives *inside* the capsule padding, never clipped to the
-/// edge. This is its own toolbar item — there is no parent background.
-private struct ServerStatusCapsule: View {
+/// Compact server-status indicator for the window toolbar: a status dot (or
+/// warning icon when crashed) plus a short label. Plain content only — it draws
+/// **no** background of its own, so it sits cleanly inside the single system
+/// toolbar (Liquid-Glass) group alongside the control button.
+private struct ServerStatusToolbarPill: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
         let state = displayState(backend, model)
-        HStack(spacing: 6) {
-            StatusDot(on: state.isHealthyDot)
-            Text(state.compactLabel)
-                .font(.callout)
-                .lineLimit(1)
-            if let version = model.status?.version {
-                Text("v\(version)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            if state == .crashed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
+            } else {
+                Circle()
+                    .fill(state.isHealthyDot ? Color.green : Color.secondary)
+                    .frame(width: 9, height: 9)
             }
+            Text(state.compactLabel)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        .padding(.leading, 12)
+        .padding(.trailing, 10)
+        .frame(minHeight: 24)
         .help(state.label)
     }
 }
 
-/// Standalone circular Start/Stop action. Its own toolbar item, a fixed square
-/// frame clipped to a Circle — visually separate from the status capsule.
-private struct ServerActionButton: View {
+/// Primary server control for the toolbar. Renders as a native `Button` so it
+/// picks up the system toolbar (Liquid-Glass) styling automatically. While
+/// starting/stopping it shows a progress indicator instead of a button.
+private struct ServerPrimaryToolbarButton: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
-        let state = displayState(backend, model)
-        let isStopping = backend.processState == .stopping
-        let canStop: Bool = {
-            switch backend.processState {
-            case .running, .starting, .stopping: return true
-            default: return false
-            }
-        }()
-        let canStart = backend.binaryExists && state != .externalUnmanaged
-        let disabled = canStop ? isStopping : !canStart
-
-        Button {
-            if canStop { backend.stop() } else { backend.start() }
-        } label: {
-            Image(systemName: canStop ? "stop.fill" : "play.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(disabled ? Color.secondary : (canStop ? Color.red : Color.accentColor))
-                .frame(width: 38, height: 38)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .opacity(disabled ? 0.45 : 1)
-        .disabled(disabled)
-        .help(actionHelp(canStop: canStop, canStart: canStart, isStopping: isStopping))
+        // Uniform breathing room around the control (kept toolbar-sized). The
+        // trailing pad gives the whole glass group its right-hand margin; the
+        // leading pad separates the control from the status label.
+        control
+            .padding(.leading, 6)
+            .padding(.trailing, 12)
     }
 
-    private func actionHelp(canStop: Bool, canStart: Bool, isStopping: Bool) -> String {
-        if isStopping { return "Stopping server…" }
-        if canStop { return "Stop server" }
+    @ViewBuilder private var control: some View {
+        let state = displayState(backend, model)
+
+        switch backend.processState {
+        case .starting, .stopping:
+            ProgressView()
+                .controlSize(.small)
+                .help(backend.processState == .stopping ? "Stopping server…" : "Starting server…")
+        case .running:
+            Button { backend.stop() } label: {
+                Label("Stop server", systemImage: "stop.fill")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .help("Stop server")
+        default:
+            // stopped / crashed / exited / notInstalled, or an external server.
+            let canStart = backend.binaryExists && state != .externalUnmanaged
+            Button { backend.start() } label: {
+                Label("Start server", systemImage: "play.fill")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .disabled(!canStart)
+            .help(startHelp(state))
+        }
+    }
+
+    private func startHelp(_ state: ServerDisplayState) -> String {
+        if state == .externalUnmanaged {
+            return "An external server is running; the companion can't control it"
+        }
         if !backend.binaryExists { return "No backend binary installed" }
-        if !canStart { return "An external server is running; the companion can't control it" }
         return "Start server"
     }
 }
@@ -247,6 +255,9 @@ private struct DashboardPage: View {
                 LabeledRow(label: "Sync", value: s.sync.loopEnabled ? "every \(s.sync.intervalSeconds)s" : "loop off")
                 LabeledRow(label: "WebSocket clients", value: "\(s.websocket.clients)")
             }
+            if let code = backend.lastExitCode, backend.processState != .running {
+                LabeledRow(label: "Last exit code", value: "\(code)")
+            }
             if case .failed(let reason) = backend.processState {
                 Text(reason).font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -254,23 +265,16 @@ private struct DashboardPage: View {
             if let next = backend.nextRestartInfo {
                 Text(next).font(.caption).foregroundStyle(.secondary)
             }
+            Text("Use the toolbar control (top‑right) to start or stop the server.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
 
-        SectionCard(title: "Endpoints") {
-            CopyableRow(label: "Local", value: localURL)
-            if let lan = model.urls?.lan, !lan.isEmpty {
-                ForEach(lan) { CopyableRow(label: "LAN", value: $0.baseUrl) }
-            } else {
-                LabeledRow(label: "LAN", value: "—")
-            }
-            if let pub = model.urls?.public, pub.enabled {
-                CopyableRow(label: "Public", value: pub.baseUrl)
-            } else {
-                LabeledRow(label: "Public", value: "not configured")
-            }
-        }
+        // Pairing lives on the Dashboard now (the main place to set up a client).
+        ClientSetupSection()
 
-        SectionCard(title: "Runtime & Permissions") {
+        DashboardDevicesCard()
+
+        SectionCard(title: "Permissions") {
             SummaryRow(label: "Messages.app", ok: runtime.messagesRunning,
                        value: runtime.messagesRunning ? "running" : "not running")
             SummaryRow(label: "Keep Awake", ok: runtime.keepAwakeActive,
@@ -281,6 +285,10 @@ private struct DashboardPage: View {
             } else {
                 Text("Start the server to read permission diagnostics.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            if fdaNeeded(backend, model) {
+                Button("Open Full Disk Access Settings") { openFullDiskAccessSettings() }
+                    .controlSize(.small)
             }
         }
 
@@ -295,17 +303,75 @@ private struct DashboardPage: View {
         }
     }
 
-    private var localURL: String {
-        model.urls?.local.first?.baseUrl
-            ?? model.status?.address.baseUrl
-            ?? model.baseURL?.absoluteString
-            ?? "—"
-    }
-
     private func uptime(_ seconds: Int64) -> String {
         if seconds < 60 { return "\(seconds)s" }
         if seconds < 3600 { return "\(seconds / 60)m" }
         return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+    }
+}
+
+// MARK: - Dashboard: Devices card
+
+private struct DashboardDevicesCard: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        SectionCard(title: "Paired Devices (\(model.devices.count))") {
+            if model.devices.isEmpty {
+                Text("Device registration will appear here after push / device registration is implemented.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(model.devices) { device in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(device.name).fontWeight(.medium)
+                            Text(device.platform).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text("\(device.clientType) · push: \(device.pushProvider)\(device.pushEnabled ? " (on)" : "")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                    Divider()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Tutorials (placeholder)
+
+private struct TutorialsPage: View {
+    private let entries: [(String, String)] = [
+        ("Getting Started", "First setup, permissions, and your first connection."),
+        ("Remote Access", "Reach your Mac from anywhere with your own domain + tunnel."),
+        ("Android Client", "Pair the Android app by QR and use chats."),
+        ("Troubleshooting", "Common connection problems and fixes."),
+        ("Documentation site", "Full docs (link added when MicaGo is published)."),
+    ]
+
+    var body: some View {
+        SectionCard(title: "Tutorials") {
+            Text("Guides will appear here when MicaGo is published.")
+                .foregroundStyle(.secondary)
+            Divider()
+            ForEach(entries, id: \.0) { entry in
+                HStack(spacing: 10) {
+                    Image(systemName: "book.closed").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.0).fontWeight(.medium)
+                        Text(entry.1).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("Soon").font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+                Divider()
+            }
+            Text("This is a reserved entry point for in‑app guides and the published documentation site.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -395,7 +461,6 @@ private struct CapabilityRow: View {
 private struct ConnectionsPage: View {
     var body: some View {
         ConnectionEndpointsSection()
-        TokenSection()
     }
 }
 
@@ -447,16 +512,32 @@ private struct RuntimeCard: View {
     }
 }
 
-// MARK: - Server page (controls + binary + logs/exit reason)
+// MARK: - Server page (runtime + bind address + advanced binary)
 
 private struct ServerPage: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
+        ServerRuntimeCard()
+
+        if fdaNeeded(backend, model) {
+            FullDiskAccessBanner()
+        }
+
+        ServerBindAddressCard()
+    }
+}
+
+private struct ServerRuntimeCard: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+    @EnvironmentObject var nav: NavState
+
+    var body: some View {
         let state = displayState(backend, model)
 
-        SectionCard(title: "Server") {
+        SectionCard(title: "Server Runtime") {
             HStack(spacing: 10) {
                 StatusDot(on: state.isHealthyDot)
                 Text(state.label).font(.headline)
@@ -483,30 +564,58 @@ private struct ServerPage: View {
                 Button { Task { await model.refresh() } } label: { Label("Refresh", systemImage: "arrow.triangle.2.circlepath") }
             }
 
-            BinaryPathRow()
-
-            if let s = model.status {
-                LabeledRow(label: "Bind address", value: s.address.listen)
-                LabeledRow(label: "Store", value: s.store)
+            if let listen = model.status?.address.listen, !listen.isEmpty {
+                LabeledRow(label: "Listening on", value: "http://\(listen)")
             }
-
+            if let code = backend.lastExitCode, backend.processState != .running {
+                LabeledRow(label: "Last exit code", value: "\(code)")
+            }
             if case .failed(let reason) = backend.processState {
                 Text("Exited: \(reason)").font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let code = backend.lastExitCode, backend.processState != .running {
-                Text("Last exit code: \(code)").font(.caption).foregroundStyle(.secondary)
-            }
             if let next = backend.nextRestartInfo {
                 Text(next).font(.caption).foregroundStyle(.secondary)
             }
-        }
 
-        if fdaNeeded(backend, model) {
-            FullDiskAccessBanner()
-        }
+            Divider()
 
-        RecentStderrCard()
+            // Logs live on their own page — link to it instead of duplicating.
+            Button {
+                nav.selection = .logs
+            } label: {
+                Label("Open Logs", systemImage: "text.alignleft")
+            }
+            .controlSize(.small)
+
+            DisclosureGroup("Advanced") {
+                BinaryPathRow()
+            }
+            .font(.subheadline)
+        }
+    }
+}
+
+private struct RecentOutputView: View {
+    @EnvironmentObject var backend: BackendController
+
+    var body: some View {
+        Group {
+            if backend.logLines.isEmpty {
+                Text("No output yet. Output appears when the companion launches the backend. Tokens are redacted.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView {
+                    Text(backend.logLines.suffix(60).joined(separator: "\n"))
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 160)
+            }
+        }
+        .padding(.top, 4)
     }
 }
 
@@ -514,19 +623,26 @@ private struct BinaryPathRow: View {
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Backend binary")
+                .font(.caption).fontWeight(.medium)
             HStack(spacing: 8) {
                 Image(systemName: backend.binaryExists ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(backend.binaryExists ? .green : .orange)
-                TextField("Backend path (leave empty to use the bundled binary)", text: $backend.userBinaryPath)
+                TextField("Bundled backend (leave empty)", text: $backend.userBinaryPath)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(.callout, design: .monospaced))
+                    .font(.system(.caption, design: .monospaced))
                 Button("Choose…") { chooseBinary() }
+                    .controlSize(.small)
             }
+            Text("Advanced: normally you do not need to change this. MicaGo uses the bundled backend.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Text(resolvedDescription)
                 .font(.caption2).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
         }
+        .padding(.top, 4)
     }
 
     private var resolvedDescription: String {
@@ -547,25 +663,180 @@ private struct BinaryPathRow: View {
     }
 }
 
-private struct RecentStderrCard: View {
-    @EnvironmentObject var backend: BackendController
+// MARK: - Server Bind Address
 
-    var body: some View {
-        SectionCard(title: "Recent Output") {
-            if backend.logLines.isEmpty {
-                Text("No output yet. Output appears when the companion launches the backend.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ScrollView {
-                    Text(backend.logLines.suffix(60).joined(separator: "\n"))
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(height: 160)
-            }
+private enum BindMode: String, CaseIterable, Identifiable {
+    case thisMac, localNetwork, custom
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .thisMac: return "This Mac only"
+        case .localNetwork: return "Local network"
+        case .custom: return "Custom"
         }
     }
+}
+
+private struct ServerBindAddressCard: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+
+    @State private var mode: BindMode = .thisMac
+    @State private var host: String = "127.0.0.1"
+    @State private var port: String = "3000"
+    @State private var loaded = false
+
+    var body: some View {
+        SectionCard(title: "Server Bind Address") {
+            Text("Choose whether the server is reachable only from this Mac, or from other devices on your network. This applies to the server the companion launches.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker("", selection: $mode) {
+                ForEach(BindMode.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: mode) { newMode in applyModeDefaults(newMode) }
+
+            Text(explanation)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Label(
+                "Remote access via Cloudflare Tunnel still works with “This Mac only”, because cloudflared runs on this Mac and connects to 127.0.0.1.",
+                systemImage: "info.circle")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                if mode == .custom {
+                    TextField("Host", text: $host)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.callout, design: .monospaced))
+                        .frame(maxWidth: 180)
+                }
+                Text("Port").foregroundStyle(.secondary)
+                TextField("3000", text: $port)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.callout, design: .monospaced))
+                    .frame(maxWidth: 90)
+                Spacer()
+            }
+
+            if mode == .custom {
+                Text("Examples: 192.168.1.23:3000 · 127.0.0.1:3000 · 0.0.0.0:3000")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+
+            if let listen = model.status?.address.listen, !listen.isEmpty {
+                Text("Currently listening on: http://\(listen)")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Server is not running. The change applies the next time it starts.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            if restartRequired {
+                Text("Restart required for this change to take effect.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+
+            HStack(spacing: 12) {
+                Button { saveAndRestart() } label: { Label("Save & Restart", systemImage: "arrow.clockwise") }
+                    .disabled(!isValid || !backend.binaryExists || displayState(backend, model) == .externalUnmanaged)
+                Spacer()
+            }
+
+            if displayState(backend, model) == .externalUnmanaged {
+                Text("This server was not launched by the companion, so its bind address can't be changed from here.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear(perform: loadInitial)
+    }
+
+    private var explanation: String {
+        switch mode {
+        case .thisMac:
+            return "Only apps on this Mac can connect. This is the safest local setting. (Local / loopback only.)"
+        case .localNetwork:
+            return "Devices on the same Wi‑Fi can connect using the LAN address. (Local / loopback + LAN / same Wi‑Fi.)"
+        case .custom:
+            return "Use this only if you know which interface the server should listen on."
+        }
+    }
+
+    private var portNumber: Int? {
+        guard let n = Int(port.trimmingCharacters(in: .whitespaces)), (1...65535).contains(n) else { return nil }
+        return n
+    }
+
+    private var isValid: Bool {
+        guard portNumber != nil else { return false }
+        if mode == .custom {
+            return !host.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        return true
+    }
+
+    private var desiredAddress: String {
+        let p = port.trimmingCharacters(in: .whitespaces)
+        switch mode {
+        case .thisMac: return "127.0.0.1:\(p)"
+        case .localNetwork: return "0.0.0.0:\(p)"
+        case .custom: return "\(host.trimmingCharacters(in: .whitespaces)):\(p)"
+        }
+    }
+
+    private var restartRequired: Bool {
+        guard isValid else { return false }
+        if let listen = model.status?.address.listen, !listen.isEmpty {
+            return desiredAddress != listen
+        }
+        // Server not running: compare against the persisted launch value.
+        return desiredAddress != backend.bindAddress
+    }
+
+    private func loadInitial() {
+        guard !loaded else { return }
+        loaded = true
+        let source = !backend.bindAddress.isEmpty
+            ? backend.bindAddress
+            : (model.status?.address.listen ?? "127.0.0.1:3000")
+        let (h, p) = splitHostPort(source)
+        host = h.isEmpty ? "127.0.0.1" : h
+        port = p.isEmpty ? "3000" : p
+        switch host {
+        case "127.0.0.1", "localhost", "::1": mode = .thisMac
+        case "0.0.0.0", "": mode = .localNetwork
+        default: mode = .custom
+        }
+    }
+
+    private func applyModeDefaults(_ newMode: BindMode) {
+        switch newMode {
+        case .thisMac: host = "127.0.0.1"
+        case .localNetwork: host = "0.0.0.0"
+        case .custom:
+            if host == "127.0.0.1" || host == "0.0.0.0" { /* keep as a starting point */ }
+        }
+    }
+
+    private func saveAndRestart() {
+        backend.bindAddress = desiredAddress
+        backend.restart()
+    }
+}
+
+/// Splits "host:port" (IPv4/hostname) into components. Leaves host empty for a
+/// bare ":port". Falls back gracefully for unexpected input.
+private func splitHostPort(_ value: String) -> (String, String) {
+    guard let idx = value.lastIndex(of: ":") else { return (value, "") }
+    let host = String(value[value.startIndex..<idx])
+    let port = String(value[value.index(after: idx)...])
+    return (host, port)
 }
 
 // MARK: - Logs page
@@ -636,32 +907,57 @@ private struct ConnectionEndpointsSection: View {
 
     var body: some View {
         SectionCard(title: "Connection Endpoints") {
-            Text("Local")
-                .font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary)
+            EndpointGroupHeader(
+                title: "Local / loopback",
+                subtitle: "Use this only on the Mac running MicaGo. 127.0.0.1 means “this Mac”.")
             if let urls = model.urls, !urls.local.isEmpty {
                 ForEach(urls.local) { EndpointRow(endpoint: $0) }
+            } else if let base = model.baseURL?.absoluteString {
+                EndpointURLRow(label: "Base", value: base)
             } else {
-                LabeledRow(label: "Local", value: model.baseURL?.absoluteString ?? "—")
+                Text("Start the server to see the local endpoint.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Divider()
 
-            Text("LAN")
-                .font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary)
+            EndpointGroupHeader(
+                title: "LAN / same Wi‑Fi",
+                subtitle: "Use this from Android devices on the same Wi‑Fi. Hide noisy VPN/virtual addresses so they aren’t offered for pairing (they stay active on the server).")
             if let urls = model.urls, !urls.lan.isEmpty {
-                ForEach(urls.lan) { EndpointRow(endpoint: $0) }
+                ForEach(urls.lan) { LANEndpointRow(endpoint: $0) }
+                if !model.hiddenLANBaseURLs.isEmpty {
+                    Button("Reset hidden LAN endpoints (\(model.hiddenLANBaseURLs.count))") {
+                        model.resetHiddenLANEndpoints()
+                    }
+                    .controlSize(.small).font(.caption)
+                }
             } else {
-                Text("Not bound to a LAN address (loopback only). Bind to 0.0.0.0 to expose on the LAN.")
+                Text("LAN access is not available because the server is listening on 127.0.0.1 only. Choose “Local network” in Server Bind Address and restart the server.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
 
-            Text("Public URL (optional)")
-                .font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary)
+            EndpointGroupHeader(
+                title: "Public / remote",
+                subtitle: "Use this from mobile data or another network. Optional and external.")
             PublicURLEditor()
         }
+    }
+}
+
+private struct EndpointGroupHeader: View {
+    let title: String
+    let subtitle: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.subheadline).fontWeight(.semibold)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -669,17 +965,69 @@ private struct EndpointRow: View {
     let endpoint: ConnectionEndpoint
 
     var body: some View {
-        HStack(spacing: 8) {
-            ReachableDot(endpoint.reachable)
-            Text(endpoint.baseUrl)
-                .font(.system(.callout, design: .monospaced))
-                .textSelection(.enabled)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-            Text(endpoint.reachable.label).font(.caption2).foregroundStyle(.secondary)
-            Button { copyToPasteboard(endpoint.baseUrl) } label: { Image(systemName: "doc.on.doc") }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                ReachableDot(endpoint.reachable)
+                Text(endpoint.label).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(endpoint.reachable.label).font(.caption2).foregroundStyle(.secondary)
+            }
+            EndpointURLRow(label: "Base", value: endpoint.baseUrl)
+            EndpointURLRow(label: "WS", value: endpoint.wsUrl)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// A LAN endpoint row with a hide-from-pairing toggle. Hiding is a UI/pairing
+/// filter only — it never changes server networking.
+private struct LANEndpointRow: View {
+    @EnvironmentObject var model: AppModel
+    let endpoint: ConnectionEndpoint
+
+    var body: some View {
+        let hidden = model.isLANHidden(endpoint.baseUrl)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                ReachableDot(endpoint.reachable)
+                Text(endpoint.label).font(.caption).foregroundStyle(.secondary)
+                if hidden {
+                    Text("hidden from pairing").font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    model.setLANHidden(endpoint.baseUrl, hidden: !hidden)
+                } label: {
+                    Image(systemName: hidden ? "eye.slash" : "eye")
+                }
                 .buttonStyle(.borderless)
+                .help(hidden ? "Show this address for pairing" : "Hide this address from pairing")
+            }
+            EndpointURLRow(label: "Base", value: endpoint.baseUrl)
+            EndpointURLRow(label: "WS", value: endpoint.wsUrl)
+        }
+        .opacity(hidden ? 0.55 : 1)
+        .padding(.vertical, 2)
+    }
+}
+
+/// A monospaced URL with a copy button, used across endpoint cards.
+private struct EndpointURLRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer()
+            Button { copyToPasteboard(value) } label: { Image(systemName: "doc.on.doc") }
+                .buttonStyle(.borderless)
+                .disabled(value.isEmpty)
         }
     }
 }
@@ -689,16 +1037,25 @@ private struct PublicURLEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("https://mica.example.com (leave empty for none)", text: $model.publicURLInput)
+            TextField("https://micago.example.com", text: $model.publicURLInput)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.callout, design: .monospaced))
+
+            Text("Enter only the origin. Do not include /api, /ws, or a trailing path.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            if let warning = originWarning {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Toggle("Verify TLS certificate", isOn: $model.publicVerifyTLS)
                 .font(.caption)
 
             HStack(spacing: 12) {
                 Button("Save") { Task { await model.savePublicURL() } }
-                    .disabled(model.publicBusy)
+                    .disabled(model.publicBusy || originWarning != nil)
                 Button("Validate Public URL") { Task { await model.validatePublicURL() } }
                     .disabled(model.publicBusy || (model.urls?.public.enabled != true))
                 if model.publicBusy { ProgressView().controlSize(.small) }
@@ -709,29 +1066,99 @@ private struct PublicURLEditor: View {
                 }
             }
 
-            if let pub = model.urls?.public, pub.enabled {
-                HStack(spacing: 6) {
-                    ReachableDot(pub.reachable)
-                    Text("\(pub.baseUrl) — \(pub.reachable.label)")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
-                    if let hint = pub.providerHint, hint != "custom" {
-                        Text("(\(hint))").font(.caption).foregroundStyle(.secondary)
-                    }
+            HStack(spacing: 6) {
+                Text("Status:").font(.caption).foregroundStyle(.secondary)
+                Text(reachabilityState).font(.caption).fontWeight(.medium)
+                    .foregroundStyle(reachabilityColor)
+                if let pub = model.urls?.public, pub.enabled,
+                   let hint = pub.providerHint, hint != "custom" {
+                    Text("· \(providerLabel(hint))").font(.caption).foregroundStyle(.secondary)
                 }
             }
 
-            if let result = model.publicCheckResult {
-                Text(result.message)
+            if let pub = model.urls?.public, pub.enabled {
+                Text(pub.baseUrl).font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+
+            if let diag = publicDiagnostic {
+                Label(diag.text, systemImage: diag.ok ? "checkmark.circle" : "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(result.ok ? .green : .orange)
+                    .foregroundStyle(diag.ok ? .green : .orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("Public access is an optional EXTRA endpoint — local and LAN stay active regardless. Produce a public URL with Cloudflare Tunnel, Ngrok, a reverse proxy, or DDNS + port-forwarding. Tailscale is an advanced option. See docs/spec-v0.11.0-connection-endpoints.md.")
+            Text("Public access is an optional EXTRA endpoint — Local and LAN stay active regardless. Produce a public URL with Cloudflare Tunnel, Ngrok, a reverse proxy, or DDNS + port‑forwarding (set up separately). MicaGo does not manage these. See docs/remote-access-cloudflare.md.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var reachabilityState: String {
+        guard let pub = model.urls?.public, pub.enabled else { return "Not configured" }
+        switch pub.reachable {
+        case .yes: return "Reachable"
+        case .no: return "Failed"
+        case .unknown: return "Unknown"
+        }
+    }
+
+    /// Plain-language result of the last "Validate Public URL" check. Never
+    /// includes the token. Maps HTTP statuses to actionable messages.
+    private var publicDiagnostic: (text: String, ok: Bool)? {
+        guard let r = model.publicCheckResult else { return nil }
+        if r.ok {
+            return ("Reachable and the token was accepted — Public is ready for pairing.", true)
+        }
+        if !r.reachable {
+            return ("Couldn’t reach the public URL. Check that the tunnel is running and forwards to this server’s port (timeout or connection refused).", false)
+        }
+        switch r.status {
+        case 401, 403:
+            return ("Reached a server, but it rejected the token (\(r.status)). The public URL may point to a different server than this one.", false)
+        case 502, 503, 504:
+            return ("The public URL reached the tunnel, but no server answered behind it (\(r.status)). Make sure MicaGo is running and the tunnel forwards to its port.", false)
+        default:
+            return (r.message.isEmpty ? "Validation failed (HTTP \(r.status))." : r.message, false)
+        }
+    }
+
+    private var reachabilityColor: Color {
+        guard let pub = model.urls?.public, pub.enabled else { return .secondary }
+        switch pub.reachable {
+        case .yes: return .green
+        case .no: return .orange
+        case .unknown: return .secondary
+        }
+    }
+
+    private func providerLabel(_ hint: String) -> String {
+        switch hint {
+        case "cloudflare_tunnel": return "Cloudflare Tunnel"
+        case "ngrok": return "Ngrok"
+        case "tailscale": return "Tailscale"
+        default: return hint
+        }
+    }
+
+    /// A non-nil warning means the entered text is not a bare http(s) origin.
+    /// An empty field is allowed (it clears the public URL).
+    private var originWarning: String? {
+        let raw = model.publicURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty { return nil }
+        guard let comps = URLComponents(string: raw),
+              let scheme = comps.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = comps.host, !host.isEmpty else {
+            return "Enter a full origin like https://micago.example.com"
+        }
+        if !(comps.path.isEmpty || comps.path == "/") {
+            return "Remove the path — enter only the origin (no /api, /ws, etc.)."
+        }
+        if comps.query != nil || comps.fragment != nil {
+            return "Remove the query/fragment — enter only the origin."
+        }
+        return nil
     }
 }
 
@@ -752,43 +1179,89 @@ private struct ReachableDot: View {
     }
 }
 
-// MARK: - Token (pairing — intentionally includes the token in the QR/copy)
+// MARK: - Client Setup (pairing endpoint + token; QR encodes the token)
 
-private struct TokenSection: View {
+private enum PairingScope: String, CaseIterable, Identifiable {
+    case auto, local, lan, `public`
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .auto: return "Auto"
+        case .local: return "Local"
+        case .lan: return "LAN"
+        case .public: return "Public"
+        }
+    }
+}
+
+private struct ClientSetupSection: View {
     @EnvironmentObject var model: AppModel
+    @State private var scope: PairingScope = .auto
 
     var body: some View {
-        SectionCard(title: "Bearer Token") {
-            HStack {
+        SectionCard(title: "Client Setup") {
+            Text("Pick which endpoint a client (such as the Android app) should use, then copy the URL and token or scan the QR code.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker("", selection: $scope) {
+                ForEach(PairingScope.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: scope) { _ in applyScope() }
+
+            Text(scopeExplanation)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let target = resolvedTarget {
+                EndpointURLRow(label: "Base", value: target.baseUrl)
+                EndpointURLRow(label: "WS", value: target.wsUrl)
+            } else {
+                Text(emptyStateMessage)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Text("Token").font(.caption).foregroundStyle(.secondary)
                 Text(displayToken)
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(1).truncationMode(.middle)
                 Spacer()
-                Button(model.tokenRevealed ? "Hide" : "Reveal") {
-                    model.tokenRevealed.toggle()
-                }
-                Button("Copy") {
-                    copyToPasteboard(model.token)
-                }
-                .disabled(model.token.isEmpty)
+                Button(model.tokenRevealed ? "Hide" : "Reveal") { model.tokenRevealed.toggle() }
+                    .controlSize(.small)
+                    .disabled(model.token.isEmpty)
+                Button("Copy") { copyToPasteboard(model.token) }
+                    .controlSize(.small)
+                    .disabled(model.token.isEmpty)
             }
+            Text("Keep your token private. Don’t paste it into screenshots, logs, or chats.")
+                .font(.caption2).foregroundStyle(.secondary)
 
-            if !model.token.isEmpty {
-                DisclosureGroup("Pairing QR code") {
-                    if model.pairingTargets.isEmpty {
-                        Text("Start the server to choose a pairing endpoint.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Picker("Pairing endpoint", selection: $model.selectedPairingBaseURL) {
-                            ForEach(model.pairingTargets) { target in
-                                Text(target.label).tag(target.baseUrl)
-                            }
-                        }
-                        .pickerStyle(.menu)
+            if !model.token.isEmpty, resolvedTarget != nil {
+                Button {
+                    copyToPasteboard(model.pairingPayload)
+                } label: {
+                    Label("Copy setup JSON", systemImage: "curlybraces")
+                }
+                .controlSize(.small)
+
+                DisclosureGroup("Show payload (token hidden)") {
+                    Text(model.pairingPayloadRedacted)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 4)
+                }
+                .font(.subheadline)
 
+                DisclosureGroup("Show QR code") {
+                    VStack(alignment: .leading, spacing: 6) {
                         if let image = QRCode.image(from: model.pairingPayload) {
                             Image(nsImage: image)
                                 .interpolation(.none)
@@ -798,13 +1271,63 @@ private struct TokenSection: View {
                         } else {
                             Text("Could not render QR code.").foregroundStyle(.secondary)
                         }
-
-                        Text("Encodes the SELECTED endpoint's base URL, WebSocket URL, and token. Pick Local for this Mac, LAN for same-network clients, or Public for remote clients — this is a per-pairing choice, not a server mode.")
+                        Text("Encodes the selected endpoint's base URL, WebSocket URL, and token. This is a per‑pairing choice — Local / LAN / Public all stay active.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                .font(.subheadline)
             }
+        }
+        .onAppear(perform: applyScope)
+    }
+
+    private var scopeExplanation: String {
+        switch scope {
+        case .auto: return "Auto: Public when it’s configured and reachable, otherwise LAN, otherwise Local."
+        case .local: return "Local / loopback: for testing on this Mac."
+        case .lan: return "LAN / same Wi‑Fi: for an Android device on the same Wi‑Fi."
+        case .public: return "Public / remote: for an Android device over mobile data or a remote network."
+        }
+    }
+
+    private var emptyStateMessage: String {
+        switch scope {
+        case .lan:
+            return "No LAN endpoint. Choose “Local network” in Server Bind Address and restart the server."
+        case .public:
+            return "No public endpoint. Set a Public / remote URL above first."
+        default:
+            return "Start the server to choose a pairing endpoint."
+        }
+    }
+
+    private var resolvedTarget: PairingTarget? {
+        let targets = model.pairingTargets
+        switch scope {
+        case .local: return targets.first { $0.scope == .local }
+        case .lan: return targets.first { $0.scope == .lan }
+        case .public: return targets.first { $0.scope == .public }
+        case .auto:
+            // Prefer Public when it's configured AND reachable, then LAN, then Local.
+            if publicReachable, let pub = targets.first(where: { $0.scope == .public }) {
+                return pub
+            }
+            return targets.first { $0.scope == .lan }
+                ?? targets.first { $0.scope == .local }
+        }
+    }
+
+    private var publicReachable: Bool {
+        guard let pub = model.urls?.public, pub.enabled else { return false }
+        return pub.reachable == .yes
+    }
+
+    /// Keep the QR payload (driven by model.selectedPairingBaseURL) in sync with
+    /// the chosen scope.
+    private func applyScope() {
+        if let t = resolvedTarget {
+            model.selectedPairingBaseURL = t.baseUrl
         }
     }
 

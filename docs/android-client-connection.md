@@ -1,32 +1,24 @@
 # Android Client Connection
 
-This guide covers the current **Android app**, which is an early **C0
-foundation** build. It focuses on connecting to your Mac server and confirming
-the connection works.
+This guide covers connecting the **Android app** to your Mac server. The easiest
+path is to **scan the pairing QR code** shown in the Mac app.
 
 ## What the Android client can do today
 
-- **Save your server URL.**
-- **Save your bearer token securely** (stored in Android's encrypted storage;
-  the token is never shown in logs).
-- **Test the REST connection** — checks that the server is alive and that your
-  token is accepted.
-- **Connect the realtime WebSocket** and show its status
-  (connecting / connected / failed).
-- **Display debug events** — a panel that lists the names of realtime events as
-  they arrive.
+- **Pair by QR code** (or manual URL + token entry); the token is stored in
+  Android's encrypted storage and never shown in logs.
+- **Test the REST connection** and **connect the realtime WebSocket**.
+- **Show the chat list** and open a **message thread** (history).
+- **Send text messages** (with a sending → sent/failed state).
+- **Display attachments** — images, voice/audio, and files.
+- **Match local device contacts** (read-only, opt-in) to show names instead of
+  raw phone numbers/emails.
 
 ## What it cannot do yet
 
-This build is foundation only. It does **not** yet:
-
-- show a **chat list**,
-- open a **message thread**,
-- **send messages**,
-- handle **attachments**,
-- receive **push notifications**.
-
-These come in later phases.
+- **Push notifications** (planned next).
+- **Sending attachments/media** — the server has no media-send endpoint yet, so
+  the composer's attachment button is disabled.
 
 ## Step 1 — Install the app
 
@@ -40,7 +32,21 @@ If you have a debug build (APK):
 
 > A debug build is for testing only. Treat it like any pre‑release app.
 
-## Step 2 — Choose how you'll connect
+## Step 2 — Pair with a QR code (recommended)
+
+1. On the Mac, open **Connections → Client Setup**.
+2. Choose the endpoint with the picker (**Auto** is usually right: it picks
+   **Public** when reachable, otherwise **LAN**, otherwise **Local**).
+3. Click **Show QR code**.
+4. In the Android app, tap **Scan QR code** and point the camera at it.
+5. Review the previewed server URL (token stays masked) and tap **Use this
+   server**. The app tests the connection and goes to the chat list on success.
+
+The QR encodes the selected **base URL**, **WebSocket URL**, and **token** — so
+you don't type anything. Prefer the **Public** endpoint if you're pairing a
+phone that will be used over mobile data.
+
+## Step 2b — Or enter the connection manually
 
 Pick the address that matches where your phone is:
 
@@ -57,7 +63,7 @@ Pick the address that matches where your phone is:
 - **Anywhere (public domain), after the Cloudflare setup:**
 
   ```
-  https://go.example.com
+  https://micago.example.com
   ```
 
 > ⚠️ **Do not use `http://127.0.0.1` on the phone.** On Android, `127.0.0.1`
@@ -98,7 +104,7 @@ If you leave the WebSocket field blank, the app builds it from your server URL:
 Examples:
 
 - `http://<Mac-LAN-IP>:<PORT>`  →  `ws://<Mac-LAN-IP>:<PORT>/ws`
-- `https://go.example.com`      →  `wss://go.example.com/ws`
+- `https://micago.example.com`      →  `wss://micago.example.com/ws`
 
 ## Expected successful result
 

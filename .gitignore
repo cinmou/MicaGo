@@ -128,3 +128,5 @@ xcshareddata/xcschemes/xcuserdata/
 .pub-cache/
 .pub/
 coverage/
+/MicaGoFlutterClient/Ref
+/.claude

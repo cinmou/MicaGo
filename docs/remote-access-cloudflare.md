@@ -12,7 +12,7 @@ your **own domain** and **Cloudflare Tunnel**.
 ## Why a tunnel?
 
 Your Mac's server normally listens only on your home network. A tunnel gives you
-a stable public HTTPS address (e.g. `https://go.example.com`) that securely
+a stable public HTTPS address (e.g. `https://micago.example.com`) that securely
 forwards traffic to the server running on your Mac — without opening ports on
 your router.
 
@@ -20,7 +20,7 @@ your router.
 
 ```
 Android client
-  -> https://go.example.com            (your domain, HTTPS)
+  -> https://micago.example.com            (your domain, HTTPS)
   -> Cloudflare Tunnel                 (Cloudflare's edge)
   -> cloudflared on your Mac           (the tunnel client you run)
   -> http://127.0.0.1:<PORT>           (the MicaGo server on your Mac)
@@ -32,7 +32,7 @@ traffic; it does not replace authentication.
 ## Step 1 — Get a domain
 
 Use a domain you own, or buy one (from Cloudflare Registrar or any registrar).
-In the examples below, replace `go.example.com` with your own hostname.
+In the examples below, replace `micago.example.com` with your own hostname.
 
 ## Step 2 — Add the domain to Cloudflare
 
@@ -73,10 +73,10 @@ This prints a **tunnel ID** and writes a credentials file to
 ## Step 6 — Route your hostname to the tunnel
 
 ```bash
-cloudflared tunnel route dns micago-server go.example.com
+cloudflared tunnel route dns micago-server micago.example.com
 ```
 
-This creates the DNS record that points `go.example.com` at your tunnel.
+This creates the DNS record that points `micago.example.com` at your tunnel.
 
 ## Step 7 — Write the config file
 
@@ -89,7 +89,7 @@ tunnel: micago-server
 credentials-file: /Users/<you>/.cloudflared/<tunnel-id>.json
 
 ingress:
-  - hostname: go.example.com
+  - hostname: micago.example.com
     service: http://127.0.0.1:<PORT>
   - service: http_status:404
 ```
@@ -118,28 +118,40 @@ cloudflared service install
 
 ## Step 9 — Enter the public URL in the MicaGo Mac app
 
-1. In the Mac app, find the **Connections** / connection‑endpoints area.
-2. Set the **Public URL** to the bare origin:
+1. Open the Mac app → **Connections** → **Connection Endpoints** →
+   **Public / remote**.
+2. In the **Public URL** field, paste the bare origin:
 
    ```
-   https://go.example.com
+   https://micago.example.com
    ```
 
-   Use the **origin only** — no trailing path, no `/api`, no `/ws`.
+   Enter the **origin only** — no trailing path, no `/api`, no `/ws`. The app
+   warns you inline if the URL has a path or isn't `http(s)`.
+3. Leave **Verify TLS certificate** on for a normal HTTPS domain, then click
+   **Save**. The URL is written to the server config and **survives app
+   restarts**.
 
 ## Step 10 — Validate the public URL
 
-In the Mac app, run **Validate Public URL** (the "check" action). MicaGo asks
-its own server to confirm that the public URL reaches **this** Mac and that the
-token works.
+Click **Validate Public URL**. MicaGo asks its own server to confirm that the
+public URL loops back to **this** Mac and that the bearer token is accepted. The
+result is shown in plain language (the token is never displayed):
+
+- **Reachable and the token was accepted — Public is ready for pairing.** ✅
+- *Couldn't reach the public URL…* → tunnel not running / wrong port.
+- *Reached a server, but it rejected the token (401)…* → the URL points at a
+  different server.
+- *…no server answered behind it (502)…* → the tunnel is up but MicaGo isn't
+  running on the forwarded port.
 
 ### What success looks like
 
-- The public URL is **reachable**.
-- The **auth check passes** (the token is accepted).
-- The connection details may show a **provider hint** of Cloudflare.
-- Your **Android client can connect over mobile data** using
-  `https://go.example.com`.
+- The Public section shows **Status: Reachable** (and a **Cloudflare Tunnel**
+  provider hint when detected).
+- In **Client Setup**, the **Auto** endpoint now resolves to **Public**.
+- Use **Show QR code** / **Copy setup JSON** to pair the Android client; it can
+  then connect over mobile data using `https://micago.example.com`.
 
 ## Troubleshooting
 
@@ -147,11 +159,11 @@ token works.
 | --- | --- | --- |
 | Validate fails, but local works | Tunnel not forwarding to the right place | Check `service:` in `config.yml` points to `http://127.0.0.1:<PORT>` with the **correct port** shown in the Mac app. |
 | Connection refused / 502 from the tunnel | Server bound to the wrong address, or not running | Make sure the MicaGo server is running and listening on the port your `config.yml` forwards to. |
-| `go.example.com` does not resolve | Hostname not routed in Cloudflare | Re‑run `cloudflared tunnel route dns micago-server go.example.com` and confirm the DNS record exists. |
+| `micago.example.com` does not resolve | Hostname not routed in Cloudflare | Re‑run `cloudflared tunnel route dns micago-server micago.example.com` and confirm the DNS record exists. |
 | Everything 401 (Unauthorized) | Wrong or stale token | Re‑copy the token from the Mac app; make sure devices use the same token. |
 | Validate fails right after starting | Tunnel not running | Run `cloudflared tunnel run micago-server` and try again. |
-| Works locally, fails publicly with a path error | You pasted a URL **with a path** | Use the bare origin `https://go.example.com`, not `https://go.example.com/api` or `.../ws`. |
-| WebSocket won't connect but REST works | Proxy not passing WebSocket upgrades, or wrong scheme | Cloudflare passes WebSockets by default; confirm the client uses `wss://go.example.com/ws` (HTTPS → `wss`). Make sure the tunnel is running. |
+| Works locally, fails publicly with a path error | You pasted a URL **with a path** | Use the bare origin `https://micago.example.com`, not `https://micago.example.com/api` or `.../ws`. |
+| WebSocket won't connect but REST works | Proxy not passing WebSocket upgrades, or wrong scheme | Cloudflare passes WebSockets by default; confirm the client uses `wss://micago.example.com/ws` (HTTPS → `wss`). Make sure the tunnel is running. |
 | Random outside testers could reach it | Public URL + token is all that's needed | Keep the token secret; rotate it if exposed. Consider Cloudflare Access for an extra gate (optional, advanced). |
 
 > ⚠️ Once your server is public, anyone with the URL **and** the token can reach

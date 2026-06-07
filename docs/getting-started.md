@@ -30,21 +30,33 @@ There is no MicaGo cloud. Your data stays between your Mac and your devices.
   server again.
 - An **Android device** for testing the mobile client (optional but recommended).
 
-## What to get from the Mac app
+## The Mac app, card by card
 
-Open the MicaGo Mac app and find the connection details. You will need:
+Open the MicaGo Mac app. The **Server** and **Connections** screens are
+organized into a few cards:
 
-- **Server base URL** — for example `http://127.0.0.1:<PORT>` on the Mac itself,
-  or `http://<Mac-LAN-IP>:<PORT>` from another device on your Wi‑Fi. The default
-  port is `3000`, but always use the value shown in the app.
-- **Bearer token** — the secret that authorizes your devices. Copy it from the
-  Mac app.
-- **Public URL** (optional) — only if you set up remote access, e.g.
-  `https://go.example.com`.
+- **Server Runtime** — Start / Stop / Restart, the running status, the address
+  the server is **listening on**, and (collapsed) recent log output. The backend
+  binary lives under an **Advanced** disclosure — you normally never touch it.
+- **Server Bind Address** — choose who can reach the server:
+  - **This Mac only** (`127.0.0.1:<PORT>`) — only apps on this Mac.
+  - **Local network** (`0.0.0.0:<PORT>`) — devices on the same Wi‑Fi (adds LAN
+    endpoints).
+  - **Custom** — advanced host/port.
+  Changing this shows **Restart required**; use **Save & Restart**. *(Remote
+  access via Cloudflare Tunnel works even with “This Mac only”, because
+  cloudflared runs on this Mac.)*
+- **Connection Endpoints** — three sections, **Local / loopback**,
+  **LAN / same Wi‑Fi**, and **Public / remote**, each with copy buttons. The
+  Public section is where you paste and validate your remote URL.
+- **Client Setup** (Pair Android) — pick an endpoint (Auto / Local / LAN /
+  Public), then **Show QR code** or **Copy setup JSON** to pair a phone. The
+  **bearer token** is shown masked with a Reveal/Copy action.
 
 > ⚠️ **Keep your token private.** The bearer token is effectively a password.
-> Do not paste it into screenshots, public logs, bug reports, or chats. If it
-> ever leaks, create a new token in the Mac app and reconnect your devices.
+> It stays masked by default — only reveal it when no one is watching, and never
+> paste it into screenshots, logs, bug reports, or chats. If it leaks, generate a
+> new token and re‑pair your devices.
 
 ## First connection options
 
@@ -54,8 +66,8 @@ Open the MicaGo Mac app and find the connection details. You will need:
 - **LAN / same Wi‑Fi** — `http://<Mac-LAN-IP>:<PORT>`. Use this from a phone or
   laptop on the same network. Find `<Mac-LAN-IP>` in the Mac app's connection
   list, or in macOS System Settings → Network.
-- **Public / remote domain** — `https://go.example.com`. Use this from mobile
-  data or any outside network after you complete the Cloudflare guide.
+- **Public / remote domain** — `https://micago.example.com`. Use this from
+  mobile data or any outside network after you complete the Cloudflare guide.
 
 ## Recommended path
 
@@ -67,9 +79,12 @@ Test connections in this order — each step builds on the previous one:
    `http://<Mac-LAN-IP>:<PORT>` and confirm the token is accepted.
 3. **Set up a remote URL** (optional). Follow
    [Remote Access with Cloudflare Tunnel](remote-access-cloudflare.md) to get
-   `https://go.example.com`, then enter it in the Mac app and validate it.
-4. **Connect the Android client.** Enter the server URL and token in the app and
-   tap **Test connection**. See
+   `https://micago.example.com`, then in **Connection Endpoints → Public /
+   remote** paste the URL, **Save**, and click **Validate Public URL**. When it
+   reads **Reachable**, Public is ready for pairing.
+4. **Pair the Android client.** In **Client Setup**, choose the endpoint
+   (**Auto** picks Public when reachable, else LAN, else Local), then **Show QR
+   code** and scan it from the Android app — or **Copy setup JSON**. See
    [Android Client Connection](android-client-connection.md).
 5. **Verify the WebSocket.** In the Android app, confirm the realtime connection
    shows **Connected** and that the debug panel lists incoming events.

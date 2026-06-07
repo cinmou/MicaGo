@@ -47,6 +47,11 @@ final class BackendController: ObservableObject {
     // v0.11.2.1: hide the Dock icon while running menu-bar-only (no window open).
     // Persistence only — activation policy is applied centrally (applyActivationPolicy()).
     @Published var hideDockIcon: Bool { didSet { defaults.set(hideDockIcon, forKey: K.hideDockIcon) } }
+    // Bind address for the companion-launched server, passed as `--addr host:port`.
+    // Empty = let the server use its own config/default (127.0.0.1:3000). This
+    // only affects the server the companion launches; it does not rewrite
+    // config.yaml or touch an external server.
+    @Published var bindAddress: String { didSet { defaults.set(bindAddress, forKey: K.bindAddress) } }
 
     private var process: Process?
     private var intentionalStop = false
@@ -65,6 +70,7 @@ final class BackendController: ObservableObject {
         static let autoRestart = "autoRestartServer"
         static let launchHidden = "launchHidden"
         static let hideDockIcon = "hideDockIcon"
+        static let bindAddress = "serverBindAddress"
     }
 
     init() {
@@ -73,6 +79,7 @@ final class BackendController: ObservableObject {
         autoRestart = defaults.bool(forKey: K.autoRestart)
         launchHidden = defaults.bool(forKey: K.launchHidden)
         hideDockIcon = defaults.bool(forKey: K.hideDockIcon)
+        bindAddress = defaults.string(forKey: K.bindAddress) ?? ""
         refreshInstalledState()
     }
 
@@ -139,6 +146,10 @@ final class BackendController: ObservableObject {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: resolved.path)
+        let addr = bindAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !addr.isEmpty {
+            proc.arguments = ["--addr", addr]
+        }
 
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -161,7 +172,8 @@ final class BackendController: ObservableObject {
             try proc.run()
             process = proc
             processState = .running
-            appendLog("started backend (\(resolved.source)): \(resolved.path)")
+            let addrNote = addr.isEmpty ? "" : " --addr \(addr)"
+            appendLog("started backend (\(resolved.source)): \(resolved.path)\(addrNote)")
             scheduleHealthyReset()
         } catch {
             process = nil

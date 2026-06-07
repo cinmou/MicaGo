@@ -26,6 +26,12 @@ final class AppModel: ObservableObject {
     /// not a global mode). Stored by baseUrl.
     @Published var selectedPairingBaseURL: String = ""
 
+    /// LAN base URLs the user has hidden from pairing/QR selection. This is a
+    /// UI/pairing filter only — it does not change server networking; the
+    /// endpoints remain present in `GET /api/server/urls`.
+    @Published var hiddenLANBaseURLs: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "hiddenLANEndpoints") ?? [])
+
     private var pollTask: Task<Void, Never>?
     private let pollInterval: UInt64 = 3 * 1_000_000_000 // 3s
     private var didSeedPublicInput = false
@@ -69,7 +75,7 @@ final class AppModel: ObservableObject {
         for e in urls.local {
             targets.append(PairingTarget(scope: .local, label: "Local · \(e.label)", baseUrl: e.baseUrl, wsUrl: e.wsUrl))
         }
-        for e in urls.lan {
+        for e in urls.lan where !hiddenLANBaseURLs.contains(e.baseUrl) {
             targets.append(PairingTarget(scope: .lan, label: "LAN · \(e.baseUrl)", baseUrl: e.baseUrl, wsUrl: e.wsUrl))
         }
         if urls.public.enabled {
@@ -94,6 +100,44 @@ final class AppModel: ObservableObject {
             .replacingOccurrences(of: "\"", with: "")
         let escapedToken = token.replacingOccurrences(of: "\"", with: "")
         return "{\"baseUrl\":\"\(base)\",\"websocketUrl\":\"\(ws)\",\"token\":\"\(escapedToken)\"}"
+    }
+
+    /// Same payload as the QR/setup JSON, but with the token redacted — safe to
+    /// show in the UI or copy into a bug report.
+    var pairingPayloadRedacted: String {
+        let target = selectedPairingTarget
+        let base = (target?.baseUrl ?? status?.address.baseUrl ?? baseURL?.absoluteString ?? "")
+            .replacingOccurrences(of: "\"", with: "")
+        let ws = (target?.wsUrl ?? status?.address.websocketUrl ?? "")
+            .replacingOccurrences(of: "\"", with: "")
+        return "{\"baseUrl\":\"\(base)\",\"websocketUrl\":\"\(ws)\",\"token\":\"<redacted>\"}"
+    }
+
+    // MARK: - Hidden LAN endpoints (pairing filter only)
+
+    func isLANHidden(_ baseUrl: String) -> Bool { hiddenLANBaseURLs.contains(baseUrl) }
+
+    func setLANHidden(_ baseUrl: String, hidden: Bool) {
+        if hidden { hiddenLANBaseURLs.insert(baseUrl) } else { hiddenLANBaseURLs.remove(baseUrl) }
+        persistHiddenLAN()
+        ensureValidPairingSelection()
+    }
+
+    func resetHiddenLANEndpoints() {
+        hiddenLANBaseURLs.removeAll()
+        persistHiddenLAN()
+    }
+
+    private func persistHiddenLAN() {
+        UserDefaults.standard.set(Array(hiddenLANBaseURLs), forKey: "hiddenLANEndpoints")
+    }
+
+    /// Keep selectedPairingBaseURL valid if the chosen endpoint was just hidden.
+    private func ensureValidPairingSelection() {
+        let targets = pairingTargets
+        if !targets.contains(where: { $0.baseUrl == selectedPairingBaseURL }) {
+            selectedPairingBaseURL = targets.first?.baseUrl ?? ""
+        }
     }
 
     func reloadConfig() {
