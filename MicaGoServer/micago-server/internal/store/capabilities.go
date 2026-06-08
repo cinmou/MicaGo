@@ -55,6 +55,15 @@ func ProbeCapabilities(ctx context.Context, db *sql.DB) (SchemaCapabilities, err
 	}, nil
 }
 
+// ProbeMessageColumns returns the set of column names present on the chat.db
+// `message` table. The debug message inspector uses this to select
+// version-sensitive iMessage columns (associated_message_type, item_type,
+// balloon_bundle_id, …) only when they exist, degrading gracefully on older
+// schemas instead of failing the query. A missing table yields an empty set.
+func ProbeMessageColumns(ctx context.Context, db *sql.DB) (map[string]bool, error) {
+	return tableColumns(ctx, db, "message")
+}
+
 // tableColumns returns the set of column names for a table via
 // PRAGMA table_info. A non-existent table returns an empty set with no error.
 func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {

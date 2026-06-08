@@ -5,6 +5,7 @@ import 'core/app_controller.dart';
 import 'core/storage/secure_store.dart';
 import 'core/theme_controller.dart';
 import 'features/contacts/contacts_service.dart';
+import 'features/settings/message_display_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -13,10 +14,17 @@ Future<void> main() async {
   final controller = AppController(store: store);
   final contacts = ContactsService(store: store);
   final theme = ThemeController(store: store);
+  final messageDisplay = MessageDisplayController(store: store);
 
   await controller.bootstrap();
   await contacts.bootstrap();
   await theme.bootstrap();
+  await messageDisplay.bootstrap();
 
-  runApp(MicaGoApp(controller: controller, contacts: contacts, theme: theme));
+  runApp(MicaGoApp(
+    controller: controller,
+    contacts: contacts,
+    theme: theme,
+    messageDisplay: messageDisplay,
+  ));
 }

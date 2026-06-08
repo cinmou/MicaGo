@@ -10,6 +10,7 @@ struct MicaGoCompanionApp: App {
     @StateObject private var runtime = RuntimeMonitor.shared
     @StateObject private var backend = BackendController.shared
     @StateObject private var contacts = ContactsStore()
+    @StateObject private var tunnel = TunnelController.shared
 
     var body: some Scene {
         WindowGroup(id: "dashboard") {
@@ -18,6 +19,7 @@ struct MicaGoCompanionApp: App {
                 .environmentObject(runtime)
                 .environmentObject(backend)
                 .environmentObject(contacts)
+                .environmentObject(tunnel)
         }
         .defaultSize(width: 1000, height: 720)
         .defaultPosition(.center)
@@ -100,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         BackendController.shared.shutdownForQuit()
+        TunnelController.shared.shutdownForQuit()
     }
 
     // Keep the app (and menu bar) alive when the Dashboard window closes.

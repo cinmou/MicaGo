@@ -16,6 +16,7 @@ func NewRouter(h *Handlers, hub *realtime.Hub, auth AuthConfig) http.Handler {
 	mux.Handle("POST /api/server/public-url/check", auth.Wrap(http.HandlerFunc(h.CheckPublicURL)))
 	mux.Handle("POST /api/auth/check", auth.Wrap(http.HandlerFunc(h.CheckAuth)))
 	mux.Handle("GET /api/messages/recent", auth.Wrap(http.HandlerFunc(h.GetRecentMessages)))
+	mux.Handle("GET /api/debug/recent-messages", auth.Wrap(http.HandlerFunc(h.GetDebugRecentMessages)))
 	mux.Handle("GET /api/chats", auth.Wrap(http.HandlerFunc(h.GetChats)))
 	mux.Handle("GET /api/chats/{guid}/messages", auth.Wrap(http.HandlerFunc(h.GetChatMessages)))
 	mux.Handle("POST /api/chats/{guid}/send", auth.Wrap(http.HandlerFunc(h.SendText)))

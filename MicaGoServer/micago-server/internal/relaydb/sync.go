@@ -216,8 +216,10 @@ func upsertMessagesTx(tx *sql.Tx, messages []store.SyncMessageRow, createdAt int
 	stmt, err := tx.Prepare(`
 INSERT INTO messages (
 	guid, chat_guid, source_rowid, text, subject, service, date_created, date_read, date_delivered,
-	is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments, created_at,
+	associated_message_type, associated_message_guid, thread_originator_guid, item_type,
+	group_action_type, group_title, balloon_bundle_id, expressive_send_style_id, payload_data_present
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(guid) DO UPDATE SET
 	chat_guid = excluded.chat_guid,
 	source_rowid = excluded.source_rowid,
@@ -232,7 +234,16 @@ ON CONFLICT(guid) DO UPDATE SET
 	is_delivered = excluded.is_delivered,
 	handle_id = excluded.handle_id,
 	handle_service = excluded.handle_service,
-	cache_has_attachments = excluded.cache_has_attachments;
+	cache_has_attachments = excluded.cache_has_attachments,
+	associated_message_type = excluded.associated_message_type,
+	associated_message_guid = excluded.associated_message_guid,
+	thread_originator_guid = excluded.thread_originator_guid,
+	item_type = excluded.item_type,
+	group_action_type = excluded.group_action_type,
+	group_title = excluded.group_title,
+	balloon_bundle_id = excluded.balloon_bundle_id,
+	expressive_send_style_id = excluded.expressive_send_style_id,
+	payload_data_present = excluded.payload_data_present;
 `)
 	if err != nil {
 		return nil, err
@@ -264,6 +275,15 @@ ON CONFLICT(guid) DO UPDATE SET
 			message.HandleService,
 			boolToInt(message.CacheHasAttachments),
 			createdAt,
+			message.AssociatedMessageType,
+			message.AssociatedMessageGUID,
+			message.ThreadOriginatorGUID,
+			message.ItemType,
+			message.GroupActionType,
+			message.GroupTitle,
+			message.BalloonBundleID,
+			message.ExpressiveSendStyleID,
+			boolToInt(message.PayloadDataPresent),
 		); err != nil {
 			return nil, err
 		}

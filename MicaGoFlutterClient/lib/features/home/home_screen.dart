@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
-import '../chats/chat_list_screen.dart';
-import '../contacts/people_screen.dart';
+import '../chats/chats_pane.dart';
 import '../settings/settings_screen.dart';
-import 'connection_status_view.dart';
 
 /// The post-pairing app shell: a native Material 3 messenger layout with an
-/// adaptive bottom NavigationBar (narrow) / side NavigationRail (wide). Tabs:
-/// Chats, People, Connection, Settings. People is a placeholder for C1.
+/// adaptive bottom NavigationBar (narrow) / side NavigationRail (wide).
+///
+/// Lean nav (Mategram-style): only **Chats** and **Settings**. People /
+/// Connection / Diagnostics / Debug all live inside Settings now.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -22,8 +22,6 @@ class _HomeShellState extends State<HomeShell> {
 
   static const _destinations = <_Destination>[
     _Destination('Chats', Icons.chat_bubble_outline, Icons.chat_bubble),
-    _Destination('People', Icons.people_outline, Icons.people),
-    _Destination('Connection', Icons.lan_outlined, Icons.lan),
     _Destination('Settings', Icons.settings_outlined, Icons.settings),
   ];
 
@@ -41,12 +39,8 @@ class _HomeShellState extends State<HomeShell> {
   Widget _body(int index) {
     switch (index) {
       case 0:
-        return const ChatListScreen();
+        return const ChatsPane();
       case 1:
-        return const PeopleScreen();
-      case 2:
-        return const ConnectionStatusView();
-      case 3:
         return const SettingsScreen();
       default:
         return const SizedBox.shrink();

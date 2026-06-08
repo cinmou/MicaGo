@@ -94,6 +94,28 @@ class MessageModel {
   final List<ReactionModel> reactions;
   final String? replyToGuid;
 
+  // iMessage compatibility fields (BlueBubbles-compatible). Parsed when the
+  // server exposes them. See docs/bluebubbles-compatibility-notes.md.
+  final String? chatGuid; // owning chat (also on WS events for routing)
+  final int? associatedMessageType; // tapback code: 2000-2005 add / 3000-3005 remove
+  final String? associatedMessageGuid; // tapback target (p:/bp: prefixed)
+  final String? threadOriginatorGuid; // reply target message guid
+  final int itemType; // 0 = normal; >0 = service/group event
+  final int groupActionType;
+  final String? groupTitle;
+  final String? balloonBundleId; // interactive app / effect balloon
+  final String? expressiveSendStyleId; // message send effect
+  final bool payloadDataPresent;
+  final int errorCode; // >0 = send failed (server-side)
+  final int? dateRetracted; // unsent timestamp (Unix ms)
+  final int? dateEdited; // edited timestamp (Unix ms)
+  final bool isRetracted;
+  final bool isEdited;
+
+  /// The original server JSON for this message — **debug only**. Never rendered
+  /// as content; surfaced (redacted) in the Message Debug inspector.
+  final Map<String, dynamic>? raw;
+
   // Local-only (optimistic send):
   final String? tempId;
   final LocalSendState localState;
@@ -115,6 +137,22 @@ class MessageModel {
     this.attachments = const [],
     this.reactions = const [],
     this.replyToGuid,
+    this.chatGuid,
+    this.associatedMessageType,
+    this.associatedMessageGuid,
+    this.threadOriginatorGuid,
+    this.itemType = 0,
+    this.groupActionType = 0,
+    this.groupTitle,
+    this.balloonBundleId,
+    this.expressiveSendStyleId,
+    this.payloadDataPresent = false,
+    this.errorCode = 0,
+    this.dateRetracted,
+    this.dateEdited,
+    this.isRetracted = false,
+    this.isEdited = false,
+    this.raw,
     this.tempId,
     this.localState = LocalSendState.none,
   });
@@ -148,6 +186,22 @@ class MessageModel {
       attachments: attachments,
       reactions: reactions,
       replyToGuid: replyToGuid,
+      chatGuid: chatGuid,
+      associatedMessageType: associatedMessageType,
+      associatedMessageGuid: associatedMessageGuid,
+      threadOriginatorGuid: threadOriginatorGuid,
+      itemType: itemType,
+      groupActionType: groupActionType,
+      groupTitle: groupTitle,
+      balloonBundleId: balloonBundleId,
+      expressiveSendStyleId: expressiveSendStyleId,
+      payloadDataPresent: payloadDataPresent,
+      errorCode: errorCode,
+      dateRetracted: dateRetracted,
+      dateEdited: dateEdited,
+      isRetracted: isRetracted,
+      isEdited: isEdited,
+      raw: raw,
       tempId: tempId,
       localState: localState ?? this.localState,
     );
@@ -177,6 +231,22 @@ class MessageModel {
           handle is Map<String, dynamic> ? handle['service'] as String? : null,
       cacheHasAttachments: (json['cacheHasAttachments'] as bool?) ?? false,
       attachments: atts,
+      chatGuid: json['chatGuid'] as String?,
+      associatedMessageType: asInt(json['associatedMessageType']),
+      associatedMessageGuid: json['associatedMessageGuid'] as String?,
+      threadOriginatorGuid: json['threadOriginatorGuid'] as String?,
+      itemType: asInt(json['itemType']) ?? 0,
+      groupActionType: asInt(json['groupActionType']) ?? 0,
+      groupTitle: json['groupTitle'] as String?,
+      balloonBundleId: json['balloonBundleId'] as String?,
+      expressiveSendStyleId: json['expressiveSendStyleId'] as String?,
+      payloadDataPresent: (json['payloadDataPresent'] as bool?) ?? false,
+      errorCode: asInt(json['error']) ?? 0,
+      dateRetracted: asInt(json['dateRetracted']),
+      dateEdited: asInt(json['dateEdited']),
+      isRetracted: (json['isRetracted'] as bool?) ?? false,
+      isEdited: (json['isEdited'] as bool?) ?? false,
+      raw: json,
       localState: LocalSendState.confirmed,
     );
   }

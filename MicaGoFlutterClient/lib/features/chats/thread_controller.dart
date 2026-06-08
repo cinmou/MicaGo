@@ -23,6 +23,8 @@ class ThreadController extends ChangeNotifier {
 
   ThreadController({required this.app, required this.chatGuid});
 
+  static const int _pageSize = 50;
+
   ThreadState state = ThreadState.loading;
   String? error;
 
@@ -30,11 +32,18 @@ class ThreadController extends ChangeNotifier {
   final List<MessageModel> _server = [];
   // Optimistic outgoing messages (pending/failed), keyed by tempId.
   final List<MessageModel> _locals = [];
+  final Set<String> _serverGuids = {};
+
+  /// Older-message pagination (server has no cursor → limit/offset).
+  int _offset = 0;
+  bool hasMore = true;
+  bool loadingOlder = false;
 
   StreamSubscription<WsEvent>? _wsSub;
   Timer? _reloadDebounce;
 
   /// Display list: server history followed by not-yet-confirmed local sends.
+  /// Chronological (oldest → newest); the thread view renders it reversed.
   List<MessageModel> get messages => [..._server, ..._locals];
 
   void start() {
@@ -42,6 +51,7 @@ class ThreadController extends ChangeNotifier {
     load();
   }
 
+  /// Loads (or reloads) the newest page. Resets pagination.
   Future<void> load({bool showSpinner = true}) async {
     final api = app.api;
     if (api == null) {
@@ -56,14 +66,18 @@ class ThreadController extends ChangeNotifier {
       notifyListeners();
     }
     try {
-      final fetched = await api.getMessages(chatGuid, limit: 50);
+      final fetched = await api.getMessages(chatGuid, limit: _pageSize, offset: 0);
       // Server returns newest-first; reverse to chronological (oldest → newest).
-      _server
-        ..clear()
-        ..addAll(fetched.reversed);
-      // Drop any local message that the server now reports (matched by guid).
+      _server.clear();
+      _serverGuids.clear();
+      for (final m in fetched.reversed) {
+        if (m.guid.isEmpty || _serverGuids.add(m.guid)) _server.add(m);
+      }
+      _offset = fetched.length;
+      hasMore = fetched.length >= _pageSize;
+      // Drop any local message the server now reports (matched by guid).
       _locals.removeWhere((l) =>
-          l.guid.isNotEmpty && _server.any((s) => s.guid == l.guid));
+          l.guid.isNotEmpty && _serverGuids.contains(l.guid));
       state = (_server.isEmpty && _locals.isEmpty)
           ? ThreadState.empty
           : ThreadState.loaded;
@@ -72,6 +86,34 @@ class ThreadController extends ChangeNotifier {
       state = ThreadState.error;
       error = _humanize(e);
     }
+    notifyListeners();
+  }
+
+  /// Loads the next older page and **prepends** it, deduping by GUID. The thread
+  /// view uses a reversed list, so prepending older history does not shift the
+  /// visible viewport (scroll position is preserved).
+  Future<void> loadOlder() async {
+    if (loadingOlder || !hasMore) return;
+    final api = app.api;
+    if (api == null) return;
+    loadingOlder = true;
+    notifyListeners();
+    try {
+      final fetched =
+          await api.getMessages(chatGuid, limit: _pageSize, offset: _offset);
+      // Older batch, chronological, deduped, prepended at the front.
+      final older = <MessageModel>[];
+      for (final m in fetched.reversed) {
+        if (m.guid.isEmpty || _serverGuids.add(m.guid)) older.add(m);
+      }
+      _server.insertAll(0, older);
+      _offset += fetched.length;
+      hasMore = fetched.length >= _pageSize;
+    } on ApiException {
+      // Keep what we have; a transient failure shouldn't break the thread.
+      // hasMore stays true so the user can retry by scrolling up again.
+    }
+    loadingOlder = false;
     notifyListeners();
   }
 
@@ -115,8 +157,7 @@ class ThreadController extends ChangeNotifier {
 
   void _confirmLocal(String tempId, MessageModel confirmed) {
     _locals.removeWhere((m) => m.tempId == tempId);
-    if (confirmed.guid.isEmpty ||
-        !_server.any((s) => s.guid == confirmed.guid)) {
+    if (confirmed.guid.isEmpty || _serverGuids.add(confirmed.guid)) {
       _server.add(confirmed);
     }
     state = ThreadState.loaded;

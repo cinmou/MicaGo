@@ -44,12 +44,17 @@ class ContactIdentity {
 class ContactIndex {
   final Map<String, String> _byEmail;
   final Map<String, String> _byPhone;
+  final Map<String, String> _idByEmail;
+  final Map<String, String> _idByPhone;
 
-  const ContactIndex._(this._byEmail, this._byPhone);
+  const ContactIndex._(
+      this._byEmail, this._byPhone, this._idByEmail, this._idByPhone);
 
   const ContactIndex.empty()
       : _byEmail = const {},
-        _byPhone = const {};
+        _byPhone = const {},
+        _idByEmail = const {},
+        _idByPhone = const {};
 
   int get contactCount => _byEmail.length + _byPhone.length;
   bool get isEmpty => _byEmail.isEmpty && _byPhone.isEmpty;
@@ -57,19 +62,27 @@ class ContactIndex {
   factory ContactIndex.fromContacts(Iterable<ContactIdentity> contacts) {
     final byEmail = <String, String>{};
     final byPhone = <String, String>{};
+    final idByEmail = <String, String>{};
+    final idByPhone = <String, String>{};
     for (final c in contacts) {
       final name = c.displayName.trim();
       if (name.isEmpty) continue;
       for (final e in c.emails) {
         final key = normalizeEmail(e);
-        if (key.isNotEmpty) byEmail.putIfAbsent(key, () => name);
+        if (key.isNotEmpty) {
+          byEmail.putIfAbsent(key, () => name);
+          if (c.id.isNotEmpty) idByEmail.putIfAbsent(key, () => c.id);
+        }
       }
       for (final p in c.phones) {
         final key = normalizePhone(p);
-        if (key.isNotEmpty) byPhone.putIfAbsent(key, () => name);
+        if (key.isNotEmpty) {
+          byPhone.putIfAbsent(key, () => name);
+          if (c.id.isNotEmpty) idByPhone.putIfAbsent(key, () => c.id);
+        }
       }
     }
-    return ContactIndex._(byEmail, byPhone);
+    return ContactIndex._(byEmail, byPhone, idByEmail, idByPhone);
   }
 
   /// Returns the local display name for a chat identifier/handle, or null if
@@ -83,5 +96,16 @@ class ContactIndex {
     final key = normalizePhone(h);
     if (key.isEmpty) return null;
     return _byPhone[key];
+  }
+
+  /// Returns the local contact id for a handle (used to lazily fetch a
+  /// thumbnail by id), or null when unmatched.
+  String? contactIdFor(String? handle) {
+    final h = handle?.trim() ?? '';
+    if (h.isEmpty) return null;
+    if (isEmailHandle(h)) return _idByEmail[normalizeEmail(h)];
+    final key = normalizePhone(h);
+    if (key.isEmpty) return null;
+    return _idByPhone[key];
   }
 }

@@ -46,6 +46,26 @@ type MessageJSON struct {
 	Handle              *HandleJSON      `json:"handle"`
 	CacheHasAttachments bool             `json:"cacheHasAttachments"`
 	Attachments         []AttachmentJSON `json:"attachments"`
+
+	// BlueBubbles-compatible semantic fields (v0.13). All additive and optional:
+	// pointers omit when absent so pre-existing clients see an unchanged payload.
+	// See docs/bluebubbles-compatibility-notes.md.
+	ChatGUID              *string `json:"chatGuid,omitempty"`
+	AssociatedMessageType *int64  `json:"associatedMessageType,omitempty"` // reaction code (2000-2005 add / 3000-3005 remove)
+	AssociatedMessageGUID *string `json:"associatedMessageGuid,omitempty"` // tapback target (p:/bp: prefixed)
+	ThreadOriginatorGUID  *string `json:"threadOriginatorGuid,omitempty"`  // reply target
+	ItemType              *int64  `json:"itemType,omitempty"`
+	GroupActionType       *int64  `json:"groupActionType,omitempty"`
+	GroupTitle            *string `json:"groupTitle,omitempty"`
+	BalloonBundleID       *string `json:"balloonBundleId,omitempty"`
+	ExpressiveSendStyleID *string `json:"expressiveSendStyleId,omitempty"`
+	Error                 *int64  `json:"error,omitempty"`
+	DateRetracted         *int64  `json:"dateRetracted,omitempty"`
+	DateEdited            *int64  `json:"dateEdited,omitempty"`
+	// Always-present additive booleans (old clients ignore unknown keys).
+	PayloadDataPresent bool `json:"payloadDataPresent"`
+	IsRetracted        bool `json:"isRetracted"`
+	IsEdited           bool `json:"isEdited"`
 }
 
 type ListMeta struct {
@@ -114,6 +134,18 @@ type SyncMessageRow struct {
 	HandleID            *string
 	HandleService       *string
 	CacheHasAttachments bool
+
+	// BlueBubbles-compatible semantic fields carried chat.db → relay (v0.13).
+	// Populated only when the corresponding chat.db column exists.
+	AssociatedMessageType *int64
+	AssociatedMessageGUID *string
+	ThreadOriginatorGUID  *string
+	ItemType              *int64
+	GroupActionType       *int64
+	GroupTitle            *string
+	BalloonBundleID       *string
+	ExpressiveSendStyleID *string
+	PayloadDataPresent    bool
 }
 
 // MessageUpdateRow is a chat.db row fetched by the v0.11.x lookback update pass.

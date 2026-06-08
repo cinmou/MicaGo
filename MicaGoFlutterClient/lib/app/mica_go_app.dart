@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../core/app_controller.dart';
 import '../core/theme_controller.dart';
 import '../features/contacts/contacts_service.dart';
+import '../features/settings/message_display_controller.dart';
 import 'router.dart';
 import 'theme.dart';
 
@@ -16,12 +17,14 @@ class MicaGoApp extends StatefulWidget {
   final AppController controller;
   final ContactsService contacts;
   final ThemeController theme;
+  final MessageDisplayController messageDisplay;
 
   const MicaGoApp({
     super.key,
     required this.controller,
     required this.contacts,
     required this.theme,
+    required this.messageDisplay,
   });
 
   @override
@@ -38,6 +41,8 @@ class _MicaGoAppState extends State<MicaGoApp> {
         ChangeNotifierProvider<AppController>.value(value: widget.controller),
         ChangeNotifierProvider<ContactsService>.value(value: widget.contacts),
         ChangeNotifierProvider<ThemeController>.value(value: widget.theme),
+        ChangeNotifierProvider<MessageDisplayController>.value(
+            value: widget.messageDisplay),
       ],
       child: Consumer<ThemeController>(
         builder: (context, theme, _) {

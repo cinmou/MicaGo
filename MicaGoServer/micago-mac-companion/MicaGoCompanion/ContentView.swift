@@ -5,7 +5,7 @@ import AppKit
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     // Devices + Permissions moved into the Dashboard (no longer separate items).
-    case dashboard, connections, syncControl, notifications, server, logs, tutorials, advanced
+    case dashboard, connections, syncControl, messageInspector, notifications, server, logs, tutorials, advanced
 
     var id: String { rawValue }
 
@@ -14,6 +14,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .dashboard: return "Dashboard"
         case .connections: return "Connections"
         case .syncControl: return "Sync Control"
+        case .messageInspector: return "Message Inspector"
         case .notifications: return "Notifications"
         case .server: return "Server"
         case .logs: return "Logs"
@@ -27,6 +28,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .dashboard: return "gauge.with.dots.needle.bottom.50percent"
         case .connections: return "network"
         case .syncControl: return "line.3.horizontal.decrease.circle"
+        case .messageInspector: return "ladybug"
         case .notifications: return "bell"
         case .server: return "server.rack"
         case .logs: return "text.alignleft"
@@ -89,6 +91,7 @@ struct ContentView: View {
         case .dashboard: DashboardPage()
         case .connections: ConnectionsPage()
         case .syncControl: SyncControlPage()
+        case .messageInspector: MessageInspectorPage()
         case .notifications: NotificationsPage()
         case .server: ServerPage()
         case .logs: LogsPage()
@@ -269,6 +272,8 @@ private struct DashboardPage: View {
                 .font(.caption2).foregroundStyle(.secondary)
         }
 
+        RemoteTunnelCard()
+
         // Pairing lives on the Dashboard now (the main place to set up a client).
         ClientSetupSection()
 
@@ -307,6 +312,110 @@ private struct DashboardPage: View {
         if seconds < 60 { return "\(seconds)s" }
         if seconds < 3600 { return "\(seconds / 60)m" }
         return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+    }
+}
+
+// MARK: - Dashboard: Remote Tunnel card
+
+private struct RemoteTunnelCard: View {
+    @EnvironmentObject var tunnel: TunnelController
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        SectionCard(title: "Remote Tunnel") {
+            HStack(spacing: 10) {
+                tunnelStatusChip
+                Spacer()
+                Button { tunnel.refreshDiscovery() } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }.buttonStyle(.borderless).help("Re-check cloudflared/config")
+            }
+
+            LabeledRow(label: "cloudflared", value: tunnel.installed ? "installed" : "not found")
+            LabeledRow(label: "Config", value: tunnel.configFound ? "found (~/.cloudflared/config.yml)" : "not found")
+            LabeledRow(label: "Tunnel", value: tunnel.tunnelName)
+            if !tunnel.publicURL.isEmpty {
+                CopyableRow(label: "Public URL", value: tunnel.publicURL)
+            }
+            if let err = tunnel.lastError {
+                Text(err).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !tunnel.installed {
+                Text("Install cloudflared and configure a tunnel to use remote access. MicaGo only runs an existing local tunnel — it never logs into Cloudflare or creates tunnels.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !tunnel.configFound {
+                Text("No ~/.cloudflared/config.yml found. Create your tunnel config first (see docs/remote-access-cloudflare.md).")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 12) {
+                Button { tunnel.start() } label: { Label("Start", systemImage: "play.fill") }
+                    .disabled(!tunnel.installed || !tunnel.configFound || tunnel.isProcessAlive || tunnel.state == .runningExternally)
+                Button { tunnel.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                    .disabled(!tunnel.isProcessAlive)
+                Button { tunnel.restart() } label: { Label("Restart", systemImage: "arrow.clockwise") }
+                    .disabled(!tunnel.installed || !tunnel.configFound)
+                Spacer()
+                Button("Validate Public URL") { Task { await model.validatePublicURL() } }
+                    .disabled(model.publicBusy || (model.urls?.public.enabled != true))
+                if model.publicBusy { ProgressView().controlSize(.small) }
+            }
+
+            if let v = validationText {
+                Label(v.text, systemImage: v.ok ? "checkmark.circle" : "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(v.ok ? .green : .orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
+            Toggle("Start tunnel with MicaGoServer", isOn: $tunnel.startWithServer)
+                .font(.caption)
+            Toggle("Stop tunnel when the server stops", isOn: $tunnel.stopWithServer)
+                .font(.caption)
+            Text("When enabled, starting the server also starts this tunnel once the server is healthy. If the tunnel fails, the server keeps running.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var tunnelStatusChip: some View {
+        let (color, label): (Color, String) = {
+            switch tunnel.state {
+            case .stopped: return (.secondary, "Stopped")
+            case .starting: return (.orange, "Starting…")
+            case .running: return (.green, "Running")
+            case .failed: return (.red, "Failed")
+            case .runningExternally: return (.blue, "Running externally")
+            case .unknown: return (.secondary, "Unknown")
+            }
+        }()
+        return HStack(spacing: 8) {
+            Circle().fill(color).frame(width: 10, height: 10)
+            Text(label).font(.headline)
+        }
+    }
+
+    /// Plain-language result of the last public-URL validation, mapping the
+    /// tunnel-specific statuses (530 / 502 / 401). Never shows the token.
+    private var validationText: (text: String, ok: Bool)? {
+        guard let r = model.publicCheckResult else { return nil }
+        if r.ok { return ("Remote access is ready.", true) }
+        if !r.reachable { return ("Cloudflare is configured, but no tunnel connector is running.", false) }
+        switch r.status {
+        case 530:
+            return ("Cloudflare is configured, but no tunnel connector is running.", false)
+        case 502, 503, 504:
+            return ("Tunnel is running, but MicaGoServer is not reachable on this Mac.", false)
+        case 401, 403:
+            return ("The URL reached a server, but the token was rejected.", false)
+        default:
+            return (r.message.isEmpty ? "Validation failed (HTTP \(r.status))." : r.message, false)
+        }
     }
 }
 

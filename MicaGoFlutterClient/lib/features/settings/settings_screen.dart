@@ -5,6 +5,11 @@ import 'package:provider/provider.dart';
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
 import '../../core/theme_controller.dart';
+import '../contacts/people_screen.dart';
+import '../debug/debug_log_panel.dart';
+import '../home/connection_status_view.dart';
+import 'diagnostics_page.dart';
+import 'message_display_page.dart';
 
 /// Settings tab: shows the current connection (token masked), and lets the user
 /// edit the connection or disconnect. Kept minimal for C1.
@@ -31,6 +36,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Text('Appearance', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
         _AppearanceCard(theme: theme),
+        const SizedBox(height: 20),
+        Text('More', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.contacts_outlined),
+                title: const Text('Contacts matching'),
+                subtitle: const Text('Use local contacts to show names'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _push(context, 'Contacts', const PeopleScreen()),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.lan_outlined),
+                title: const Text('Connection diagnostics'),
+                subtitle: const Text('REST/WebSocket status & endpoints'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () =>
+                    _push(context, 'Connection', const ConnectionStatusView()),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline),
+                title: const Text('Message display'),
+                subtitle:
+                    const Text('Reactions, replies, effects, hide/merge rows'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _push(
+                    context, 'Message Display', const MessageDisplayPage()),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.insights_outlined),
+                title: const Text('Message compatibility diagnostics'),
+                subtitle:
+                    const Text('Why messages render as unsupported'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _push(
+                    context, 'Message Diagnostics', const DiagnosticsPage()),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.terminal),
+                title: const Text('Debug — realtime events'),
+                subtitle: const Text('Recent WebSocket event log'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _push(
+                    context,
+                    'Debug',
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: DebugLogPanel(
+                          ws: context.read<AppController>().ws),
+                    )),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('About'),
+                subtitle: const Text('MicaGo Android client'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _push(context, 'About', const _AboutBody()),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 20),
         Text('Connection', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
@@ -97,6 +170,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_revealToken) return token;
     final head = token.length <= 4 ? token : token.substring(0, 4);
     return '$head••••••••';
+  }
+
+  /// Pushes a Settings sub-page wrapped in its own Scaffold (title + back).
+  void _push(BuildContext context, String title, Widget body) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: SafeArea(child: body),
+        ),
+      ),
+    );
   }
 
   Future<void> _confirmDisconnect(BuildContext context, AppController app) async {
@@ -247,4 +332,42 @@ class _AppearanceCard extends StatelessWidget {
 /// importing the app theme here.
 class MicaGoThemeSeed {
   static const Color value = Color(0xFF5B6CFF);
+}
+
+class _AboutBody extends StatelessWidget {
+  const _AboutBody();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const ListTile(
+          leading: Icon(Icons.bolt),
+          title: Text('MicaGo'),
+          subtitle: Text('Android client for your own MicaGo relay server.'),
+        ),
+        const ListTile(
+          leading: Icon(Icons.lock_outline),
+          title: Text('Privacy'),
+          subtitle: Text(
+              'Your messages stay between your Mac and your devices. There is '
+              'no MicaGo cloud. Contacts are matched locally and never uploaded.'),
+        ),
+        const ListTile(
+          leading: Icon(Icons.science_outlined),
+          title: Text('Status'),
+          subtitle: Text('Pre-release. Text + media display; sending text only.'),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'Documentation site and links will appear here when MicaGo is '
+            'published.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      ],
+    );
+  }
 }

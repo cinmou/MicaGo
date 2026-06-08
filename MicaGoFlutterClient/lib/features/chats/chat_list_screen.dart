@@ -3,14 +3,19 @@ import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
 import '../contacts/contacts_service.dart';
+import 'avatar.dart';
 import 'chat_list_controller.dart';
-import 'message_thread_screen.dart';
 import 'models/chat_summary.dart';
 
-/// The Chats tab: loads `GET /api/chats` and shows loading/empty/error/loaded
+/// The chat list: loads `GET /api/chats` and shows loading/empty/error/loaded
 /// states with pull-to-refresh. Material 3 list rows (no iMessage styling).
+/// Selection is delegated to [onOpen] so the same widget works single-pane
+/// (push a thread) and two-pane (select into the detail pane).
 class ChatListScreen extends StatefulWidget {
-  const ChatListScreen({super.key});
+  final void Function(ChatSummary chat) onOpen;
+  final String? selectedGuid;
+
+  const ChatListScreen({super.key, required this.onOpen, this.selectedGuid});
 
   @override
   State<ChatListScreen> createState() => _ChatListScreenState();
@@ -18,6 +23,8 @@ class ChatListScreen extends StatefulWidget {
 
 class _ChatListScreenState extends State<ChatListScreen> {
   late final ChatListController _controller;
+  final _searchCtrl = TextEditingController();
+  String _query = '';
 
   @override
   void initState() {
@@ -28,16 +35,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   @override
   void dispose() {
+    _searchCtrl.dispose();
     _controller.dispose();
     super.dispose();
   }
 
-  void _openThread(ChatSummary chat) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => MessageThreadScreen(chat: chat),
-      ),
-    );
+  List<ChatSummary> _filtered(List<ChatSummary> chats, ContactsService contacts) {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return chats;
+    return chats.where((c) {
+      final name = !c.isGroup ? contacts.displayNameFor(c.chatIdentifier) : null;
+      final hay = [
+        c.title,
+        name ?? '',
+        c.chatIdentifier ?? '',
+        c.serviceName ?? '',
+        c.lastMessagePreview ?? '',
+      ].join(' ').toLowerCase();
+      return hay.contains(q);
+    }).toList(growable: false);
   }
 
   @override
@@ -60,17 +76,35 @@ class _ChatListScreenState extends State<ChatListScreen> {
               child: const _EmptyState(),
             );
           case ChatListState.loaded:
-            return RefreshIndicator(
-              onRefresh: () => _controller.load(showSpinner: false),
-              child: ListView.separated(
-                itemCount: _controller.chats.length,
-                separatorBuilder: (_, _) =>
-                    const Divider(height: 1, indent: 72),
-                itemBuilder: (context, i) => _ChatRow(
-                  chat: _controller.chats[i],
-                  onTap: () => _openThread(_controller.chats[i]),
+            final contacts = context.watch<ContactsService>();
+            final chats = _filtered(_controller.chats, contacts);
+            return Column(
+              children: [
+                _SearchField(
+                  controller: _searchCtrl,
+                  onChanged: (v) => setState(() => _query = v),
                 ),
-              ),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: () => _controller.load(showSpinner: false),
+                    child: chats.isEmpty
+                        ? _NoMatches(query: _query)
+                        : ListView.separated(
+                            itemCount: chats.length,
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1, indent: 72),
+                            itemBuilder: (context, i) {
+                              final chat = chats[i];
+                              return _ChatRow(
+                                chat: chat,
+                                selected: chat.guid == widget.selectedGuid,
+                                onTap: () => widget.onOpen(chat),
+                              );
+                            },
+                          ),
+                  ),
+                ),
+              ],
             );
         }
       },
@@ -78,11 +112,61 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 }
 
+class _SearchField extends StatelessWidget {
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  const _SearchField({required this.controller, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: SearchBar(
+        controller: controller,
+        onChanged: onChanged,
+        hintText: 'Search chats',
+        leading: const Icon(Icons.search),
+        trailing: [
+          if (controller.text.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () {
+                controller.clear();
+                onChanged('');
+              },
+            ),
+        ],
+        elevation: const WidgetStatePropertyAll(0),
+        padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 12)),
+      ),
+    );
+  }
+}
+
+class _NoMatches extends StatelessWidget {
+  final String query;
+  const _NoMatches({required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      children: [
+        SizedBox(height: MediaQuery.of(context).size.height * 0.2),
+        const Icon(Icons.search_off, size: 48),
+        const SizedBox(height: 12),
+        Center(child: Text('No chats match "$query"')),
+      ],
+    );
+  }
+}
+
 class _ChatRow extends StatelessWidget {
   final ChatSummary chat;
+  final bool selected;
   final VoidCallback onTap;
 
-  const _ChatRow({required this.chat, required this.onTap});
+  const _ChatRow({required this.chat, required this.onTap, this.selected = false});
 
   @override
   Widget build(BuildContext context) {
@@ -97,12 +181,12 @@ class _ChatRow extends StatelessWidget {
         : chat.title;
     return ListTile(
       onTap: onTap,
-      leading: CircleAvatar(
-        backgroundColor: scheme.primaryContainer,
-        foregroundColor: scheme.onPrimaryContainer,
-        child: chat.isGroup
-            ? const Icon(Icons.group)
-            : Text(chat.initials, style: const TextStyle(fontSize: 14)),
+      selected: selected,
+      selectedTileColor: scheme.secondaryContainer.withValues(alpha: 0.4),
+      leading: HandleAvatar(
+        title: title,
+        handle: chat.isGroup ? null : chat.chatIdentifier,
+        isGroup: chat.isGroup,
       ),
       title: Row(
         children: [

@@ -83,6 +83,20 @@ no timestamp/unread when absent).
   Switching to Chinese will not translate MicaGo's own labels until that work is
   done. (Do not fake translations.)
 
+## C2.6 UX additions
+
+- **History pagination:** ✅ load-older on scroll-to-top via `limit`/`offset`
+  (server has **no cursor**), deduped by GUID, in a reversed list so scroll
+  position is preserved. *Gap:* offset paging can skew if many messages arrive
+  mid-scroll — a server cursor would fix this.
+- **Two-pane / tablet layout:** ✅ phone = single pane (push thread); wide
+  (≥720dp) = list + detail split with empty state; selection survives resize.
+- **Avatars:** ✅ deterministic colored initials (chat list, thread header, group
+  senders). Contact **photos** deferred — `flutter_contacts` 2.2.1 has no cheap
+  bulk thumbnail fetch.
+- **Date separators + delivery/read** shown from `dateCreated`/`isDelivered`/
+  `isRead`; outgoing states Sending / Delivered / Read / Failed‑tap‑to‑retry.
+
 ## Non-goals (carried from the server's guardrails)
 
 No private-API writes: the client will **not** send tapbacks, edits, unsends,

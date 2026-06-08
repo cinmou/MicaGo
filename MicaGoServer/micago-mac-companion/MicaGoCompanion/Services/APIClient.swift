@@ -152,6 +152,40 @@ struct APIClient {
         return try JSONDecoder().decode(RecentMessagesResponse.self, from: data).data
     }
 
+    /// Message Inspector (debug). Structural filters run server-side in SQL;
+    /// query/type/attachment refinement and grouping are applied on the page.
+    func debugRecentMessages(
+        q: String = "",
+        chatGuid: String = "",
+        sender: String = "",
+        direction: String = "",
+        type: String = "",
+        hasAttachments: String = "",
+        groupBy: String = "",
+        limit: Int = 100,
+        offset: Int = 0
+    ) async throws -> DebugRecentResponse {
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "limit", value: "\(limit)"),
+            URLQueryItem(name: "offset", value: "\(offset)"),
+        ]
+        func add(_ name: String, _ value: String) {
+            let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { items.append(URLQueryItem(name: name, value: v)) }
+        }
+        add("q", q)
+        add("chatGuid", chatGuid)
+        add("sender", sender)
+        add("direction", direction)
+        add("type", type)
+        add("hasAttachments", hasAttachments)
+        add("groupBy", groupBy)
+
+        let (data, response) = try await Self.session().data(for: request("api/debug/recent-messages", query: items))
+        try Self.validate(response)
+        return try JSONDecoder().decode(DebugRecentResponse.self, from: data)
+    }
+
     /// Chats (all services, including archived) so users can target rules.
     func chats() async throws -> [ChatSummary] {
         let (data, response) = try await Self.session().data(for: request(

@@ -1,0 +1,522 @@
+/// Pure, testable rendering/compatibility logic for messages.
+///
+/// Centralises what the thread widgets used to do ad-hoc: classify a message
+/// into a renderable kind, compute its delivery state once, resolve a sender
+/// label that is never blank, and sanitise iMessage control-payload artifacts
+/// (e.g. the "+!" leak) so they don't render as normal chat text.
+///
+/// Reaction/service detection relies on fields the MicaGo server does **not**
+/// expose yet (`associatedMessageType`, `itemType`, …); those branches are
+/// forward-compatible and inert today. See docs/client-refactor-notes.md.
+library;
+
+import 'dart:convert';
+
+import 'models/message_model.dart';
+
+/// What kind of row a message should render as.
+enum MessageRenderableKind {
+  normal, // has displayable text (attachments may also be present)
+  attachmentOnly, // no text, but has attachments
+  service, // group/system event (rename, join/leave, …)
+  reaction, // tapback/reaction to another message
+  retracted, // unsent message → subtle system row
+  unknown, // nothing renderable (empty/control-only) → subtle system row
+}
+
+/// Outgoing/incoming delivery state, computed in one place.
+enum MessageDeliveryState {
+  incoming,
+  sending,
+  sent,
+  delivered,
+  read,
+  failed,
+  unknown,
+}
+
+const String _objectReplacement = '￼';
+
+/// Strips the invisible attachment-placeholder char and trims. Returns null
+/// when nothing meaningful remains.
+String? sanitizeMessageText(String? raw) {
+  if (raw == null) return null;
+  final cleaned = raw.replaceAll(_objectReplacement, '').trim();
+  return cleaned.isEmpty ? null : cleaned;
+}
+
+/// True when [text] is a control-like payload that must NOT render as normal
+/// chat text — e.g. the server-side typedstream "+!"/"+$" leak (fixed in the
+/// v0.11.5 server) or a string with no letters/digits/CJK at all.
+///
+/// Conservative on purpose: real messages contain at least one alphanumeric or
+/// CJK rune, so this never hides genuine text. The mixed case ("+!Hello") can't
+/// be safely repaired client-side and needs the server fix — documented.
+bool isControlLikeText(String text) {
+  final t = text.replaceAll(_objectReplacement, '').trim();
+  if (t.isEmpty) return true;
+  // Any letter, digit, or CJK ideograph means it's real content.
+  final hasAlnum = RegExp(
+    r'[A-Za-z0-9À-ɏЀ-ӿ぀-ヿ一-鿿가-힯]',
+  ).hasMatch(t);
+  if (hasAlnum) return false;
+  // Real protocol artifacts ("+!", "+$") are pure ASCII punctuation. Any
+  // non-ASCII rune (emoji, symbols, other scripts) is genuine content — never
+  // strip a real emoji-only message.
+  final hasNonAscii = t.runes.any((r) => r > 0x7F);
+  return !hasNonAscii;
+}
+
+/// The text to display for a message, or null if there is none to show.
+String? displayText(MessageModel m) {
+  final clean = sanitizeMessageText(m.text);
+  if (clean == null) return null;
+  if (isControlLikeText(clean)) return null;
+  return clean;
+}
+
+MessageRenderableKind renderableKindFor(MessageModel m) {
+  if (m.isRetracted || m.dateRetracted != null) {
+    return MessageRenderableKind.retracted;
+  }
+  if (isReaction(m)) return MessageRenderableKind.reaction;
+  if (m.itemType > 0 || m.groupActionType > 0 || (m.groupTitle?.isNotEmpty ?? false)) {
+    return MessageRenderableKind.service;
+  }
+  final hasText = displayText(m) != null;
+  if (hasText) return MessageRenderableKind.normal;
+  if (m.hasAttachments) return MessageRenderableKind.attachmentOnly;
+  return MessageRenderableKind.unknown;
+}
+
+// ---------------------------------------------------------------------------
+// Tapbacks / reactions (BlueBubbles-compatible). associatedMessageType is the
+// chat.db integer code: 1000 sticker; 2000-2005 add; 3000-3005 remove.
+// ---------------------------------------------------------------------------
+
+enum TapbackKind { love, like, dislike, laugh, emphasize, question, sticker, unknown }
+
+class Tapback {
+  final TapbackKind kind;
+  final bool isRemoval; // true for the 3000-series (reaction removed)
+  const Tapback(this.kind, this.isRemoval);
+}
+
+/// Parses an `associatedMessageType` code into a [Tapback], or null if the code
+/// is not a reaction (0/null/out of range).
+Tapback? tapbackFromCode(int? code) {
+  if (code == null) return null;
+  if (code == 1000) return const Tapback(TapbackKind.sticker, false);
+  const kinds = [
+    TapbackKind.love,
+    TapbackKind.like,
+    TapbackKind.dislike,
+    TapbackKind.laugh,
+    TapbackKind.emphasize,
+    TapbackKind.question,
+  ];
+  if (code >= 2000 && code <= 2005) return Tapback(kinds[code - 2000], false);
+  if (code >= 3000 && code <= 3005) return Tapback(kinds[code - 3000], true);
+  return null;
+}
+
+/// True when the message is a tapback/reaction (has a reaction code + a target).
+bool isReaction(MessageModel m) {
+  final t = tapbackFromCode(m.associatedMessageType);
+  if (t == null || t.kind == TapbackKind.sticker) return false;
+  return (m.associatedMessageGuid?.isNotEmpty ?? false);
+}
+
+/// The emoji glyph for a tapback (for chips on the target bubble).
+String tapbackEmoji(TapbackKind kind) {
+  switch (kind) {
+    case TapbackKind.love:
+      return '❤️'; // ❤️
+    case TapbackKind.like:
+      return '\u{1F44D}'; // 👍
+    case TapbackKind.dislike:
+      return '\u{1F44E}'; // 👎
+    case TapbackKind.laugh:
+      return '\u{1F602}'; // 😂
+    case TapbackKind.emphasize:
+      return '‼️'; // ‼️
+    case TapbackKind.question:
+      return '❓'; // ❓
+    case TapbackKind.sticker:
+    case TapbackKind.unknown:
+      return '\u{1F516}'; // 🔖
+  }
+}
+
+/// Past-tense verb for a tapback ("loved", "liked", …) used in the
+/// fallback system row when the target message isn't loaded.
+String tapbackVerb(TapbackKind kind) {
+  switch (kind) {
+    case TapbackKind.love:
+      return 'loved';
+    case TapbackKind.like:
+      return 'liked';
+    case TapbackKind.dislike:
+      return 'disliked';
+    case TapbackKind.laugh:
+      return 'laughed at';
+    case TapbackKind.emphasize:
+      return 'emphasized';
+    case TapbackKind.question:
+      return 'questioned';
+    case TapbackKind.sticker:
+      return 'tagged';
+    case TapbackKind.unknown:
+      return 'reacted to';
+  }
+}
+
+/// Strips the `p:<part>/` or `bp:` prefix from an `associatedMessageGuid` to
+/// yield the target message GUID. Returns null when empty.
+String? reactionTargetGuid(String? associatedGuid) {
+  final raw = associatedGuid?.trim() ?? '';
+  if (raw.isEmpty) return null;
+  final slash = raw.indexOf('/');
+  if (raw.startsWith('p:') && slash >= 0) return raw.substring(slash + 1);
+  if (raw.startsWith('bp:')) return raw.substring(3);
+  return raw;
+}
+
+// ---------------------------------------------------------------------------
+// Replies (threadOriginatorGuid)
+// ---------------------------------------------------------------------------
+
+/// True when the message is a reply to an earlier message.
+bool isReply(MessageModel m) => (m.threadOriginatorGuid?.isNotEmpty ?? false);
+
+/// Compact reply-preview model built from the (optionally loaded) target.
+class ReplyPreview {
+  final String sender; // resolved sender label of the quoted message
+  final String? text; // sanitized quoted text (null if media/unknown)
+  final bool targetLoaded;
+  const ReplyPreview({required this.sender, this.text, required this.targetLoaded});
+}
+
+// ---------------------------------------------------------------------------
+// Message effects (expressiveSendStyleId)
+// ---------------------------------------------------------------------------
+
+const Map<String, String> _effectLabels = {
+  'com.apple.MobileSMS.expressivesend.impact': 'Sent with Slam',
+  'com.apple.MobileSMS.expressivesend.loud': 'Sent with Loud',
+  'com.apple.MobileSMS.expressivesend.gentle': 'Sent with Gentle',
+  'com.apple.MobileSMS.expressivesend.invisibleink': 'Sent with Invisible Ink',
+  'com.apple.messages.effect.CKEchoEffect': 'Sent with Echo',
+  'com.apple.messages.effect.CKSpotlightEffect': 'Sent with Spotlight',
+  'com.apple.messages.effect.CKHappyBirthdayEffect': 'Sent with Balloons',
+  'com.apple.messages.effect.CKConfettiEffect': 'Sent with Confetti',
+  'com.apple.messages.effect.CKHeartEffect': 'Sent with Love',
+  'com.apple.messages.effect.CKLasersEffect': 'Sent with Lasers',
+  'com.apple.messages.effect.CKFireworksEffect': 'Sent with Fireworks',
+  'com.apple.messages.effect.CKSparklesEffect': 'Sent with Celebration',
+};
+
+/// Human label for a send effect, or null when there is no effect. Unknown but
+/// present effect IDs map to a generic label rather than nothing.
+String? effectLabel(String? expressiveSendStyleId) {
+  final id = expressiveSendStyleId?.trim() ?? '';
+  if (id.isEmpty) return null;
+  return _effectLabels[id] ?? 'Sent with an effect';
+}
+
+/// Label for a retracted (unsent) message, depending on direction.
+String retractedLabel(MessageModel m) =>
+    m.isFromMe ? 'You unsent a message' : 'This message was unsent';
+
+MessageDeliveryState deliveryStateFor(MessageModel m) {
+  if (!m.isFromMe) return MessageDeliveryState.incoming;
+  if (m.localState == LocalSendState.failed || m.errorCode > 0) {
+    return MessageDeliveryState.failed;
+  }
+  if (m.localState == LocalSendState.pending) return MessageDeliveryState.sending;
+  if (m.isRead || m.dateRead != null) return MessageDeliveryState.read;
+  if (m.isDelivered || m.dateDelivered != null) {
+    return MessageDeliveryState.delivered;
+  }
+  return MessageDeliveryState.sent;
+}
+
+/// A sender label that is never blank/"null"/raw placeholder.
+/// [contactName] is the caller's resolved local-contact name (or null).
+String resolveSenderLabel(
+  MessageModel m, {
+  required bool isGroup,
+  String? contactName,
+}) {
+  if (m.isFromMe) return 'You';
+  final name = contactName?.trim() ?? '';
+  if (name.isNotEmpty) return name;
+  final handle = m.handleId?.trim() ?? '';
+  if (handle.isNotEmpty) return handle;
+  return 'Unknown';
+}
+
+/// Short, user-facing label for a service/group event. The server does not
+/// expose enough fields to build the precise text, so this is a generic
+/// fallback until it does.
+String serviceEventLabel(MessageModel m) {
+  final t = sanitizeMessageText(m.text);
+  if (t != null && !isControlLikeText(t)) return t;
+  return 'Conversation event';
+}
+
+// ---------------------------------------------------------------------------
+// Classification with reasons + debug (C3R)
+// ---------------------------------------------------------------------------
+
+/// Why a message ended up unsupported — for diagnostics, not the user.
+enum UnsupportedReason {
+  none,
+  noContent, // no text, no attachments, no metadata
+  controlText, // text was a control/typedstream artifact (e.g. "+!")
+  unsupportedAttachment, // has attachment(s) but kind/mime is unknown
+  missingServerFields, // cacheHasAttachments but no attachments / likely tapback/event the server didn't tag
+  parseError,
+}
+
+String unsupportedReasonLabel(UnsupportedReason r) {
+  switch (r) {
+    case UnsupportedReason.none:
+      return 'supported';
+    case UnsupportedReason.noContent:
+      return 'no text / no attachment';
+    case UnsupportedReason.controlText:
+      return 'control-like text';
+    case UnsupportedReason.unsupportedAttachment:
+      return 'unsupported attachment type';
+    case UnsupportedReason.missingServerFields:
+      return 'missing server fields';
+    case UnsupportedReason.parseError:
+      return 'parse error';
+  }
+}
+
+/// Full classification of a message.
+class MessageClassification {
+  final MessageRenderableKind kind;
+  final UnsupportedReason reason;
+  const MessageClassification(this.kind, this.reason);
+
+  bool get isUnsupported => kind == MessageRenderableKind.unknown;
+}
+
+MessageClassification classifyMessage(MessageModel m) {
+  final kind = renderableKindFor(m);
+  if (kind != MessageRenderableKind.unknown) {
+    return MessageClassification(kind, UnsupportedReason.none);
+  }
+  // Unknown: figure out why.
+  final rawText = m.text;
+  if (rawText != null && rawText.trim().isNotEmpty && isControlLikeText(rawText)) {
+    return const MessageClassification(
+        MessageRenderableKind.unknown, UnsupportedReason.controlText);
+  }
+  if (m.cacheHasAttachments && m.attachments.isEmpty) {
+    return const MessageClassification(
+        MessageRenderableKind.unknown, UnsupportedReason.missingServerFields);
+  }
+  return const MessageClassification(
+      MessageRenderableKind.unknown, UnsupportedReason.noContent);
+}
+
+// ---------------------------------------------------------------------------
+// Debug inspector (redacted) — Part A
+// ---------------------------------------------------------------------------
+
+const _redacted = '<redacted>';
+
+/// Recursively redacts anything credential-like from a decoded JSON value:
+/// keys named token/authorization/password/secret/bearer, and any string value
+/// that contains a bearer token or `token=` query param.
+Object? redactJson(Object? value) {
+  if (value is Map) {
+    final out = <String, dynamic>{};
+    value.forEach((k, v) {
+      final key = '$k';
+      if (_isSensitiveKey(key)) {
+        out[key] = _redacted;
+      } else {
+        out[key] = redactJson(v);
+      }
+    });
+    return out;
+  }
+  if (value is List) return value.map(redactJson).toList();
+  if (value is String) return _redactString(value);
+  return value;
+}
+
+bool _isSensitiveKey(String key) {
+  final k = key.toLowerCase();
+  return k == 'token' ||
+      k == 'authorization' ||
+      k == 'password' ||
+      k == 'secret' ||
+      k.contains('bearer') ||
+      k.contains('apikey') ||
+      k.contains('api_key');
+}
+
+String _redactString(String s) {
+  var out = s.replaceAll(RegExp(r'[Bb]earer\s+[A-Za-z0-9._\-]+'), 'Bearer $_redacted');
+  out = out.replaceAll(RegExp(r'([?&]token=)[^&\s]+'), r'$1' '$_redacted');
+  return out;
+}
+
+/// A flat, redacted, copy-friendly view of a message for the debug inspector.
+Map<String, dynamic> messageDebugMap(MessageModel m) {
+  final cls = classifyMessage(m);
+  String? clip(String? t) =>
+      t == null ? null : (t.length <= 200 ? t : '${t.substring(0, 200)}…');
+  return {
+    'guid': m.guid,
+    'isFromMe': m.isFromMe,
+    'handleId': m.handleId,
+    'service': m.service ?? m.handleService,
+    'classification': cls.kind.name,
+    'unsupportedReason': unsupportedReasonLabel(cls.reason),
+    'textLength': m.text?.length ?? 0,
+    'textPreview': clip(sanitizeMessageText(m.text)),
+    'hasAttachments': m.hasAttachments,
+    'attachmentCount': m.attachments.length,
+    'attachments': [
+      for (final a in m.attachments)
+        {
+          'guid': a.guid,
+          'filename': a.filename,
+          'transferName': a.transferName,
+          'mimeType': a.mimeType,
+          'uti': a.uti,
+          'attachmentKind': a.attachmentKind,
+          'isVoiceMessage': a.isVoiceMessage,
+          'totalBytes': a.totalBytes,
+          'hasDownloadUrl': a.downloadUrl.isNotEmpty,
+        }
+    ],
+    'dateCreated': m.dateCreated,
+    'dateDelivered': m.dateDelivered,
+    'dateRead': m.dateRead,
+    'itemType': m.itemType,
+    'groupActionType': m.groupActionType,
+    'groupTitle': m.groupTitle,
+    'associatedMessageType': m.associatedMessageType,
+    'associatedMessageGuid': m.associatedMessageGuid,
+    'errorCode': m.errorCode,
+    'raw': redactJson(m.raw),
+  };
+}
+
+/// Pretty, redacted JSON for the "Copy debug JSON" action.
+String messageDebugJson(MessageModel m) =>
+    const JsonEncoder.withIndent('  ').convert(messageDebugMap(m));
+
+/// Pretty-prints any already-sanitised JSON value.
+String prettyJson(Object? value) =>
+    const JsonEncoder.withIndent('  ').convert(value);
+
+// ---------------------------------------------------------------------------
+// Thread compatibility diagnostics — Part J
+// ---------------------------------------------------------------------------
+
+class ThreadDiagnostics {
+  final int total;
+  final int text;
+  final int image;
+  final int audio;
+  final int file;
+  final int service;
+  final int reaction;
+  final int unsupported;
+  final Map<UnsupportedReason, int> reasons;
+  final MessageModel? lastUnsupported;
+
+  const ThreadDiagnostics({
+    required this.total,
+    required this.text,
+    required this.image,
+    required this.audio,
+    required this.file,
+    required this.service,
+    required this.reaction,
+    required this.unsupported,
+    required this.reasons,
+    required this.lastUnsupported,
+  });
+
+  static const empty = ThreadDiagnostics(
+    total: 0, text: 0, image: 0, audio: 0, file: 0, service: 0,
+    reaction: 0, unsupported: 0, reasons: {}, lastUnsupported: null,
+  );
+}
+
+ThreadDiagnostics computeThreadDiagnostics(List<MessageModel> messages) {
+  var text = 0, image = 0, audio = 0, file = 0, service = 0, reaction = 0, unsupported = 0;
+  final reasons = <UnsupportedReason, int>{};
+  MessageModel? lastUnsupported;
+  for (final m in messages) {
+    final cls = classifyMessage(m);
+    switch (cls.kind) {
+      case MessageRenderableKind.normal:
+        text++;
+        break;
+      case MessageRenderableKind.attachmentOnly:
+        final a = m.attachments.isNotEmpty ? m.attachments.first : null;
+        if (a == null) {
+          file++;
+        } else if (a.isImage) {
+          image++;
+        } else if (a.isAudio) {
+          audio++;
+        } else {
+          file++;
+        }
+        break;
+      case MessageRenderableKind.service:
+      case MessageRenderableKind.retracted:
+        service++;
+        break;
+      case MessageRenderableKind.reaction:
+        reaction++;
+        break;
+      case MessageRenderableKind.unknown:
+        unsupported++;
+        reasons[cls.reason] = (reasons[cls.reason] ?? 0) + 1;
+        lastUnsupported = m;
+        break;
+    }
+  }
+  return ThreadDiagnostics(
+    total: messages.length,
+    text: text,
+    image: image,
+    audio: audio,
+    file: file,
+    service: service,
+    reaction: reaction,
+    unsupported: unsupported,
+    reasons: reasons,
+    lastUnsupported: lastUnsupported,
+  );
+}
+
+String threadDiagnosticsReport(ThreadDiagnostics d) {
+  final buf = StringBuffer()
+    ..writeln('MicaGo message compatibility diagnostics')
+    ..writeln('total: ${d.total}')
+    ..writeln('text: ${d.text}')
+    ..writeln('image: ${d.image}  audio: ${d.audio}  file: ${d.file}')
+    ..writeln('service: ${d.service}  reaction: ${d.reaction}')
+    ..writeln('unsupported: ${d.unsupported}');
+  d.reasons.forEach((r, n) => buf.writeln('  - ${unsupportedReasonLabel(r)}: $n'));
+  if (d.lastUnsupported != null) {
+    buf
+      ..writeln('last unsupported:')
+      ..writeln(messageDebugJson(d.lastUnsupported!));
+  }
+  return buf.toString();
+}

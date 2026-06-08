@@ -129,4 +129,6 @@ xcshareddata/xcschemes/xcuserdata/
 .pub/
 coverage/
 /MicaGoFlutterClient/Ref
+# Reference projects (BlueBubbles, Mategram, etc.) — study only, never committed.
+Ref/
 /.claude

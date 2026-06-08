@@ -4,20 +4,38 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../core/network/api_client.dart';
+import 'media_viewer.dart';
 import 'models/message_model.dart';
 
 /// Renders a single attachment in a message bubble, choosing the right view by
 /// kind. Display-only — the server has no media-send endpoint (C2 gap).
+///
+/// [imageSiblings] are all image attachments in the same message; tapping an
+/// image opens the full-screen gallery at this image's [imageIndex] so the user
+/// can swipe between them.
 class AttachmentView extends StatelessWidget {
   final ApiClient api;
   final AttachmentModel attachment;
+  final List<AttachmentModel> imageSiblings;
+  final int imageIndex;
 
-  const AttachmentView({super.key, required this.api, required this.attachment});
+  const AttachmentView({
+    super.key,
+    required this.api,
+    required this.attachment,
+    this.imageSiblings = const [],
+    this.imageIndex = 0,
+  });
 
   @override
   Widget build(BuildContext context) {
     if (attachment.isImage) {
-      return _ImageAttachment(api: api, attachment: attachment);
+      return _ImageAttachment(
+        api: api,
+        attachment: attachment,
+        siblings: imageSiblings.isEmpty ? [attachment] : imageSiblings,
+        index: imageIndex,
+      );
     }
     if (attachment.isAudio) {
       return _AudioAttachment(api: api, attachment: attachment);
@@ -26,13 +44,17 @@ class AttachmentView extends StatelessWidget {
   }
 }
 
-/// Simple in-memory cache so re-scrolling doesn't refetch the same image bytes.
-final Map<String, Uint8List> _imageCache = {};
-
 class _ImageAttachment extends StatefulWidget {
   final ApiClient api;
   final AttachmentModel attachment;
-  const _ImageAttachment({required this.api, required this.attachment});
+  final List<AttachmentModel> siblings;
+  final int index;
+  const _ImageAttachment({
+    required this.api,
+    required this.attachment,
+    required this.siblings,
+    required this.index,
+  });
 
   @override
   State<_ImageAttachment> createState() => _ImageAttachmentState();
@@ -48,10 +70,10 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
   }
 
   Future<Uint8List> _loadBytes() async {
-    final cached = _imageCache[widget.attachment.guid];
+    final cached = imageByteCache[widget.attachment.guid];
     if (cached != null) return cached;
     final bytes = await widget.api.getAttachmentBytes(widget.attachment.guid);
-    _imageCache[widget.attachment.guid] = bytes;
+    imageByteCache[widget.attachment.guid] = bytes;
     return bytes;
   }
 
@@ -71,10 +93,11 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
         }
         final bytes = snap.data!;
         return GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => _FullScreenImage(bytes: bytes),
-            ),
+          onTap: () => MediaGalleryViewer.open(
+            context,
+            api: widget.api,
+            images: widget.siblings,
+            initialIndex: widget.index,
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
@@ -88,25 +111,6 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
           ),
         );
       },
-    );
-  }
-}
-
-class _FullScreenImage extends StatelessWidget {
-  final Uint8List bytes;
-  const _FullScreenImage({required this.bytes});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(backgroundColor: Colors.black),
-      body: Center(
-        child: InteractiveViewer(
-          maxScale: 5,
-          child: Image.memory(bytes),
-        ),
-      ),
     );
   }
 }

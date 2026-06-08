@@ -77,6 +77,8 @@ class ContactsService extends ChangeNotifier {
     await store.setContactsMatchingEnabled(false);
     contacts = const [];
     index = const ContactIndex.empty();
+    _thumbCache.clear();
+    _thumbMisses.clear();
     status = ContactsStatus.disabled;
     notifyListeners();
   }
@@ -85,6 +87,39 @@ class ContactsService extends ChangeNotifier {
 
   /// Local display name for a handle/identifier, or null when unmatched.
   String? displayNameFor(String? handle) => index.displayNameFor(handle);
+
+  // In-memory thumbnail cache (never persisted, never uploaded). Keyed by
+  // contact id; a missing photo is recorded so we don't refetch.
+  final Map<String, Uint8List> _thumbCache = {};
+  final Set<String> _thumbMisses = {};
+
+  /// Lazily loads a contact's low-res thumbnail for a handle, cached in memory.
+  /// Returns null when contacts are off, the handle is unmatched, or there is
+  /// no photo. READ-only: fetches a single contact by id requesting only the
+  /// `photoThumbnail` property (no full photo, no bulk load), so it scales to
+  /// large address books.
+  Future<Uint8List?> thumbnailForHandle(String? handle) async {
+    if (!isReady) return null;
+    final id = index.contactIdFor(handle);
+    if (id == null || id.isEmpty) return null;
+    if (_thumbCache.containsKey(id)) return _thumbCache[id];
+    if (_thumbMisses.contains(id)) return null;
+    try {
+      final contact = await fc.FlutterContacts.get(
+        id,
+        properties: const {fc.ContactProperty.photoThumbnail},
+      );
+      final bytes = contact?.photo?.thumbnail;
+      if (bytes != null && bytes.isNotEmpty) {
+        _thumbCache[id] = bytes;
+        return bytes;
+      }
+    } catch (_) {
+      // Ignore — record a miss so we never retry a broken id in a tight loop.
+    }
+    _thumbMisses.add(id);
+    return null;
+  }
 
   Future<void> _load() async {
     try {

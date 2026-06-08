@@ -171,6 +171,8 @@ final class AppModel: ObservableObject {
 
         let isUp = await client.health()
         reachable = isUp
+        // Coordinate the optional "start/stop tunnel with server" settings.
+        TunnelController.shared.serverHealthChanged(healthy: isUp)
         guard isUp else {
             status = nil
             devices = []

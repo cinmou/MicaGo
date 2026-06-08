@@ -5,6 +5,12 @@ import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
 import '../contacts/contacts_service.dart';
 import 'attachment_views.dart';
+import 'avatar.dart';
+import '../settings/message_display_controller.dart';
+import 'diagnostics_store.dart';
+import 'message_debug_sheet.dart';
+import 'message_display.dart';
+import 'message_render.dart';
 import 'models/chat_summary.dart';
 import 'models/message_model.dart';
 import 'thread_controller.dart';
@@ -13,7 +19,16 @@ import 'thread_controller.dart';
 /// realtime updates. Clean Material chat UI — not an iMessage clone.
 class MessageThreadScreen extends StatefulWidget {
   final ChatSummary chat;
-  const MessageThreadScreen({super.key, required this.chat});
+
+  /// When true, render as a detail pane (slim header, no Scaffold/back button)
+  /// for the two-pane tablet layout.
+  final bool embedded;
+
+  const MessageThreadScreen({
+    super.key,
+    required this.chat,
+    this.embedded = false,
+  });
 
   @override
   State<MessageThreadScreen> createState() => _MessageThreadScreenState();
@@ -23,7 +38,6 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   late final ThreadController _controller;
   final _scroll = ScrollController();
   final _composer = TextEditingController();
-  int _lastCount = 0;
 
   @override
   void initState() {
@@ -33,24 +47,37 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
       chatGuid: widget.chat.guid,
     )..start();
     _composer.addListener(() => setState(() {}));
+    _scroll.addListener(_onScroll);
+    _controller.addListener(_publishDiagnostics);
   }
 
   @override
   void dispose() {
+    _scroll.removeListener(_onScroll);
+    _controller.removeListener(_publishDiagnostics);
     _controller.dispose();
     _scroll.dispose();
     _composer.dispose();
     super.dispose();
   }
 
-  void _maybeScrollToBottom(int count) {
-    if (count == _lastCount) return;
-    _lastCount = count;
+  // Recompute per-thread compatibility diagnostics whenever the message list
+  // changes, so the Settings → Message Compatibility Diagnostics page reflects
+  // the open thread. Done after the frame to avoid notifying during build.
+  void _publishDiagnostics() {
+    final msgs = _controller.messages;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-      }
+      lastThreadDiagnostics.value = computeThreadDiagnostics(msgs);
     });
+  }
+
+  // The list is reversed (newest at the bottom), so the *top* of the history is
+  // near maxScrollExtent. Load older pages as the user approaches it.
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 320) {
+      _controller.loadOlder();
+    }
   }
 
   void _send() {
@@ -71,20 +98,78 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   @override
   Widget build(BuildContext context) {
     final contacts = context.watch<ContactsService>();
+    final prefs = context.watch<MessageDisplayController>().prefs;
     final api = context.read<AppController>().api;
+
+    final title = _resolveTitle(contacts);
+
+    final content = Column(
+      children: [
+        Expanded(
+          child: ListenableBuilder(
+            listenable: _controller,
+            builder: (context, _) => _buildBody(context, api, contacts, prefs),
+          ),
+        ),
+        _Composer(
+          controller: _composer,
+          canSend: _composer.text.trim().isNotEmpty,
+          onSend: _send,
+        ),
+      ],
+    );
+
+    final titleRow = Row(
+      children: [
+        HandleAvatar(
+          title: title,
+          handle: widget.chat.isGroup ? null : widget.chat.chatIdentifier,
+          isGroup: widget.chat.isGroup,
+          radius: 16,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              if (widget.chat.serviceName != null)
+                Text(widget.chat.serviceName!,
+                    style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (widget.embedded) {
+      // Detail pane: slim header instead of an AppBar (the shell owns the bar).
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+            child: Row(
+              children: [
+                Expanded(child: titleRow),
+                IconButton(
+                  tooltip: 'Refresh',
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () => _controller.load(),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(child: content),
+        ],
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_resolveTitle(contacts),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (widget.chat.serviceName != null)
-              Text(widget.chat.serviceName!,
-                  style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
+        titleSpacing: 0,
+        title: titleRow,
         actions: [
           IconButton(
             tooltip: 'Refresh',
@@ -93,26 +178,12 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListenableBuilder(
-              listenable: _controller,
-              builder: (context, _) => _buildBody(context, api, contacts),
-            ),
-          ),
-          _Composer(
-            controller: _composer,
-            canSend: _composer.text.trim().isNotEmpty,
-            onSend: _send,
-          ),
-        ],
-      ),
+      body: content,
     );
   }
 
-  Widget _buildBody(
-      BuildContext context, ApiClient? api, ContactsService contacts) {
+  Widget _buildBody(BuildContext context, ApiClient? api,
+      ContactsService contacts, MessageDisplayPrefs prefs) {
     switch (_controller.state) {
       case ThreadState.loading:
         return const Center(child: CircularProgressIndicator());
@@ -133,26 +204,167 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
         );
       case ThreadState.loaded:
         final msgs = _controller.messages;
-        _maybeScrollToBottom(msgs.length);
-        return RefreshIndicator(
-          onRefresh: () => _controller.load(showSpinner: false),
-          child: ListView.builder(
-            controller: _scroll,
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            itemCount: msgs.length,
-            itemBuilder: (context, i) => _MessageBubble(
-              message: msgs[i],
-              api: api,
-              isGroup: widget.chat.isGroup,
-              contacts: contacts,
-              onRetry: () {
-                final t = msgs[i].tempId;
-                if (t != null) _controller.retry(t);
-              },
-            ),
-          ),
+        final rows = buildDisplayRows(msgs, prefs);
+        final items = _buildItems(rows);
+        final showLoader = _controller.loadingOlder;
+        // Reply-target lookup + sender resolution for quoted previews.
+        final byGuid = {for (final m in msgs) m.guid: m};
+        ReplyPreview? replyPreviewFor(MessageModel m) {
+          if (!isReply(m)) return null;
+          final target = byGuid[m.threadOriginatorGuid];
+          if (target == null) {
+            return const ReplyPreview(sender: '', text: null, targetLoaded: false);
+          }
+          return ReplyPreview(
+            sender: resolveSenderLabel(target,
+                isGroup: widget.chat.isGroup,
+                contactName: contacts.displayNameFor(target.handleId)),
+            text: displayText(target),
+            targetLoaded: true,
+          );
+        }
+
+        // Part I: delivery-label visibility depends on the user's preference.
+        String? lastOutgoingKey;
+        for (final m in msgs) {
+          if (m.isFromMe) lastOutgoingKey = m.dedupeKey;
+        }
+        bool showStatusFor(MessageModel m) {
+          switch (prefs.deliveryLabels) {
+            case DeliveryLabelMode.off:
+              return false;
+            case DeliveryLabelMode.compact:
+              return m.dedupeKey == lastOutgoingKey;
+            case DeliveryLabelMode.detailed:
+              return m.isFromMe;
+          }
+        }
+        // Reversed list: newest at the bottom; prepending older history (top)
+        // does not shift the viewport, so scroll position is preserved.
+        return ListView.builder(
+          controller: _scroll,
+          reverse: true,
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+          itemCount: items.length + (showLoader ? 1 : 0),
+          itemBuilder: (context, i) {
+            if (i == items.length) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                ),
+              );
+            }
+            final item = items[items.length - 1 - i];
+            if (item.header != null) {
+              return _DateSeparator(label: item.header!);
+            }
+            final row = item.row!;
+            final m = row.message;
+            switch (row.kind) {
+              case MessageRenderableKind.service:
+              case MessageRenderableKind.reaction:
+              case MessageRenderableKind.retracted:
+              case MessageRenderableKind.unknown:
+                return _SystemRow(
+                  message: m,
+                  classification: MessageClassification(
+                      row.kind, classifyMessage(m).reason),
+                  mergedCount: row.mergedSystemCount,
+                  onDebug: () => showMessageDebugSheet(context, m),
+                );
+              case MessageRenderableKind.normal:
+              case MessageRenderableKind.attachmentOnly:
+                return _MessageBubble(
+                  message: m,
+                  api: api,
+                  isGroup: widget.chat.isGroup,
+                  contacts: contacts,
+                  reactions: row.reactions,
+                  reply: replyPreviewFor(m),
+                  effectHint: prefs.showEffectHints
+                      ? effectLabel(m.expressiveSendStyleId)
+                      : null,
+                  showStatus: showStatusFor(m),
+                  onRetry: () {
+                    final t = m.tempId;
+                    if (t != null) _controller.retry(t);
+                  },
+                  onDebug: () => showMessageDebugSheet(context, m),
+                );
+            }
+          },
         );
     }
+  }
+
+  /// Inserts a date separator before the first row of each day.
+  List<_ThreadItem> _buildItems(List<DisplayRow> rows) {
+    final items = <_ThreadItem>[];
+    DateTime? lastDay;
+    for (final row in rows) {
+      final ts = row.message.dateCreated;
+      if (ts != null) {
+        final dt = DateTime.fromMillisecondsSinceEpoch(ts);
+        final day = DateTime(dt.year, dt.month, dt.day);
+        if (lastDay == null || day != lastDay) {
+          items.add(_ThreadItem.header(_dayLabel(day)));
+          lastDay = day;
+        }
+      }
+      items.add(_ThreadItem.row(row));
+    }
+    return items;
+  }
+
+  String _dayLabel(DateTime day) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final base = '${months[day.month - 1]} ${day.day}';
+    return day.year == now.year ? base : '$base, ${day.year}';
+  }
+}
+
+/// A thread list item: either a date header or a (display-prefs-applied) row.
+class _ThreadItem {
+  final String? header;
+  final DisplayRow? row;
+  _ThreadItem.header(this.header) : row = null;
+  _ThreadItem.row(this.row) : header = null;
+}
+
+class _DateSeparator extends StatelessWidget {
+  final String label;
+  const _DateSeparator({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(label,
+            style: Theme.of(context)
+                .textTheme
+                .labelSmall
+                ?.copyWith(color: scheme.onSurfaceVariant)),
+      ),
+    );
   }
 }
 
@@ -161,14 +373,29 @@ class _MessageBubble extends StatelessWidget {
   final ApiClient? api;
   final bool isGroup;
   final ContactsService contacts;
+
+  /// Part I: whether to render the delivery-status line.
+  final bool showStatus;
+
+  /// Tapbacks merged onto this message (chips), the quoted reply (if any), and
+  /// the send-effect hint label (if any).
+  final List<MessageModel> reactions;
+  final ReplyPreview? reply;
+  final String? effectHint;
   final VoidCallback onRetry;
+  final VoidCallback onDebug;
 
   const _MessageBubble({
     required this.message,
     required this.api,
     required this.isGroup,
     required this.contacts,
+    required this.showStatus,
+    this.reactions = const [],
+    this.reply,
+    this.effectHint,
     required this.onRetry,
+    required this.onDebug,
   });
 
   @override
@@ -177,12 +404,83 @@ class _MessageBubble extends StatelessWidget {
     final fromMe = message.isFromMe;
     final bubbleColor =
         fromMe ? scheme.primaryContainer : scheme.surfaceContainerHighest;
-    final textColor =
-        fromMe ? scheme.onPrimaryContainer : scheme.onSurface;
+    final textColor = fromMe ? scheme.onPrimaryContainer : scheme.onSurface;
 
     final senderName = (!fromMe && isGroup)
-        ? (contacts.displayNameFor(message.handleId) ?? message.handleId)
+        ? resolveSenderLabel(message,
+            isGroup: isGroup,
+            contactName: contacts.displayNameFor(message.handleId))
         : null;
+    final body = displayText(message);
+    final hasMedia = message.hasAttachments && api != null;
+    final images =
+        message.attachments.where((a) => a.isImage).toList(growable: false);
+
+    final bubble = Container(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      padding: EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: hasMedia && body == null ? 6 : 8,
+      ),
+      decoration: BoxDecoration(
+        color: bubbleColor,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: Radius.circular(fromMe ? 16 : 4),
+          bottomRight: Radius.circular(fromMe ? 4 : 16),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            fromMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          if (senderName != null && senderName.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(senderName,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w600,
+                      )),
+            ),
+          if (reply != null) _ReplyPreviewBlock(reply: reply!, fromMe: fromMe),
+          if (hasMedia)
+            for (final a in message.attachments)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: AttachmentView(
+                  api: api!,
+                  attachment: a,
+                  imageSiblings: images,
+                  imageIndex: a.isImage ? images.indexOf(a) : 0,
+                ),
+              ),
+          if (body != null) Text(body, style: TextStyle(color: textColor)),
+          if (effectHint != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.auto_awesome,
+                      size: 11, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 3),
+                  Text(effectHint!,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontStyle: FontStyle.italic)),
+                ],
+              ),
+            ),
+          _Footer(
+            message: message,
+            showStatus: showStatus,
+            onRetry: onRetry,
+          ),
+        ],
+      ),
+    );
 
     return Align(
       alignment: fromMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -190,37 +488,177 @@ class _MessageBubble extends StatelessWidget {
         constraints: BoxConstraints(
           maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 3),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            crossAxisAlignment:
-                fromMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              if (senderName != null && senderName.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 2),
-                  child: Text(senderName,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: scheme.primary,
-                            fontWeight: FontWeight.w600,
-                          )),
+        child: GestureDetector(
+          onLongPress: onDebug,
+          child: reactions.isEmpty
+              ? bubble
+              : Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: bubble,
+                    ),
+                    Positioned(
+                      top: -4,
+                      right: fromMe ? null : 4,
+                      left: fromMe ? 4 : null,
+                      child: _ReactionChips(reactions: reactions),
+                    ),
+                  ],
                 ),
-              if (message.hasAttachments && api != null)
-                for (final a in message.attachments)
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact reaction chips overlaid on the target bubble (merged tapbacks).
+class _ReactionChips extends StatelessWidget {
+  final List<MessageModel> reactions;
+  const _ReactionChips({required this.reactions});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Latest reaction per sender, additions only (skip the -removed variants).
+    final byHandle = <String, TapbackKind>{};
+    for (final r in reactions) {
+      final t = tapbackFromCode(r.associatedMessageType);
+      if (t == null) continue;
+      final key = r.isFromMe ? 'me' : (r.handleId ?? 'unknown');
+      if (t.isRemoval) {
+        byHandle.remove(key);
+      } else {
+        byHandle[key] = t.kind;
+      }
+    }
+    if (byHandle.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Text(
+        byHandle.values.map((k) => tapbackEmoji(k)).join(' '),
+        style: const TextStyle(fontSize: 11),
+      ),
+    );
+  }
+}
+
+/// Quoted reply preview shown above the message body.
+class _ReplyPreviewBlock extends StatelessWidget {
+  final ReplyPreview reply;
+  final bool fromMe;
+  const _ReplyPreviewBlock({required this.reply, required this.fromMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final label = reply.targetLoaded
+        ? (reply.text ?? 'Attachment')
+        : 'Replying to a message';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: scheme.surface.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+        border: Border(left: BorderSide(color: scheme.primary, width: 3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (reply.targetLoaded && reply.sender.isNotEmpty)
+            Text(reply.sender,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600)),
+          Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Fallback label for a reaction row when the target bubble isn't shown inline
+/// (we don't yet merge reactions onto the target by default).
+String _reactionRowLabel(MessageModel m) {
+  final t = tapbackFromCode(m.associatedMessageType);
+  if (t == null) return 'Reacted to a message';
+  final emoji = tapbackEmoji(t.kind);
+  return t.isRemoval ? 'Removed a $emoji reaction' : '$emoji Reacted to a message';
+}
+
+/// A subtle, centered row for service/system/unknown items — never a broken
+/// bubble. Tap opens the Message Debug inspector (Part A) so we can see why an
+/// item is unsupported, without dumping raw payloads into the conversation.
+class _SystemRow extends StatelessWidget {
+  final MessageModel message;
+  final MessageClassification classification;
+  final int mergedCount;
+  final VoidCallback onDebug;
+  const _SystemRow({
+    required this.message,
+    required this.classification,
+    this.mergedCount = 1,
+    required this.onDebug,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final kind = classification.kind;
+    final base = switch (kind) {
+      MessageRenderableKind.service => serviceEventLabel(message),
+      MessageRenderableKind.reaction => _reactionRowLabel(message),
+      MessageRenderableKind.retracted => retractedLabel(message),
+      _ => 'Unsupported message',
+    };
+    // When consecutive system rows were merged, show a compact count.
+    final label = mergedCount > 1 ? '$base · +${mergedCount - 1} more' : base;
+    final isUnknown = kind == MessageRenderableKind.unknown;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 24),
+      child: Center(
+        child: InkWell(
+          onTap: onDebug,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isUnknown)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: AttachmentView(api: api!, attachment: a),
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Icon(Icons.help_outline,
+                        size: 14, color: scheme.onSurfaceVariant),
                   ),
-              if (message.hasText)
-                Text(message.text!, style: TextStyle(color: textColor)),
-              const SizedBox(height: 2),
-              _Footer(message: message, onRetry: onRetry),
-            ],
+                Flexible(
+                  child: Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontStyle:
+                              isUnknown ? FontStyle.italic : FontStyle.normal,
+                        ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -230,36 +668,71 @@ class _MessageBubble extends StatelessWidget {
 
 class _Footer extends StatelessWidget {
   final MessageModel message;
+
+  /// Whether to render a delivery-status word (latest outgoing only, Part I).
+  final bool showStatus;
   final VoidCallback onRetry;
-  const _Footer({required this.message, required this.onRetry});
+  const _Footer({
+    required this.message,
+    required this.showStatus,
+    required this.onRetry,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final small = Theme.of(context).textTheme.labelSmall;
+    final state = deliveryStateFor(message);
 
-    if (message.localState == LocalSendState.failed) {
-      return GestureDetector(
-        onTap: onRetry,
-        child: Text('Failed — tap to retry',
-            style: small?.copyWith(color: scheme.error)),
+    // Failed is always actionable, regardless of position.
+    if (state == MessageDeliveryState.failed) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: GestureDetector(
+          onTap: onRetry,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 13, color: scheme.error),
+              const SizedBox(width: 4),
+              Text('Failed — tap to retry',
+                  style: small?.copyWith(color: scheme.error)),
+            ],
+          ),
+        ),
       );
     }
 
     final parts = <String>[];
     final ts = message.dateCreated;
     if (ts != null) parts.add(_time(ts));
-    if (message.localState == LocalSendState.pending) {
-      parts.add('Sending…');
-    } else if (message.isFromMe) {
-      if (message.isRead) {
-        parts.add('Read');
-      } else if (message.isDelivered) {
-        parts.add('Delivered');
+    // Status word is outgoing-only, shown only on the latest outgoing message.
+    if (showStatus) {
+      switch (state) {
+        case MessageDeliveryState.sending:
+          parts.add('Sending…');
+          break;
+        case MessageDeliveryState.sent:
+          parts.add('Sent');
+          break;
+        case MessageDeliveryState.read:
+          parts.add('Read');
+          break;
+        case MessageDeliveryState.delivered:
+          parts.add('Delivered');
+          break;
+        case MessageDeliveryState.incoming:
+        case MessageDeliveryState.failed:
+        case MessageDeliveryState.unknown:
+          break;
       }
     }
-    return Text(parts.join(' · '),
-        style: small?.copyWith(color: scheme.onSurfaceVariant));
+    if (parts.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text(parts.join(' · '),
+          style: small?.copyWith(color: scheme.onSurfaceVariant)),
+    );
   }
 
   String _time(int unixMs) {

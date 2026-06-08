@@ -95,6 +95,15 @@ func Run(options Options) error {
 		log.Printf("chat.db capabilities: %+v", capabilities)
 	}
 
+	// Probe the chat.db `message` columns once so the sync + debug reads can
+	// select BlueBubbles-compatible semantic columns only when present. Wired
+	// before the first sync so initial messages carry the new fields too.
+	messageColumns, err := store.ProbeMessageColumns(ctx, db)
+	if err != nil {
+		log.Printf("chat.db message-column probe failed (semantic fields disabled): %v", err)
+	}
+	queries.SetMessageColumns(messageColumns)
+
 	log.Printf("relay.db path: %s", cfg.RelayDBPath)
 	hub := realtime.NewHub()
 	defer hub.Close()
@@ -201,6 +210,11 @@ func Run(options Options) error {
 	handlers := httpapi.NewHandlers(apiQueries, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
 	handlers.SetRuleService(relay)                   // v0.11.3 sync rules backed by relay.db
 	handlers.SetNotificationConfigurator(dispatcher) // v0.12 live FCM/Firebase config
+
+	// Message inspector (debug): always backed by the live chat.db so it can
+	// surface iMessage fields the synced relay does not keep. Reuses the probed
+	// `message` column set. Auth-protected at the router.
+	handlers.SetDebugService(queries, messageColumns)
 
 	handler := httpapi.NewRouter(
 		handlers,

@@ -102,6 +102,25 @@ func (db *DB) Migrate() error {
 		return err
 	}
 
+	// v0.13: BlueBubbles-compatible semantic fields carried from chat.db so the
+	// normal Message API can expose reactions/replies/effects/service events.
+	semanticCols := []struct{ name, typ string }{
+		{"associated_message_type", "INTEGER"},
+		{"associated_message_guid", "TEXT"},
+		{"thread_originator_guid", "TEXT"},
+		{"item_type", "INTEGER"},
+		{"group_action_type", "INTEGER"},
+		{"group_title", "TEXT"},
+		{"balloon_bundle_id", "TEXT"},
+		{"expressive_send_style_id", "TEXT"},
+		{"payload_data_present", "INTEGER"},
+	}
+	for _, c := range semanticCols {
+		if err := db.ensureColumn("messages", c.name, c.typ); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

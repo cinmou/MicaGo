@@ -165,6 +165,8 @@ type Handlers struct {
 	startedAt       int64
 	rules           ruleService
 	notifyConfig    notificationConfigurator
+	debug           debugQueryService
+	debugColumns    map[string]bool
 }
 
 // SetRuleService wires the v0.11.3 sync-rule store after construction (kept off

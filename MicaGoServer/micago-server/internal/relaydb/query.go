@@ -46,13 +46,25 @@ LIMIT ? OFFSET ?;
 	return chats, nil
 }
 
+// relayMessageSelect is the shared SELECT for relay message reads. It exposes
+// the BlueBubbles-compatible semantic columns and LEFT JOINs message_state so
+// retracted/edited/error (maintained by the lookback update pass) are surfaced.
+const relayMessageSelect = `
+SELECT m.guid, m.text, m.subject, m.service, m.date_created, m.date_read, m.date_delivered,
+       m.is_from_me, m.is_read, m.is_delivered, m.handle_id, m.handle_service, m.cache_has_attachments,
+       m.chat_guid,
+       m.associated_message_type, m.associated_message_guid, m.thread_originator_guid,
+       m.item_type, m.group_action_type, m.group_title, m.balloon_bundle_id,
+       m.expressive_send_style_id, m.payload_data_present,
+       ms.date_edited, ms.date_retracted, ms.error
+FROM messages AS m
+LEFT JOIN message_state AS ms ON ms.guid = m.guid
+`
+
 func (db *DB) ListRecentMessages(ctx context.Context, limit, offset int, service string, _ bool) ([]store.MessageJSON, error) {
-	query := `
-SELECT guid, text, subject, service, date_created, date_read, date_delivered,
-       is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments
-FROM messages
-WHERE (? = 'all' OR service = ?)
-ORDER BY source_rowid DESC, date_created DESC
+	query := relayMessageSelect + `
+WHERE (? = 'all' OR m.service = ?)
+ORDER BY m.source_rowid DESC, m.date_created DESC
 LIMIT ? OFFSET ?;
 `
 	rows, err := db.sqlDB.QueryContext(ctx, query, service, service, limit, offset)
@@ -89,12 +101,9 @@ func (db *DB) GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, er
 }
 
 func (db *DB) ListChatMessages(ctx context.Context, guid string, limit, offset int, _ bool) ([]store.MessageJSON, error) {
-	query := `
-SELECT guid, text, subject, service, date_created, date_read, date_delivered,
-       is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments
-FROM messages
-WHERE chat_guid = ?
-ORDER BY source_rowid DESC, date_created DESC
+	query := relayMessageSelect + `
+WHERE m.chat_guid = ?
+ORDER BY m.source_rowid DESC, m.date_created DESC
 LIMIT ? OFFSET ?;
 `
 	rows, err := db.sqlDB.QueryContext(ctx, query, guid, limit, offset)
@@ -107,14 +116,11 @@ LIMIT ? OFFSET ?;
 }
 
 func (db *DB) FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*store.MessageJSON, error) {
-	rows, err := db.sqlDB.QueryContext(ctx, `
-SELECT guid, text, subject, service, date_created, date_read, date_delivered,
-       is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments
-FROM messages
-WHERE chat_guid = ?
-  AND is_from_me = 1
-  AND date_created >= ?
-ORDER BY source_rowid DESC, date_created DESC
+	rows, err := db.sqlDB.QueryContext(ctx, relayMessageSelect+`
+WHERE m.chat_guid = ?
+  AND m.is_from_me = 1
+  AND m.date_created >= ?
+ORDER BY m.source_rowid DESC, m.date_created DESC
 LIMIT 100;
 `, guid, sentAtUnixMilli)
 	if err != nil {
@@ -151,12 +157,9 @@ func (db *DB) GetMessagesByGUIDs(ctx context.Context, guids []string) ([]store.M
 		args[i] = guid
 	}
 
-	rows, err := db.sqlDB.QueryContext(ctx, `
-SELECT guid, text, subject, service, date_created, date_read, date_delivered,
-       is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments
-FROM messages
-WHERE guid IN (`+strings.Join(placeholders, ", ")+`)
-ORDER BY source_rowid ASC, date_created ASC;
+	rows, err := db.sqlDB.QueryContext(ctx, relayMessageSelect+`
+WHERE m.guid IN (`+strings.Join(placeholders, ", ")+`)
+ORDER BY m.source_rowid ASC, m.date_created ASC;
 `, args...)
 	if err != nil {
 		return nil, err
@@ -214,6 +217,7 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 		var message store.MessageJSON
 		var handleID, handleService *string
 		var isFromMe, isRead, isDelivered, hasAttachments int64
+		var payloadPresent sql.NullInt64
 		if err := rows.Scan(
 			&message.GUID,
 			&message.Text,
@@ -228,6 +232,19 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 			&handleID,
 			&handleService,
 			&hasAttachments,
+			&message.ChatGUID,
+			&message.AssociatedMessageType,
+			&message.AssociatedMessageGUID,
+			&message.ThreadOriginatorGUID,
+			&message.ItemType,
+			&message.GroupActionType,
+			&message.GroupTitle,
+			&message.BalloonBundleID,
+			&message.ExpressiveSendStyleID,
+			&payloadPresent,
+			&message.DateEdited,
+			&message.DateRetracted,
+			&message.Error,
 		); err != nil {
 			return nil, err
 		}
@@ -236,6 +253,9 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 		message.IsRead = isRead != 0
 		message.IsDelivered = isDelivered != 0
 		message.CacheHasAttachments = hasAttachments != 0
+		message.PayloadDataPresent = payloadPresent.Valid && payloadPresent.Int64 != 0
+		message.IsRetracted = message.DateRetracted != nil
+		message.IsEdited = message.DateEdited != nil
 		if handleID != nil {
 			message.Handle = &store.HandleJSON{
 				ID:      *handleID,
