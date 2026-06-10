@@ -634,7 +634,71 @@ private struct ServerPage: View {
             FullDiskAccessBanner()
         }
 
+        LiveSyncMonitorCard()
         ServerBindAddressCard()
+    }
+}
+
+/// C11 live sync monitor: shows chat.db/WAL/SHM mtimes, last sync trigger /
+/// timing / result, pending triggers, lock retries, pending/late sends, and the
+/// last emitted event. "Run sync now" + "Copy diagnostics" for debugging.
+/// Tokens and full message text are never shown.
+private struct LiveSyncMonitorCard: View {
+    @EnvironmentObject var model: AppModel
+
+    private func t(_ ms: Int64?) -> String {
+        guard let ms, ms > 0 else { return "—" }
+        let d = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: d)
+    }
+
+    var body: some View {
+        SectionCard(title: "Live Sync Monitor") {
+            let d = model.syncDiagnostics
+            HStack(spacing: 10) {
+                StatusDot(on: model.reachable)
+                Text(model.reachable ? "Server running" : "Server unreachable")
+                    .font(.headline)
+                Spacer()
+                if model.syncNowBusy { ProgressView().controlSize(.small) }
+                Button { Task { await model.runSyncNow() } } label: {
+                    Label("Run sync now", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
+                .disabled(model.syncNowBusy || !model.reachable)
+                Button { copyToPasteboard(model.syncDiagnosticsText) } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .controlSize(.small)
+            }
+
+            if let d {
+                LabeledRow(label: "Last trigger", value: d.lastTriggerReason ?? "—")
+                LabeledRow(label: "Last sync", value: t(d.lastCompletedAt))
+                LabeledRow(label: "Duration", value: "\(d.lastDurationMillis ?? 0) ms")
+                LabeledRow(label: "Inserted / updated / unsent",
+                           value: "\(d.lastInsertedMessages ?? 0) / \(d.lastUpdatePassCount ?? 0) / \(d.lastUnsentCount ?? 0)")
+                LabeledRow(label: "chat.db / WAL / SHM mtime",
+                           value: "\(t(d.lastChatDbMtime)) / \(t(d.lastWalMtime)) / \(t(d.lastShmMtime))")
+                LabeledRow(label: "Pending triggers / lock retries",
+                           value: "\(d.pendingTriggerCount ?? 0) / \(d.lockRetryCount ?? 0)")
+                LabeledRow(label: "Pending / late-matched sends",
+                           value: "\(d.pendingSendsCount ?? 0) / \(d.lateMatchedSendsCount ?? 0)")
+                LabeledRow(label: "Last event",
+                           value: "\(d.lastEmittedEventType ?? "—") \(d.lastEmittedChatGuid ?? "")")
+                if let err = d.lastSyncError, !err.isEmpty {
+                    Text("Last error: \(err)").font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text("No sync diagnostics yet. Start the server and trigger a sync.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Diagnostics only — no tokens or message text are shown.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -1290,47 +1354,73 @@ private struct ReachableDot: View {
 
 // MARK: - Client Setup (pairing endpoint + token; QR encodes the token)
 
-private enum PairingScope: String, CaseIterable, Identifiable {
-    case auto, local, lan, `public`
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .auto: return "Auto"
-        case .local: return "Local"
-        case .lan: return "LAN"
-        case .public: return "Public"
-        }
-    }
-}
 
 private struct ClientSetupSection: View {
     @EnvironmentObject var model: AppModel
-    @State private var scope: PairingScope = .auto
+
+    private var lanTargets: [PairingTarget] {
+        model.pairingTargets.filter { $0.scope == .lan }
+    }
+    private var publicTarget: PairingTarget? {
+        model.pairingTargets.first { $0.scope == .public }
+    }
+    private var selectedLan: PairingTarget? {
+        lanTargets.first { $0.baseUrl == model.selectedPairingBaseURL } ?? lanTargets.first
+    }
+    private var hasEndpoint: Bool { selectedLan != nil || publicTarget != nil }
 
     var body: some View {
         SectionCard(title: "Client Setup") {
-            Text("Pick which endpoint a client (such as the Android app) should use, then copy the URL and token or scan the QR code.")
+            Text("Pick a pairing mode, choose your LAN address, then scan the QR code from the Android app.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Picker("", selection: $scope) {
-                ForEach(PairingScope.allCases) { Text($0.title).tag($0) }
+            // C10: only LAN-only and LAN + Public fallback are offered.
+            Picker("Mode", selection: Binding(
+                get: { model.pairingMode },
+                set: { model.pairingMode = $0 }
+            )) {
+                Text("LAN only").tag("lanOnly")
+                Text("LAN + Public fallback").tag("lanFirst")
             }
             .pickerStyle(.segmented)
-            .labelsHidden()
-            .onChange(of: scope) { _ in applyScope() }
 
-            Text(scopeExplanation)
+            Text(model.pairingMode == "lanOnly"
+                 ? "The client connects only on your local network and never uses the public address."
+                 : "The client tries your LAN first, then falls back to the public address if LAN is unreachable.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let target = resolvedTarget {
-                EndpointURLRow(label: "Base", value: target.baseUrl)
-                EndpointURLRow(label: "WS", value: target.wsUrl)
-            } else {
-                Text(emptyStateMessage)
+            // Preferred LAN IP.
+            if lanTargets.isEmpty {
+                Text("No LAN endpoint. Choose “Local network” in Server Bind Address and restart the server.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack {
+                    Text("LAN address").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { selectedLan?.baseUrl ?? lanTargets.first!.baseUrl },
+                        set: { model.selectedPairingBaseURL = $0 }
+                    )) {
+                        ForEach(lanTargets) { Text($0.baseUrl).tag($0.baseUrl) }
+                    }
+                    .labelsHidden()
+                }
+                if let lan = selectedLan {
+                    EndpointURLRow(label: "Base", value: lan.baseUrl)
+                    EndpointURLRow(label: "WS", value: lan.wsUrl)
+                }
+            }
+
+            if model.pairingMode == "lanFirst" {
+                if let pub = publicTarget {
+                    EndpointURLRow(label: "Public", value: pub.baseUrl)
+                } else {
+                    Text("No public URL configured. Set one under Connections to enable the fallback.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Divider()
@@ -1352,7 +1442,7 @@ private struct ClientSetupSection: View {
             Text("Keep your token private. Don’t paste it into screenshots, logs, or chats.")
                 .font(.caption2).foregroundStyle(.secondary)
 
-            if !model.token.isEmpty, resolvedTarget != nil {
+            if !model.token.isEmpty, hasEndpoint {
                 Button {
                     copyToPasteboard(model.pairingPayload)
                 } label: {
@@ -1380,7 +1470,7 @@ private struct ClientSetupSection: View {
                         } else {
                             Text("Could not render QR code.").foregroundStyle(.secondary)
                         }
-                        Text("Encodes the selected endpoint's base URL, WebSocket URL, and token. This is a per‑pairing choice — Local / LAN / Public all stay active.")
+                        Text("Encodes the chosen LAN address" + (model.pairingMode == "lanFirst" ? " and the public fallback," : ",") + " the connection mode, and the token (v2 pairing).")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1388,55 +1478,11 @@ private struct ClientSetupSection: View {
                 .font(.subheadline)
             }
         }
-        .onAppear(perform: applyScope)
-    }
-
-    private var scopeExplanation: String {
-        switch scope {
-        case .auto: return "Auto: Public when it’s configured and reachable, otherwise LAN, otherwise Local."
-        case .local: return "Local / loopback: for testing on this Mac."
-        case .lan: return "LAN / same Wi‑Fi: for an Android device on the same Wi‑Fi."
-        case .public: return "Public / remote: for an Android device over mobile data or a remote network."
-        }
-    }
-
-    private var emptyStateMessage: String {
-        switch scope {
-        case .lan:
-            return "No LAN endpoint. Choose “Local network” in Server Bind Address and restart the server."
-        case .public:
-            return "No public endpoint. Set a Public / remote URL above first."
-        default:
-            return "Start the server to choose a pairing endpoint."
-        }
-    }
-
-    private var resolvedTarget: PairingTarget? {
-        let targets = model.pairingTargets
-        switch scope {
-        case .local: return targets.first { $0.scope == .local }
-        case .lan: return targets.first { $0.scope == .lan }
-        case .public: return targets.first { $0.scope == .public }
-        case .auto:
-            // Prefer Public when it's configured AND reachable, then LAN, then Local.
-            if publicReachable, let pub = targets.first(where: { $0.scope == .public }) {
-                return pub
+        .onAppear {
+            // Default the preferred LAN IP to the first detected LAN endpoint.
+            if model.selectedPairingBaseURL.isEmpty, let first = lanTargets.first {
+                model.selectedPairingBaseURL = first.baseUrl
             }
-            return targets.first { $0.scope == .lan }
-                ?? targets.first { $0.scope == .local }
-        }
-    }
-
-    private var publicReachable: Bool {
-        guard let pub = model.urls?.public, pub.enabled else { return false }
-        return pub.reachable == .yes
-    }
-
-    /// Keep the QR payload (driven by model.selectedPairingBaseURL) in sync with
-    /// the chosen scope.
-    private func applyScope() {
-        if let t = resolvedTarget {
-            model.selectedPairingBaseURL = t.baseUrl
         }
     }
 

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
 import '../contacts/contacts_service.dart';
+import '../settings/message_display_controller.dart';
 import 'avatar.dart';
 import 'chat_list_controller.dart';
 import 'models/chat_summary.dart';
@@ -30,6 +31,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void initState() {
     super.initState();
     _controller = ChatListController(context.read<AppController>());
+    _controller.includeDebug =
+        context.read<MessageDisplayController>().prefs.showDebugChats;
+    _controller.startRealtime();
     WidgetsBinding.instance.addPostFrameCallback((_) => _controller.load());
   }
 
@@ -40,24 +44,34 @@ class _ChatListScreenState extends State<ChatListScreen> {
     super.dispose();
   }
 
-  List<ChatSummary> _filtered(List<ChatSummary> chats, ContactsService contacts) {
+  List<ChatSummary> _filtered(
+    List<ChatSummary> chats,
+    ContactsService contacts,
+  ) {
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return chats;
-    return chats.where((c) {
-      final name = !c.isGroup ? contacts.displayNameFor(c.chatIdentifier) : null;
-      final hay = [
-        c.title,
-        name ?? '',
-        c.chatIdentifier ?? '',
-        c.serviceName ?? '',
-        c.lastMessagePreview ?? '',
-      ].join(' ').toLowerCase();
-      return hay.contains(q);
-    }).toList(growable: false);
+    return chats
+        .where((c) {
+          final name = !c.isGroup
+              ? contacts.displayNameFor(c.chatIdentifier)
+              : null;
+          final hay = [
+            c.title,
+            name ?? '',
+            c.chatIdentifier ?? '',
+            c.serviceName ?? '',
+            c.lastMessagePreview ?? '',
+          ].join(' ').toLowerCase();
+          return hay.contains(q);
+        })
+        .toList(growable: false);
   }
 
   @override
   Widget build(BuildContext context) {
+    // React to the "show debug chats" preference: reloads with/without noise.
+    _controller.setIncludeDebug(
+        context.watch<MessageDisplayController>().prefs.showDebugChats);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -138,7 +152,8 @@ class _SearchField extends StatelessWidget {
         ],
         elevation: const WidgetStatePropertyAll(0),
         padding: const WidgetStatePropertyAll(
-            EdgeInsets.symmetric(horizontal: 12)),
+          EdgeInsets.symmetric(horizontal: 12),
+        ),
       ),
     );
   }
@@ -166,7 +181,11 @@ class _ChatRow extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _ChatRow({required this.chat, required this.onTap, this.selected = false});
+  const _ChatRow({
+    required this.chat,
+    required this.onTap,
+    this.selected = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -202,8 +221,11 @@ class _ChatRow extends StatelessWidget {
           ),
           if (chat.isArchived) ...[
             const SizedBox(width: 6),
-            Icon(Icons.archive_outlined,
-                size: 14, color: scheme.onSurfaceVariant),
+            Icon(
+              Icons.archive_outlined,
+              size: 14,
+              color: scheme.onSurfaceVariant,
+            ),
           ],
         ],
       ),
@@ -240,10 +262,9 @@ class _ChatRow extends StatelessWidget {
     if (chat.lastMessageAt != null) {
       return Text(
         _relativeTime(chat.lastMessageAt!),
-        style: Theme.of(context)
-            .textTheme
-            .bodySmall
-            ?.copyWith(color: scheme.onSurfaceVariant),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
       );
     }
     return null;
@@ -297,8 +318,11 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off_outlined,
-                size: 48, color: Theme.of(context).colorScheme.error),
+            Icon(
+              Icons.cloud_off_outlined,
+              size: 48,
+              color: Theme.of(context).colorScheme.error,
+            ),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),

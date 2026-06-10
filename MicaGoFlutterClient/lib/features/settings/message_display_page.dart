@@ -52,6 +52,33 @@ class MessageDisplayPage extends StatelessWidget {
                 value: p.showEffectHints,
                 onChanged: (v) => set(p.copyWith(showEffectHints: v)),
               ),
+              const Divider(height: 1),
+              SwitchListTile(
+                title: const Text('Show debug-only chats'),
+                subtitle: const Text(
+                    'Reveal chats whose only content is system/noise rows'),
+                value: p.showDebugChats,
+                onChanged: (v) => set(p.copyWith(showDebugChats: v)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text('Recent messages per chat',
+            style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 4),
+        Text('How many recent messages to fetch per chat during initial sync.',
+            style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              for (final n in const [50, 100, 200])
+                _ChoiceTile(
+                  label: '$n messages',
+                  selected: p.messagesPerChat == n,
+                  onTap: () => set(p.copyWith(messagesPerChat: n)),
+                ),
             ],
           ),
         ),

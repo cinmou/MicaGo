@@ -17,6 +17,15 @@ const (
 	AttachmentKindFile    = "file"
 	AttachmentKindSticker = "sticker"
 	AttachmentKindUnknown = "unknown"
+
+	DisplayKindImage             = "image"
+	DisplayKindImageNeedsPreview = "image_needs_preview"
+	DisplayKindVideo             = "video"
+	DisplayKindAudio             = "audio"
+	DisplayKindVoice             = "voice"
+	DisplayKindFile              = "file"
+	DisplayKindSticker           = "sticker"
+	DisplayKindUnknown           = "unknown"
 )
 
 // utiMimeOverrides maps Apple UTIs that Go's mime package can't resolve (or that
@@ -161,6 +170,54 @@ func IsVoiceMessage(uti, mimeType *string) bool {
 	return false
 }
 
+func IsTIFFAttachment(mimeType, uti, transferName, filename *string) bool {
+	m := strings.ToLower(strings.TrimSpace(deref(mimeType)))
+	if m == "image/tiff" || m == "image/tif" || m == "image/x-tiff" {
+		return true
+	}
+	u := strings.ToLower(strings.TrimSpace(deref(uti)))
+	if u == "public.tiff" {
+		return true
+	}
+	for _, name := range []string{deref(transferName), deref(filename)} {
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext == ".tif" || ext == ".tiff" {
+			return true
+		}
+	}
+	return false
+}
+
+func IsPreviewableImage(kind string, mimeType, uti, transferName, filename *string) bool {
+	if kind != AttachmentKindImage {
+		return false
+	}
+	return !IsTIFFAttachment(mimeType, uti, transferName, filename)
+}
+
+func DisplayKind(kind string, isVoice bool, needsPreviewConversion bool) string {
+	if needsPreviewConversion {
+		return DisplayKindImageNeedsPreview
+	}
+	if isVoice {
+		return DisplayKindVoice
+	}
+	switch kind {
+	case AttachmentKindImage:
+		return DisplayKindImage
+	case AttachmentKindVideo:
+		return DisplayKindVideo
+	case AttachmentKindAudio:
+		return DisplayKindAudio
+	case AttachmentKindFile:
+		return DisplayKindFile
+	case AttachmentKindSticker:
+		return DisplayKindSticker
+	default:
+		return DisplayKindUnknown
+	}
+}
+
 // DecorateAttachmentJSON fills the additive, derived fields on an AttachmentJSON
 // from its already-populated raw fields (MimeType, Uti, TransferName, Filename,
 // IsSticker). The stored MimeType is preserved when present and only filled in
@@ -169,9 +226,15 @@ func DecorateAttachmentJSON(a *AttachmentJSON) {
 	if a == nil {
 		return
 	}
+	if a.OriginalMimeType == nil {
+		a.OriginalMimeType = a.MimeType
+	}
 	a.MimeType = InferMimeType(a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.AttachmentKind = AttachmentKind(a.IsSticker, a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.IsVoiceMessage = IsVoiceMessage(a.Uti, a.MimeType)
+	a.NeedsPreviewConversion = IsTIFFAttachment(a.MimeType, a.Uti, a.TransferName, a.Filename)
+	a.IsPreviewableImage = IsPreviewableImage(a.AttachmentKind, a.MimeType, a.Uti, a.TransferName, a.Filename)
+	a.DisplayKind = DisplayKind(a.AttachmentKind, a.IsVoiceMessage, a.NeedsPreviewConversion)
 }
 
 func mimeFromExtension(name string) string {

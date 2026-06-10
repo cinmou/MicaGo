@@ -51,6 +51,38 @@ struct SyncStatus: Codable {
     var intervalSeconds: Int64
     var lastSyncAt: Int64?
     var lastMessageRowId: Int64?
+    // C11 live sync monitor. Optional so older servers still decode.
+    var diagnostics: SyncDiagnostics?
+}
+
+/// Envelope for POST /api/sync/now (`{ok, diagnostics}`).
+struct SyncNowResponse: Codable {
+    var ok: Bool
+    var diagnostics: SyncDiagnostics
+}
+
+/// C11 live-sync diagnostics surfaced by GET /api/server/status (and the
+/// POST /api/sync/now response). No tokens or full message text.
+struct SyncDiagnostics: Codable {
+    var lastStartedAt: Int64?
+    var lastCompletedAt: Int64?
+    var lastDurationMillis: Int64?
+    var lastTriggerReason: String?
+    var lastInsertedMessages: Int?
+    var lastSyncedMessages: Int?
+    var lastUpdatePassCount: Int?
+    var lastUnsentCount: Int?
+    var lastScannedMessageRowId: Int64?
+    var lastChatDbMtime: Int64?
+    var lastWalMtime: Int64?
+    var lastShmMtime: Int64?
+    var lastSyncError: String?
+    var pendingSendsCount: Int?
+    var pendingTriggerCount: Int?
+    var lockRetryCount: Int?
+    var lateMatchedSendsCount: Int?
+    var lastEmittedEventType: String?
+    var lastEmittedChatGuid: String?
 }
 
 struct NotificationStatus: Codable {

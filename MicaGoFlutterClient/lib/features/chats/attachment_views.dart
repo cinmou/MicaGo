@@ -29,7 +29,7 @@ class AttachmentView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (attachment.isImage) {
+    if (attachment.canRenderInlineImage) {
       return _ImageAttachment(
         api: api,
         attachment: attachment,
@@ -37,10 +37,67 @@ class AttachmentView extends StatelessWidget {
         index: imageIndex,
       );
     }
+    if (attachment.isImage && attachment.needsPreviewConversion) {
+      return _PreviewUnavailableAttachment(attachment: attachment);
+    }
     if (attachment.isAudio) {
       return _AudioAttachment(api: api, attachment: attachment);
     }
     return _FileAttachment(attachment: attachment);
+  }
+}
+
+class _PreviewUnavailableAttachment extends StatelessWidget {
+  final AttachmentModel attachment;
+  const _PreviewUnavailableAttachment({required this.attachment});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: scheme.surface.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.image_not_supported_outlined,
+            color: scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('TIFF image'),
+                Text(
+                  'Preview not available yet',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (attachment.displayName != 'Attachment')
+                  Text(
+                    attachment.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                if (attachment.totalBytes > 0)
+                  Text(
+                    _formatSize(attachment.totalBytes),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -70,10 +127,11 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
   }
 
   Future<Uint8List> _loadBytes() async {
-    final cached = imageByteCache[widget.attachment.guid];
+    final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
+    final cached = imageByteCache[cacheKey];
     if (cached != null) return cached;
-    final bytes = await widget.api.getAttachmentBytes(widget.attachment.guid);
-    imageByteCache[widget.attachment.guid] = bytes;
+    final bytes = await widget.api.getAttachmentPreviewBytes(widget.attachment);
+    imageByteCache[cacheKey] = bytes;
     return bytes;
   }
 
@@ -99,14 +157,21 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
             images: widget.siblings,
             initialIndex: widget.index,
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.memory(
-              bytes,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              errorBuilder: (_, _, _) =>
-                  _FileAttachment(attachment: widget.attachment),
+          // Bounded inline thumbnail: cap height and downscale the decode
+          // (cacheWidth) so a large photo never decodes at full resolution in
+          // the scrolling list. Full-size loading happens in the media viewer.
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260, maxWidth: 280),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.memory(
+                bytes,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                cacheWidth: 560,
+                errorBuilder: (_, _, _) =>
+                    _FileAttachment(attachment: widget.attachment),
+              ),
             ),
           ),
         );
@@ -180,11 +245,13 @@ class _AudioAttachmentState extends State<_AudioAttachment> {
             children: [
               IconButton(
                 onPressed: _failed ? null : _toggle,
-                icon: Icon(_failed
-                    ? Icons.error_outline
-                    : playing
-                        ? Icons.pause_circle
-                        : Icons.play_circle),
+                icon: Icon(
+                  _failed
+                      ? Icons.error_outline
+                      : playing
+                      ? Icons.pause_circle
+                      : Icons.play_circle,
+                ),
               ),
               const SizedBox(width: 4),
               Flexible(
@@ -225,11 +292,16 @@ class _FileAttachment extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(attachment.displayName,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(
+                  attachment.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 if (attachment.totalBytes > 0)
-                  Text(_humanSize(attachment.totalBytes),
-                      style: Theme.of(context).textTheme.bodySmall),
+                  Text(
+                    _humanSize(attachment.totalBytes),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
               ],
             ),
           ),
@@ -247,9 +319,11 @@ class _FileAttachment extends StatelessWidget {
     return Icons.insert_drive_file_outlined;
   }
 
-  String _humanSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
+  String _humanSize(int bytes) => _formatSize(bytes);
+}
+
+String _formatSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }

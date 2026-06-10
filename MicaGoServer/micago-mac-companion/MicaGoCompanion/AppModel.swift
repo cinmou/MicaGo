@@ -26,6 +26,14 @@ final class AppModel: ObservableObject {
     /// not a global mode). Stored by baseUrl.
     @Published var selectedPairingBaseURL: String = ""
 
+    /// C10 pairing mode for the QR payload: "lanOnly" or "lanFirst" (LAN +
+    /// Public fallback). Persisted. Public/loopback are never offered as a
+    /// standalone user-facing mode.
+    @Published var pairingMode: String =
+        UserDefaults.standard.string(forKey: "pairingMode") ?? "lanFirst" {
+        didSet { UserDefaults.standard.set(pairingMode, forKey: "pairingMode") }
+    }
+
     /// LAN base URLs the user has hidden from pairing/QR selection. This is a
     /// UI/pairing filter only — it does not change server networking; the
     /// endpoints remain present in `GET /api/server/urls`.
@@ -60,6 +68,46 @@ final class AppModel: ObservableObject {
     @Published var recentCount: Int = 50
     @Published var syncBusy = false
 
+    // C11 live sync monitor
+    @Published var syncNowBusy = false
+    @Published var lastSyncDiagnostics: SyncDiagnostics?
+
+    /// Effective sync diagnostics: the last manual run, else the live status poll.
+    var syncDiagnostics: SyncDiagnostics? { lastSyncDiagnostics ?? status?.sync.diagnostics }
+
+    /// Triggers an immediate server sync (C11 debug) and refreshes status.
+    func runSyncNow() async {
+        guard let baseURL else { return }
+        syncNowBusy = true
+        defer { syncNowBusy = false }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            lastSyncDiagnostics = try await client.runSyncNow()
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Redaction-safe, copyable diagnostics text (no token, no message text).
+    var syncDiagnosticsText: String {
+        guard let d = syncDiagnostics else { return "No sync diagnostics yet." }
+        func ms(_ v: Int64?) -> String { v.map { "\($0)" } ?? "—" }
+        return """
+        MicaGo sync diagnostics
+        lastTrigger: \(d.lastTriggerReason ?? "—")
+        lastStartedAt: \(ms(d.lastStartedAt))  lastCompletedAt: \(ms(d.lastCompletedAt))
+        lastDurationMs: \(ms(d.lastDurationMillis))
+        inserted: \(d.lastInsertedMessages ?? 0)  synced: \(d.lastSyncedMessages ?? 0)  updates: \(d.lastUpdatePassCount ?? 0)  unsent: \(d.lastUnsentCount ?? 0)
+        scannedRowId: \(ms(d.lastScannedMessageRowId))
+        chatDbMtime: \(ms(d.lastChatDbMtime))  walMtime: \(ms(d.lastWalMtime))  shmMtime: \(ms(d.lastShmMtime))
+        pendingTriggers: \(d.pendingTriggerCount ?? 0)  lockRetries: \(d.lockRetryCount ?? 0)
+        pendingSends: \(d.pendingSendsCount ?? 0)  lateMatchedSends: \(d.lateMatchedSendsCount ?? 0)
+        lastEvent: \(d.lastEmittedEventType ?? "—")  chat: \(d.lastEmittedChatGuid ?? "—")
+        lastError: \(d.lastSyncError ?? "—")
+        """
+    }
+
     var baseURL: URL? {
         guard let config else { return nil }
         return ConfigReader.baseURL(for: config)
@@ -90,28 +138,50 @@ final class AppModel: ObservableObject {
         return targets.first { $0.baseUrl == selectedPairingBaseURL } ?? targets.first
     }
 
-    /// Pairing payload for the QR code, built from the selected endpoint.
-    /// Local-network/remote use depends on which endpoint was chosen.
-    var pairingPayload: String {
-        let target = selectedPairingTarget
-        let base = (target?.baseUrl ?? status?.address.baseUrl ?? baseURL?.absoluteString ?? "")
-            .replacingOccurrences(of: "\"", with: "")
-        let ws = (target?.wsUrl ?? status?.address.websocketUrl ?? "")
-            .replacingOccurrences(of: "\"", with: "")
-        let escapedToken = token.replacingOccurrences(of: "\"", with: "")
-        return "{\"baseUrl\":\"\(base)\",\"websocketUrl\":\"\(ws)\",\"token\":\"\(escapedToken)\"}"
+    /// C10 v2 pairing payload for the QR code: endpoint candidates (selected LAN
+    /// endpoint first, optional Public fallback) + mode + token. Loopback/local
+    /// is never included. The token is redacted when [redacted] is true.
+    func pairingPayloadV2(redacted: Bool) -> String {
+        // Prefer the user-selected LAN endpoint; else the first LAN endpoint.
+        let lan = pairingTargets.first { $0.scope == .lan && $0.baseUrl == selectedPairingBaseURL }
+            ?? pairingTargets.first { $0.scope == .lan }
+        let pub = pairingTargets.first { $0.scope == .public }
+
+        var endpoints: [[String: Any]] = []
+        var priority = 1
+        func add(_ kind: String, _ t: PairingTarget) {
+            endpoints.append([
+                "kind": kind,
+                "baseUrl": t.baseUrl,
+                "wsUrl": t.wsUrl,
+                "priority": priority,
+            ])
+            priority += 1
+        }
+        if let lan { add("lan", lan) }
+        if pairingMode == "lanFirst", let pub { add("public", pub) }
+        // Fallback when no LAN is available: use Public as the sole endpoint.
+        if endpoints.isEmpty, let pub { add("public", pub) }
+
+        let obj: [String: Any] = [
+            "version": 2,
+            "mode": pairingMode == "lanOnly" ? "lan_only" : "lan_first",
+            "token": redacted ? "<redacted>" : token,
+            "serverName": Host.current().localizedName ?? "MicaGo Server",
+            "endpoints": endpoints,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
     }
 
-    /// Same payload as the QR/setup JSON, but with the token redacted — safe to
-    /// show in the UI or copy into a bug report.
-    var pairingPayloadRedacted: String {
-        let target = selectedPairingTarget
-        let base = (target?.baseUrl ?? status?.address.baseUrl ?? baseURL?.absoluteString ?? "")
-            .replacingOccurrences(of: "\"", with: "")
-        let ws = (target?.wsUrl ?? status?.address.websocketUrl ?? "")
-            .replacingOccurrences(of: "\"", with: "")
-        return "{\"baseUrl\":\"\(base)\",\"websocketUrl\":\"\(ws)\",\"token\":\"<redacted>\"}"
-    }
+    /// Pairing payload encoded into the QR code (v2).
+    var pairingPayload: String { pairingPayloadV2(redacted: false) }
+
+    /// Same payload with the token redacted — safe to show/copy.
+    var pairingPayloadRedacted: String { pairingPayloadV2(redacted: true) }
 
     // MARK: - Hidden LAN endpoints (pairing filter only)
 

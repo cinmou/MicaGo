@@ -9,41 +9,86 @@ import (
 	"micagoserver/internal/store"
 )
 
-func (db *DB) ListChats(ctx context.Context, limit, offset int, withArchived bool, service string) ([]store.ChatJSON, error) {
+func (db *DB) ListChats(ctx context.Context, limit, offset int, withArchived bool, service string, includeDebug bool) ([]store.ChatJSON, error) {
+	// Per-chat renderable summary via correlated subqueries over the persisted
+	// is_debug_only flag. Chats whose only content is debug-only/noise are
+	// flagged and (by default) hidden from the normal client list.
 	query := `
-SELECT guid, chat_identifier, service_name, display_name, is_archived
-FROM chats
-WHERE (? = 1 OR is_archived = 0)
-  AND (? = 'all' OR service_name = ?)
-ORDER BY updated_at DESC
-LIMIT ? OFFSET ?;
+SELECT c.guid, c.chat_identifier, c.service_name, c.display_name, c.is_archived,
+  (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid) AS total,
+  (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0) AS renderable,
+  (SELECT m.date_created FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_at,
+  (SELECT m.text FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_text
+FROM chats c
+WHERE (? = 1 OR c.is_archived = 0)
+  AND (? = 'all' OR c.service_name = ?)
+ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 `
-	rows, err := db.sqlDB.QueryContext(ctx, query, boolToInt(withArchived), service, service, limit, offset)
+	rows, err := db.sqlDB.QueryContext(ctx, query, boolToInt(withArchived), service, service)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var chats []store.ChatJSON
+	var all []store.ChatJSON
 	for rows.Next() {
 		var chat store.ChatJSON
+		var total, renderable int64
+		var latestAt *int64
+		var latestText *string
 		if err := rows.Scan(
 			&chat.GUID,
 			&chat.ChatIdentifier,
 			&chat.ServiceName,
 			&chat.DisplayName,
 			&chat.IsArchived,
+			&total,
+			&renderable,
+			&latestAt,
+			&latestText,
 		); err != nil {
 			return nil, err
 		}
-		chats = append(chats, chat)
+		chat.HasRenderableMessages = renderable > 0
+		chat.LatestRenderableAt = latestAt
+		if latestText != nil {
+			if t := strings.TrimSpace(*latestText); t != "" {
+				chat.LatestRenderablePreview = &t
+			}
+		}
+		chat.UnsupportedOnly = total > 0 && renderable == 0
+		if total == 0 {
+			chat.HiddenReason = "empty"
+		} else if renderable == 0 {
+			chat.HiddenReason = "debug_only"
+		}
+		all = append(all, chat)
 	}
-
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	return chats, nil
+	// Hide noise unless the caller asked for debug. Filtering happens here (not
+	// in SQL) so limit/offset apply to the visible set.
+	filtered := all
+	if !includeDebug {
+		filtered = filtered[:0]
+		for _, c := range all {
+			if c.HasRenderableMessages {
+				filtered = append(filtered, c)
+			}
+		}
+	}
+
+	// Apply offset/limit to the visible set.
+	if offset >= len(filtered) {
+		return []store.ChatJSON{}, nil
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[offset:end], nil
 }
 
 // relayMessageSelect is the shared SELECT for relay message reads. It exposes
@@ -52,7 +97,7 @@ LIMIT ? OFFSET ?;
 const relayMessageSelect = `
 SELECT m.guid, m.text, m.subject, m.service, m.date_created, m.date_read, m.date_delivered,
        m.is_from_me, m.is_read, m.is_delivered, m.handle_id, m.handle_service, m.cache_has_attachments,
-       m.chat_guid,
+       m.chat_guid, COALESCE(m.has_attributed_body, 0),
        m.associated_message_type, m.associated_message_guid, m.thread_originator_guid,
        m.item_type, m.group_action_type, m.group_title, m.balloon_bundle_id,
        m.expressive_send_style_id, m.payload_data_present,
@@ -216,7 +261,7 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 	for rows.Next() {
 		var message store.MessageJSON
 		var handleID, handleService *string
-		var isFromMe, isRead, isDelivered, hasAttachments int64
+		var isFromMe, isRead, isDelivered, hasAttachments, hasAttributedBody int64
 		var payloadPresent sql.NullInt64
 		if err := rows.Scan(
 			&message.GUID,
@@ -233,6 +278,7 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 			&handleService,
 			&hasAttachments,
 			&message.ChatGUID,
+			&hasAttributedBody,
 			&message.AssociatedMessageType,
 			&message.AssociatedMessageGUID,
 			&message.ThreadOriginatorGUID,
@@ -253,6 +299,7 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 		message.IsRead = isRead != 0
 		message.IsDelivered = isDelivered != 0
 		message.CacheHasAttachments = hasAttachments != 0
+		message.HasAttributedBody = hasAttributedBody != 0
 		message.PayloadDataPresent = payloadPresent.Valid && payloadPresent.Int64 != 0
 		message.IsRetracted = message.DateRetracted != nil
 		message.IsEdited = message.DateEdited != nil
@@ -308,6 +355,7 @@ func (db *DB) attachMessageAttachments(ctx context.Context, messages []store.Mes
 		if messages[i].Attachments == nil {
 			messages[i].Attachments = []store.AttachmentJSON{}
 		}
+		store.AnnotateMessageJSON(&messages[i])
 	}
 	return messages, nil
 }
@@ -351,6 +399,9 @@ ORDER BY created_at ASC, guid ASC;
 		attachment.IsSticker = isSticker.Valid && isSticker.Int64 != 0
 		attachment.DownloadURL = "/api/attachments/" + attachment.GUID
 		store.DecorateAttachmentJSON(&attachment)
+		if attachment.NeedsPreviewConversion {
+			attachment.PreviewURL = "/api/attachments/" + attachment.GUID + "/preview"
+		}
 		grouped[messageGUID] = append(grouped[messageGUID], attachment)
 	}
 

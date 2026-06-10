@@ -10,18 +10,23 @@ type HandleJSON struct {
 }
 
 type AttachmentJSON struct {
-	GUID         string  `json:"guid"`
-	Filename     *string `json:"filename"`
-	MimeType     *string `json:"mimeType"`
-	TransferName *string `json:"transferName"`
-	TotalBytes   int64   `json:"totalBytes"`
-	DownloadURL  string  `json:"downloadUrl"`
+	GUID             string  `json:"guid"`
+	Filename         *string `json:"filename"`
+	MimeType         *string `json:"mimeType"`
+	OriginalMimeType *string `json:"originalMimeType,omitempty"`
+	TransferName     *string `json:"transferName"`
+	TotalBytes       int64   `json:"totalBytes"`
+	DownloadURL      string  `json:"downloadUrl"`
+	PreviewURL       string  `json:"previewUrl,omitempty"`
 	// v0.11.5 message-fidelity additive fields. All are derived read-only;
 	// clients that predate them simply ignore the extra keys.
-	Uti            *string `json:"uti"`
-	IsSticker      bool    `json:"isSticker"`
-	AttachmentKind string  `json:"attachmentKind"`
-	IsVoiceMessage bool    `json:"isVoiceMessage"`
+	Uti                    *string `json:"uti"`
+	IsSticker              bool    `json:"isSticker"`
+	AttachmentKind         string  `json:"attachmentKind"`
+	IsVoiceMessage         bool    `json:"isVoiceMessage"`
+	DisplayKind            string  `json:"displayKind"`
+	IsPreviewableImage     bool    `json:"isPreviewableImage"`
+	NeedsPreviewConversion bool    `json:"needsPreviewConversion"`
 }
 
 type ChatJSON struct {
@@ -30,22 +35,35 @@ type ChatJSON struct {
 	ServiceName    *string `json:"serviceName"`
 	DisplayName    *string `json:"displayName"`
 	IsArchived     bool    `json:"isArchived"`
+
+	// C7 renderable-timeline summary (additive). Populated by the relay store so
+	// the client can hide noisy chats and show a real last-message preview.
+	HasRenderableMessages   bool    `json:"hasRenderableMessages"`
+	LatestRenderableAt      *int64  `json:"latestRenderableAt,omitempty"`
+	LatestRenderablePreview *string `json:"latestRenderablePreview,omitempty"`
+	UnsupportedOnly         bool    `json:"unsupportedOnly"`
+	HiddenReason            string  `json:"hiddenReason,omitempty"` // "" | "debug_only" | "empty"
 }
 
 type MessageJSON struct {
-	GUID                string           `json:"guid"`
-	Text                *string          `json:"text"`
-	Subject             *string          `json:"subject"`
-	Service             *string          `json:"service"`
-	DateCreated         *int64           `json:"dateCreated"`
-	DateRead            *int64           `json:"dateRead"`
-	DateDelivered       *int64           `json:"dateDelivered"`
-	IsFromMe            bool             `json:"isFromMe"`
-	IsRead              bool             `json:"isRead"`
-	IsDelivered         bool             `json:"isDelivered"`
-	Handle              *HandleJSON      `json:"handle"`
-	CacheHasAttachments bool             `json:"cacheHasAttachments"`
-	Attachments         []AttachmentJSON `json:"attachments"`
+	GUID                 string           `json:"guid"`
+	Text                 *string          `json:"text"`
+	Subject              *string          `json:"subject"`
+	Service              *string          `json:"service"`
+	DateCreated          *int64           `json:"dateCreated"`
+	DateRead             *int64           `json:"dateRead"`
+	DateDelivered        *int64           `json:"dateDelivered"`
+	IsFromMe             bool             `json:"isFromMe"`
+	IsRead               bool             `json:"isRead"`
+	IsDelivered          bool             `json:"isDelivered"`
+	Handle               *HandleJSON      `json:"handle"`
+	CacheHasAttachments  bool             `json:"cacheHasAttachments"`
+	Attachments          []AttachmentJSON `json:"attachments"`
+	HasAttributedBody    bool             `json:"hasAttributedBody,omitempty"`
+	SemanticKind         string           `json:"semanticKind,omitempty"`
+	RenderRecommendation string           `json:"renderRecommendation,omitempty"`
+	IsDebugOnly          bool             `json:"isDebugOnly,omitempty"`
+	UnsupportedReason    string           `json:"unsupportedReason,omitempty"`
 
 	// BlueBubbles-compatible semantic fields (v0.13). All additive and optional:
 	// pointers omit when absent so pre-existing clients see an unchanged payload.
@@ -134,6 +152,7 @@ type SyncMessageRow struct {
 	HandleID            *string
 	HandleService       *string
 	CacheHasAttachments bool
+	HasAttributedBody   bool
 
 	// BlueBubbles-compatible semantic fields carried chat.db → relay (v0.13).
 	// Populated only when the corresponding chat.db column exists.
@@ -331,10 +350,34 @@ type ServerAuthStatus struct {
 }
 
 type ServerSyncStatus struct {
-	LoopEnabled      bool   `json:"loopEnabled"`
-	IntervalSeconds  int64  `json:"intervalSeconds"`
-	LastSyncAt       *int64 `json:"lastSyncAt"`
-	LastMessageRowID *int64 `json:"lastMessageRowId"`
+	LoopEnabled      bool                   `json:"loopEnabled"`
+	IntervalSeconds  int64                  `json:"intervalSeconds"`
+	LastSyncAt       *int64                 `json:"lastSyncAt"`
+	LastMessageRowID *int64                 `json:"lastMessageRowId"`
+	Diagnostics      *ServerSyncDiagnostics `json:"diagnostics,omitempty"`
+}
+
+type ServerSyncDiagnostics struct {
+	LastStartedAt           *int64  `json:"lastStartedAt,omitempty"`
+	LastCompletedAt         *int64  `json:"lastCompletedAt,omitempty"`
+	LastDurationMillis      int64   `json:"lastDurationMillis"`
+	LastTriggerReason       string  `json:"lastTriggerReason,omitempty"`
+	LastInsertedMessages    int     `json:"lastInsertedMessages"`
+	LastSyncedMessages      int     `json:"lastSyncedMessages"`
+	LastUpdatePassCount     int     `json:"lastUpdatePassCount"`
+	LastUpdatePassSeeded    int     `json:"lastUpdatePassSeeded"`
+	LastUnsentCount         int     `json:"lastUnsentCount"`
+	LastScannedMessageRowID int64   `json:"lastScannedMessageRowId"`
+	LastChatDBMtime         *int64  `json:"lastChatDbMtime,omitempty"`
+	LastWALMtime            *int64  `json:"lastWalMtime,omitempty"`
+	LastSHMMtime            *int64  `json:"lastShmMtime,omitempty"`
+	LastSyncError           string  `json:"lastSyncError,omitempty"`
+	PendingSendsCount       int     `json:"pendingSendsCount"`
+	PendingTriggerCount     int     `json:"pendingTriggerCount"`
+	LockRetryCount          int     `json:"lockRetryCount"`
+	LateMatchedSendsCount   int     `json:"lateMatchedSendsCount"`
+	LastEmittedEventType    string  `json:"lastEmittedEventType,omitempty"`
+	LastEmittedChatGUID     *string `json:"lastEmittedChatGuid,omitempty"`
 }
 
 type ServerNotificationStatus struct {

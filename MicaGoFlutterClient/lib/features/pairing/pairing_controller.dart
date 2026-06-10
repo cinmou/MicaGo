@@ -1,15 +1,19 @@
 import 'package:flutter/foundation.dart';
 
 import '../../core/app_controller.dart';
+import '../../core/models/connection_profile.dart';
 import '../../core/network/api_client.dart';
+import 'endpoint_selection.dart';
+import 'onboarding_controller.dart';
 import 'pairing_payload.dart';
 
 enum PairingStage { scanning, preview, testing, success, failure }
 
-/// Drives the QR pairing flow: parse a scanned code, preview it, then (on
-/// confirmation) save the profile and run a health + auth test before handing
-/// off to Home. The token is held only inside the parsed payload and is never
-/// logged.
+/// Drives the QR pairing + onboarding flow: parse a scanned code, preview it,
+/// let the user pick a connection mode (when the payload offers more than one),
+/// then test endpoints in policy order (LAN first, Public fallback), activate
+/// the connection, and run the initial per-chat backfill. The token lives only
+/// inside the parsed payload and is never logged.
 class PairingController extends ChangeNotifier {
   final AppController app;
 
@@ -19,56 +23,91 @@ class PairingController extends ChangeNotifier {
   PairingPayload? payload;
   String? message;
 
-  /// Handles a raw scanned string. On success moves to [PairingStage.preview];
-  /// on a parse error stays scanning and surfaces [message] (transiently).
+  /// The mode the user picked (defaults to the payload's mode). Only meaningful
+  /// once a payload is previewed.
+  ConnectionMode? selectedMode;
+
+  List<ConnectionMode> get availableModes =>
+      payload == null ? const [] : offeredModes(payload!);
+
+  ConnectionMode get effectiveMode =>
+      selectedMode ?? payload?.mode ?? ConnectionMode.lanFirst;
+
   void onScan(String raw) {
     if (stage != PairingStage.scanning) return;
     try {
       payload = parsePairingPayload(raw);
+      selectedMode = payload!.mode;
       message = null;
       stage = PairingStage.preview;
     } on PairingParseException catch (e) {
       payload = null;
       message = e.message;
-      // Stay in scanning so the user can try another code.
     }
     notifyListeners();
   }
 
-  /// Returns to scanning from the preview/error state.
+  void chooseMode(ConnectionMode mode) {
+    selectedMode = mode;
+    notifyListeners();
+  }
+
   void scanAgain() {
     stage = PairingStage.scanning;
     payload = null;
+    selectedMode = null;
     message = null;
     notifyListeners();
   }
 
-  /// Saves the previewed profile and runs a connectivity + auth test.
-  Future<bool> useScanned() async {
+  /// Tests endpoints, activates the connection, and runs the initial backfill.
+  Future<bool> useScanned({int messagesPerChat = 100}) async {
     final p = payload;
     if (p == null) return false;
 
     stage = PairingStage.testing;
-    message = null;
+    message = 'Testing connection…';
     notifyListeners();
 
-    final profile = p.toProfile();
-    final probe = app.buildProbeClient(profile);
-    try {
-      await probe.health();
-      await probe.authCheck();
-      await app.saveAndActivate(profile);
-      stage = PairingStage.success;
-      message = 'Paired. Server reachable and token accepted.';
+    final onboarding = OnboardingController(
+      prober: (endpoint, token) async {
+        final probe = app.buildProbeClient(
+          ConnectionProfile(baseUrl: endpoint.baseUrl, token: token),
+        );
+        try {
+          await probe.health();
+          await probe.authCheck();
+          return true;
+        } on ApiException {
+          return false;
+        } finally {
+          probe.close();
+        }
+      },
+      runInitialSync: (profile, onProgress) =>
+          app.backfill(profile, perChat: messagesPerChat, onProgress: onProgress),
+    );
+
+    onboarding.addListener(() {
+      message = onboarding.status.message;
       notifyListeners();
-      return true;
-    } on ApiException catch (e) {
+    });
+
+    final profile = await onboarding.run(p, effectiveMode);
+    if (profile == null) {
       stage = PairingStage.failure;
-      message = e.friendly;
+      message = onboarding.status.message;
       notifyListeners();
       return false;
-    } finally {
-      probe.close();
     }
+
+    await app.saveAndActivate(profile);
+    stage = PairingStage.success;
+    final active = onboarding.activeEndpoint;
+    message = active?.kind == EndpointKind.public
+        ? 'Paired via Public. ${onboarding.status.message}'
+        : 'Paired via LAN. ${onboarding.status.message}';
+    notifyListeners();
+    return true;
   }
 }

@@ -14,8 +14,10 @@ type SyncResult struct {
 	NewMessages              []store.MessageJSON
 	NotificationEvents       []NotificationEvent
 	// v0.11.x lookback update pass results.
-	Updates []MessageUpdate
-	Unsent  []UnsentEvent
+	Updates       []MessageUpdate
+	Unsent        []UnsentEvent
+	UpdateScanned int
+	UpdateSeeded  int
 }
 
 // MessageUpdate is an old-row state change detected by the lookback update pass

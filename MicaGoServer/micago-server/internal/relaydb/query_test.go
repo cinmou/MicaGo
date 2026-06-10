@@ -9,7 +9,7 @@ func TestListChats(t *testing.T) {
 	db := openTestDB(t)
 	seedRelayData(t, db)
 
-	chats, err := db.ListChats(context.Background(), 10, 0, false, "iMessage")
+	chats, err := db.ListChats(context.Background(), 10, 0, false, "iMessage", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,8 @@ func TestListChats(t *testing.T) {
 		t.Fatalf("expected chat-1, got %q", chats[0].GUID)
 	}
 
-	allChats, err := db.ListChats(context.Background(), 10, 0, true, "all")
+	// debug=true reveals all chats including the message-less one.
+	allChats, err := db.ListChats(context.Background(), 10, 0, true, "all", true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,15 +14,18 @@ import (
 // download URL (which can carry a token); presence is reported as a boolean so
 // the inspector and its "Copy Debug JSON" export are safe to share.
 type DebugAttachmentJSON struct {
-	GUID           string  `json:"guid"`
-	Filename       *string `json:"filename"`
-	TransferName   *string `json:"transferName"`
-	MimeType       *string `json:"mimeType"`
-	Uti            *string `json:"uti"`
-	AttachmentKind string  `json:"attachmentKind"`
-	IsVoiceMessage bool    `json:"isVoiceMessage"`
-	TotalBytes     int64   `json:"totalBytes"`
-	HasDownloadURL bool    `json:"hasDownloadUrl"`
+	GUID                   string  `json:"guid"`
+	Filename               *string `json:"filename"`
+	TransferName           *string `json:"transferName"`
+	MimeType               *string `json:"mimeType"`
+	Uti                    *string `json:"uti"`
+	AttachmentKind         string  `json:"attachmentKind"`
+	IsVoiceMessage         bool    `json:"isVoiceMessage"`
+	DisplayKind            string  `json:"displayKind"`
+	IsPreviewableImage     bool    `json:"isPreviewableImage"`
+	NeedsPreviewConversion bool    `json:"needsPreviewConversion"`
+	TotalBytes             int64   `json:"totalBytes"`
+	HasDownloadURL         bool    `json:"hasDownloadUrl"`
 }
 
 // DebugMessageJSON is a rich, debug-only view of a chat.db message used by the
@@ -323,15 +326,21 @@ func (q *Queries) attachDebugAttachments(ctx context.Context, messages []DebugMe
 	grouped := make(map[string][]DebugAttachmentJSON, len(messages))
 	for _, a := range rows {
 		mime := InferMimeType(a.MimeType, a.Uti, a.TransferName, a.Filename)
+		kind := AttachmentKind(a.IsSticker, mime, a.Uti, a.TransferName, a.Filename)
+		voice := IsVoiceMessage(a.Uti, mime)
+		needsPreview := IsTIFFAttachment(mime, a.Uti, a.TransferName, a.Filename)
 		grouped[a.MessageGUID] = append(grouped[a.MessageGUID], DebugAttachmentJSON{
-			GUID:           a.GUID,
-			Filename:       a.Filename,
-			TransferName:   a.TransferName,
-			MimeType:       mime,
-			Uti:            a.Uti,
-			AttachmentKind: AttachmentKind(a.IsSticker, mime, a.Uti, a.TransferName, a.Filename),
-			IsVoiceMessage: IsVoiceMessage(a.Uti, mime),
-			TotalBytes:     a.TotalBytes,
+			GUID:                   a.GUID,
+			Filename:               a.Filename,
+			TransferName:           a.TransferName,
+			MimeType:               mime,
+			Uti:                    a.Uti,
+			AttachmentKind:         kind,
+			IsVoiceMessage:         voice,
+			DisplayKind:            DisplayKind(kind, voice, needsPreview),
+			IsPreviewableImage:     IsPreviewableImage(kind, mime, a.Uti, a.TransferName, a.Filename),
+			NeedsPreviewConversion: needsPreview,
+			TotalBytes:             a.TotalBytes,
 			// Presence only — never the path or a tokenized URL.
 			HasDownloadURL: strings.TrimSpace(a.GUID) != "",
 		})

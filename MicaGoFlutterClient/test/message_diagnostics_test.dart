@@ -122,7 +122,10 @@ void main() {
   group('attachment presentation', () {
     test('image/audio/file detection by kind and mime', () {
       const img = AttachmentModel(
-          guid: 'i', downloadUrl: '/x', attachmentKind: 'image');
+          guid: 'i',
+          downloadUrl: '/x',
+          attachmentKind: 'image',
+          isPreviewableImage: true);
       const aud = AttachmentModel(
           guid: 'a', downloadUrl: '/x', mimeType: 'audio/mp4');
       const file = AttachmentModel(
@@ -141,7 +144,10 @@ void main() {
         _msg(text: 'there'), // normal
         _msg(attachments: const [
           AttachmentModel(
-              guid: 'i', downloadUrl: '/x', attachmentKind: 'image'),
+              guid: 'i',
+              downloadUrl: '/x',
+              attachmentKind: 'image',
+              isPreviewableImage: true),
         ]), // image
         _msg(itemType: 2), // service
         _msg(associatedType: 2000, associatedGuid: 'p:0/a'), // reaction

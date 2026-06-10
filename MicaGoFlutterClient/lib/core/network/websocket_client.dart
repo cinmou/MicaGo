@@ -34,6 +34,7 @@ class WebSocketClient extends ChangeNotifier {
 
   WsStatus _status = WsStatus.idle;
   String? _lastError;
+  DateTime? _lastEventAt;
   final List<WsLogEntry> _log = <WsLogEntry>[];
 
   WebSocketChannel? _channel;
@@ -42,6 +43,7 @@ class WebSocketClient extends ChangeNotifier {
 
   WsStatus get status => _status;
   String? get lastError => _lastError;
+  DateTime? get lastEventAt => _lastEventAt;
   List<WsLogEntry> get log => List.unmodifiable(_log);
 
   /// Broadcast stream of parsed realtime events (e.g. `message:new`,
@@ -131,6 +133,7 @@ class WebSocketClient extends ChangeNotifier {
         final type = decoded['type'];
         label = type is String && type.isNotEmpty ? type : '(no type)';
         if (type is String && type.isNotEmpty && !_events.isClosed) {
+          _lastEventAt = DateTime.now();
           final data = decoded['data'];
           _events.add(WsEvent(
             type,

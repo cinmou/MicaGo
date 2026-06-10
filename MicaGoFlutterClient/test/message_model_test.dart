@@ -14,6 +14,8 @@ void main() {
         'isDelivered': true,
         'handle': {'id': '+15551234567', 'service': 'iMessage'},
         'cacheHasAttachments': false,
+        'semanticKind': 'normal_text',
+        'renderRecommendation': 'bubble',
         'attachments': [],
       });
       expect(m.guid, 'p:0/ABC');
@@ -25,6 +27,8 @@ void main() {
       expect(m.hasAttachments, isFalse);
       expect(m.localState, LocalSendState.confirmed);
       expect(m.dedupeKey, 'p:0/ABC');
+      expect(m.semanticKind, 'normal_text');
+      expect(m.renderRecommendation, 'bubble');
     });
 
     test('parses attachments with kinds', () {
@@ -54,10 +58,14 @@ void main() {
       expect(m.hasAttachments, isTrue);
     });
 
-    test('optimistic message is pending and keyed by tempId', () {
-      final m = MessageModel.optimistic(tempId: 'tmp-1', text: 'hi', dateCreated: 1);
+    test('optimistic message is sending and keyed by tempId', () {
+      final m = MessageModel.optimistic(
+        tempId: 'tmp-1',
+        text: 'hi',
+        dateCreated: 1,
+      );
       expect(m.isFromMe, isTrue);
-      expect(m.localState, LocalSendState.pending);
+      expect(m.localState, LocalSendState.sending);
       expect(m.guid, '');
       expect(m.dedupeKey, 'tmp-1');
     });
@@ -76,8 +84,11 @@ void main() {
 
   group('AttachmentModel', () {
     test('infers image from mime when kind is unknown', () {
-      final a = AttachmentModel.fromJson(
-          {'guid': 'a', 'mimeType': 'image/png', 'downloadUrl': '/x'});
+      final a = AttachmentModel.fromJson({
+        'guid': 'a',
+        'mimeType': 'image/png',
+        'downloadUrl': '/x',
+      });
       expect(a.isImage, isTrue);
       expect(a.isAudio, isFalse);
     });
@@ -95,6 +106,25 @@ void main() {
         'downloadUrl': '/x',
       });
       expect(a.displayName, 'photo.heic');
+    });
+
+    test('TIFF is image but not inline-previewable', () {
+      final a = AttachmentModel.fromJson({
+        'guid': 'a',
+        'mimeType': 'image/tiff',
+        'originalMimeType': 'image/tiff',
+        'uti': 'public.tiff',
+        'transferName': 'screenshot.tiff',
+        'attachmentKind': 'image',
+        'displayKind': 'image_needs_preview',
+        'isPreviewableImage': false,
+        'needsPreviewConversion': true,
+        'downloadUrl': '/x',
+      });
+      expect(a.isImage, isTrue);
+      expect(a.isTiff, isTrue);
+      expect(a.canRenderInlineImage, isFalse);
+      expect(a.displayKind, 'image_needs_preview');
     });
   });
 }

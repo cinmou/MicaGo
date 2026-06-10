@@ -160,7 +160,7 @@ func TestIncrementalSyncDoesNotDuplicateExistingMessages(t *testing.T) {
 		},
 	}
 
-	first, err := SyncOnce(t.Context(), source, db, 1000)
+	first, err := SyncOnce(t.Context(), source, db, 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestIncrementalSyncDoesNotDuplicateExistingMessages(t *testing.T) {
 		t.Fatalf("expected first sync to return new msg-1, got %#v", first.NewMessages)
 	}
 
-	second, err := SyncOnce(t.Context(), source, db, 1000)
+	second, err := SyncOnce(t.Context(), source, db, 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestIncrementalSyncDoesNotDuplicateExistingMessages(t *testing.T) {
 		t.Fatalf("expected second sync to return new msg-2, got %#v", second.NewMessages)
 	}
 
-	third, err := SyncOnce(t.Context(), source, db, 1000)
+	third, err := SyncOnce(t.Context(), source, db, 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

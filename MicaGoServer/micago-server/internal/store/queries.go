@@ -308,7 +308,11 @@ func (q *Queries) ListRecentMessages(ctx context.Context, limit, offset int, ser
 	return q.attachMessageAttachments(ctx, messages)
 }
 
-func (q *Queries) ListChats(ctx context.Context, limit, offset int, withArchived bool, service string) ([]ChatJSON, error) {
+// ListChats (chat.db direct mode). includeDebug is accepted for interface
+// parity; the live chat.db path does not compute the renderable aggregate, so
+// it never hides chats (HasRenderableMessages defaults true to avoid hiding).
+func (q *Queries) ListChats(ctx context.Context, limit, offset int, withArchived bool, service string, includeDebug bool) ([]ChatJSON, error) {
+	_ = includeDebug
 	sqlText, args := buildChatsQuery(limit, offset, withArchived, service)
 
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
@@ -331,11 +335,12 @@ func (q *Queries) ListChats(ctx context.Context, limit, offset int, withArchived
 		}
 
 		chats = append(chats, ChatJSON{
-			GUID:           row.GUID,
-			ChatIdentifier: row.ChatIdentifier,
-			ServiceName:    row.ServiceName,
-			DisplayName:    row.DisplayName,
-			IsArchived:     row.IsArchived,
+			GUID:                  row.GUID,
+			ChatIdentifier:        row.ChatIdentifier,
+			ServiceName:           row.ServiceName,
+			DisplayName:           row.DisplayName,
+			IsArchived:            row.IsArchived,
+			HasRenderableMessages: true,
 		})
 	}
 
@@ -434,6 +439,7 @@ LIMIT 100;
 			continue
 		}
 		if send.NormalizeText(stringValue(json.Text)) == normalizedText {
+			AnnotateMessageJSON(&json)
 			return &json, nil
 		}
 	}
@@ -566,6 +572,7 @@ func (q *Queries) ListSyncRecentMessages(ctx context.Context, limit int) ([]Sync
 			HandleID:            row.HandleValue,
 			HandleService:       row.HandleService,
 			CacheHasAttachments: row.CacheHasAttachments,
+			HasAttributedBody:   len(row.AttributedBody) > 0,
 		}
 		applySemantic(&msg, sem)
 		messages = append(messages, msg)
@@ -575,6 +582,61 @@ func (q *Queries) ListSyncRecentMessages(ctx context.Context, limit int) ([]Sync
 		return nil, err
 	}
 
+	return messages, nil
+}
+
+// ListSyncRecentMessagesByDate returns renderable messages created on/after
+// [afterUnixMilli], newest first, up to [limit] (C11 bounded date lookback).
+// Unlike the ROWID query, this is resilient to WAL/rowid races: it re-scans a
+// recent window every sync so a row the rowid watermark skipped is recovered.
+// `message.date` is indexed, so the scan is cheap.
+func (q *Queries) ListSyncRecentMessagesByDate(ctx context.Context, afterUnixMilli int64, limit int) ([]SyncMessageRow, error) {
+	present := presentSemanticColumns(q.messageColumns)
+	sqlText := buildSyncMessagesSQL(present, "  AND m.date >= ?\n", "ORDER BY m.date DESC\nLIMIT ?;\n")
+	afterApple := timeutil.UnixMilliToAppleNanos(afterUnixMilli)
+	rows, err := q.db.QueryContext(ctx, sqlText, afterApple, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []SyncMessageRow
+	for rows.Next() {
+		row, sem, err := scanSyncRowSemantic(rows, present)
+		if err != nil {
+			return nil, err
+		}
+		if row.ChatGUID == nil || row.SourceRowID == nil {
+			continue
+		}
+		text := ExtractMessageText(row.Text, row.AttributedBody)
+		if !MessageHasRenderableContent(text, row.CacheHasAttachments) {
+			continue
+		}
+		msg := SyncMessageRow{
+			ChatGUID:            *row.ChatGUID,
+			SourceRowID:         *row.SourceRowID,
+			GUID:                row.GUID,
+			Text:                text,
+			Subject:             row.Subject,
+			Service:             row.Service,
+			DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
+			DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
+			DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
+			IsFromMe:            row.IsFromMe,
+			IsRead:              row.IsRead,
+			IsDelivered:         row.IsDelivered,
+			HandleID:            row.HandleValue,
+			HandleService:       row.HandleService,
+			CacheHasAttachments: row.CacheHasAttachments,
+			HasAttributedBody:   len(row.AttributedBody) > 0,
+		}
+		applySemantic(&msg, sem)
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return messages, nil
 }
 
@@ -617,6 +679,7 @@ func (q *Queries) ListSyncRecentMessagesSince(ctx context.Context, afterRowID in
 			HandleID:            row.HandleValue,
 			HandleService:       row.HandleService,
 			CacheHasAttachments: row.CacheHasAttachments,
+			HasAttributedBody:   len(row.AttributedBody) > 0,
 		}
 		applySemantic(&msg, sem)
 		messages = append(messages, msg)
@@ -867,6 +930,7 @@ func rowToMessageJSON(row MessageRow) MessageJSON {
 		IsDelivered:         row.IsDelivered,
 		Handle:              handle,
 		CacheHasAttachments: row.CacheHasAttachments,
+		HasAttributedBody:   len(row.AttributedBody) > 0,
 	}
 }
 
@@ -1019,6 +1083,9 @@ func (q *Queries) attachMessageAttachments(ctx context.Context, messages []Messa
 			IsSticker:    attachment.IsSticker,
 		}
 		DecorateAttachmentJSON(&item)
+		if item.NeedsPreviewConversion {
+			item.PreviewURL = "/api/attachments/" + item.GUID + "/preview"
+		}
 		grouped[attachment.MessageGUID] = append(grouped[attachment.MessageGUID], item)
 	}
 
@@ -1027,6 +1094,7 @@ func (q *Queries) attachMessageAttachments(ctx context.Context, messages []Messa
 		if messages[i].Attachments == nil {
 			messages[i].Attachments = []AttachmentJSON{}
 		}
+		AnnotateMessageJSON(&messages[i])
 	}
 
 	return messages, nil

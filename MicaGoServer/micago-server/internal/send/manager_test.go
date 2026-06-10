@@ -74,6 +74,66 @@ func TestPendingManagerReject(t *testing.T) {
 	}
 }
 
+func TestPendingManagerMarkSentUnconfirmedKeepsRecord(t *testing.T) {
+	m := NewPendingSendManager()
+	_ = m.Add(PendingSend{TempGUID: "t1"})
+	m.MarkSentUnconfirmed("t1", "send_confirmation_timeout", time.Minute)
+	p, ok := m.Get("t1")
+	if !ok {
+		t.Fatal("expected pending record kept")
+	}
+	if p.Status != StatusSentUnconfirmed || p.FailReason != "send_confirmation_timeout" {
+		t.Fatalf("unexpected unconfirmed record: %+v", p)
+	}
+}
+
+func TestPendingManagerReconcileMessagesLateMatchesOutgoing(t *testing.T) {
+	m := NewPendingSendManager()
+	sentAt := time.Now().Add(-time.Second).UnixMilli()
+	_ = m.Add(PendingSend{
+		TempGUID:          "tmp-1",
+		ChatGUID:          "chat-1",
+		NormalizedMessage: NormalizeText("Hello there"),
+		SentAtUnixMilli:   sentAt,
+		Status:            StatusSentUnconfirmed,
+	})
+	matches := m.ReconcileMessages([]ReconcileCandidate{{
+		GUID:        "real-1",
+		ChatGUID:    "chat-1",
+		Text:        "hello there",
+		DateCreated: ptrInt64(time.Now().UnixMilli()),
+		IsFromMe:    true,
+	}}, time.Now())
+	if len(matches) != 1 || matches[0].TempGUID != "tmp-1" {
+		t.Fatalf("expected late match, got %+v", matches)
+	}
+	p, _ := m.Get("tmp-1")
+	if p.Status != StatusConfirmed || p.MatchedGUID != "real-1" {
+		t.Fatalf("unexpected reconciled record: %+v", p)
+	}
+}
+
+func TestPendingManagerReconcileMessagesDoesNotMatchDifferentOutgoing(t *testing.T) {
+	m := NewPendingSendManager()
+	_ = m.Add(PendingSend{
+		TempGUID:          "tmp-1",
+		ChatGUID:          "chat-1",
+		NormalizedMessage: NormalizeText("Hello"),
+		SentAtUnixMilli:   time.Now().Add(-time.Second).UnixMilli(),
+		Status:            StatusSentUnconfirmed,
+	})
+	matches := m.ReconcileMessages([]ReconcileCandidate{{
+		GUID:        "real-1",
+		ChatGUID:    "chat-2",
+		Text:        "Hello",
+		DateCreated: ptrInt64(time.Now().UnixMilli()),
+		IsFromMe:    true,
+	}}, time.Now())
+	if len(matches) != 0 {
+		t.Fatalf("expected no match, got %+v", matches)
+	}
+}
+
 func TestPendingManagerExpireTimedOut(t *testing.T) {
 	m := NewPendingSendManager()
 	past := time.Now().Add(-time.Minute)
@@ -91,6 +151,8 @@ func TestPendingManagerExpireTimedOut(t *testing.T) {
 		t.Fatal("expected fresh send still pending")
 	}
 }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 func TestPendingManagerList(t *testing.T) {
 	m := NewPendingSendManager()

@@ -15,6 +15,7 @@ MessageModel _m({
   String? expressiveSendStyleId,
   int itemType = 0,
   bool isRetracted = false,
+  List<AttachmentModel> attachments = const [],
   int errorCode = 0,
   LocalSendState localState = LocalSendState.confirmed,
 }) {
@@ -28,6 +29,7 @@ MessageModel _m({
     threadOriginatorGuid: threadOriginatorGuid,
     expressiveSendStyleId: expressiveSendStyleId,
     itemType: itemType,
+    attachments: attachments,
     isRetracted: isRetracted,
     errorCode: errorCode,
     localState: localState,
@@ -53,13 +55,24 @@ void main() {
     });
 
     test('isReaction requires a reaction code + target', () {
-      expect(isReaction(_m(associatedMessageType: 2000, associatedMessageGuid: 'p:0/x')),
-          isTrue);
+      expect(
+        isReaction(
+          _m(associatedMessageType: 2000, associatedMessageGuid: 'p:0/x'),
+        ),
+        isTrue,
+      );
       expect(isReaction(_m(associatedMessageType: 2000)), isFalse); // no target
-      expect(isReaction(_m(associatedMessageGuid: 'p:0/x')), isFalse); // no code
+      expect(
+        isReaction(_m(associatedMessageGuid: 'p:0/x')),
+        isFalse,
+      ); // no code
       // A sticker (1000) is not a tapback chip.
-      expect(isReaction(_m(associatedMessageType: 1000, associatedMessageGuid: 'p:0/x')),
-          isFalse);
+      expect(
+        isReaction(
+          _m(associatedMessageType: 1000, associatedMessageGuid: 'p:0/x'),
+        ),
+        isFalse,
+      );
     });
 
     test('reactionTargetGuid strips p:/bp: prefixes', () {
@@ -79,10 +92,14 @@ void main() {
 
   group('effects', () {
     test('known + unknown + none', () {
-      expect(effectLabel('com.apple.MobileSMS.expressivesend.impact'),
-          'Sent with Slam');
-      expect(effectLabel('com.apple.messages.effect.CKHappyBirthdayEffect'),
-          'Sent with Balloons');
+      expect(
+        effectLabel('com.apple.MobileSMS.expressivesend.impact'),
+        'Sent with Slam',
+      );
+      expect(
+        effectLabel('com.apple.messages.effect.CKHappyBirthdayEffect'),
+        'Sent with Balloons',
+      );
       expect(effectLabel('com.apple.unknown.effect'), 'Sent with an effect');
       expect(effectLabel(null), isNull);
       expect(effectLabel(''), isNull);
@@ -95,6 +112,25 @@ void main() {
       expect(renderableKindFor(m), MessageRenderableKind.retracted);
       expect(retractedLabel(m), 'You unsent a message');
       expect(retractedLabel(_m(isRetracted: true)), 'This message was unsent');
+    });
+
+    test('retracted attachment content renders as system row', () {
+      final rows = buildDisplayRows([
+        _m(
+          guid: 'att',
+          isRetracted: true,
+          attachments: const [
+            AttachmentModel(
+              guid: 'a',
+              downloadUrl: '/x',
+              attachmentKind: 'image',
+              isPreviewableImage: true,
+            ),
+          ],
+        ),
+      ], const MessageDisplayPrefs());
+      expect(rows.single.kind, MessageRenderableKind.retracted);
+      expect(rows.single.message.attachments, isNotEmpty);
     });
   });
 
@@ -121,37 +157,55 @@ void main() {
         _m(guid: '1', text: 'hi'),
         _m(guid: '2', text: '+!'), // unknown (control-like)
         _m(
-            guid: '3',
-            isFromMe: true,
-            text: 'oops',
-            localState: LocalSendState.failed),
+          guid: '3',
+          isFromMe: true,
+          text: 'oops',
+          localState: LocalSendState.failed,
+        ),
       ];
       final rows = buildDisplayRows(
-          msgs, const MessageDisplayPrefs(hideUnsupportedRows: true));
+        msgs,
+        const MessageDisplayPrefs(hideUnsupportedRows: true),
+      );
       final guids = rows.map((r) => r.message.guid).toList();
       expect(guids.contains('2'), isFalse); // unsupported hidden
       expect(guids.contains('3'), isTrue); // failed outgoing always kept
     });
 
-    test('mergeTapbacks attaches reactions to target, removes standalone rows', () {
-      final msgs = [
-        _m(guid: 't', text: 'hello'),
-        _m(guid: 'r', associatedMessageType: 2000, associatedMessageGuid: 'p:0/t'),
-      ];
-      final rows = buildDisplayRows(
-          msgs, const MessageDisplayPrefs(mergeTapbacks: true));
-      expect(rows.length, 1); // reaction merged, not its own row
-      expect(rows.first.message.guid, 't');
-      expect(rows.first.reactions.length, 1);
-    });
+    test(
+      'mergeTapbacks attaches reactions to target, removes standalone rows',
+      () {
+        final msgs = [
+          _m(guid: 't', text: 'hello'),
+          _m(
+            guid: 'r',
+            associatedMessageType: 2000,
+            associatedMessageGuid: 'p:0/t',
+          ),
+        ];
+        final rows = buildDisplayRows(
+          msgs,
+          const MessageDisplayPrefs(mergeTapbacks: true),
+        );
+        expect(rows.length, 1); // reaction merged, not its own row
+        expect(rows.first.message.guid, 't');
+        expect(rows.first.reactions.length, 1);
+      },
+    );
 
     test('mergeTapbacks off keeps reaction as its own (system) row', () {
       final msgs = [
         _m(guid: 't', text: 'hello'),
-        _m(guid: 'r', associatedMessageType: 2000, associatedMessageGuid: 'p:0/t'),
+        _m(
+          guid: 'r',
+          associatedMessageType: 2000,
+          associatedMessageGuid: 'p:0/t',
+        ),
       ];
       final rows = buildDisplayRows(
-          msgs, const MessageDisplayPrefs(mergeTapbacks: false));
+        msgs,
+        const MessageDisplayPrefs(mergeTapbacks: false),
+      );
       expect(rows.length, 2);
     });
 
@@ -163,7 +217,12 @@ void main() {
         _m(guid: 'd', text: 'real'),
       ];
       final rows = buildDisplayRows(
-          msgs, const MessageDisplayPrefs(mergeConsecutiveSystem: true, mergeTapbacks: false));
+        msgs,
+        const MessageDisplayPrefs(
+          mergeConsecutiveSystem: true,
+          mergeTapbacks: false,
+        ),
+      );
       // 3 system rows merged into 1 + the normal row.
       expect(rows.length, 2);
       final merged = rows.firstWhere((r) => r.isMergedSystem);

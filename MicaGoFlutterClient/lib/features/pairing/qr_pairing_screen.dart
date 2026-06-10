@@ -5,6 +5,9 @@ import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
+import '../../core/models/connection_profile.dart';
+import '../settings/message_display_controller.dart';
+import 'endpoint_selection.dart';
 import 'pairing_controller.dart';
 import 'pairing_payload.dart';
 
@@ -58,7 +61,8 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
   }
 
   Future<void> _useScanned() async {
-    final ok = await _pairing.useScanned();
+    final perChat = context.read<MessageDisplayController>().prefs.messagesPerChat;
+    final ok = await _pairing.useScanned(messagesPerChat: perChat);
     if (ok && mounted) {
       context.go(Routes.home);
     }
@@ -91,6 +95,7 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
             case PairingStage.preview:
               return _PreviewPane(
                 payload: _pairing.payload!,
+                pairing: _pairing,
                 onUse: _useScanned,
                 onScanAgain: _scanAgain,
               );
@@ -189,11 +194,13 @@ class _CameraError extends StatelessWidget {
 
 class _PreviewPane extends StatelessWidget {
   final PairingPayload payload;
+  final PairingController pairing;
   final VoidCallback onUse;
   final VoidCallback onScanAgain;
 
   const _PreviewPane({
     required this.payload,
+    required this.pairing,
     required this.onUse,
     required this.onScanAgain,
   });
@@ -225,10 +232,38 @@ class _PreviewPane extends StatelessWidget {
                   _kv(context, 'WebSocket', payload.effectiveWsUrl),
                   const SizedBox(height: 6),
                   _kv(context, 'Token', _maskedToken(payload.token)),
+                  if (payload.serverName != null) ...[
+                    const SizedBox(height: 6),
+                    _kv(context, 'Server', payload.serverName!),
+                  ],
                 ],
               ),
             ),
           ),
+          if (pairing.availableModes.length > 1) ...[
+            const SizedBox(height: 16),
+            Text('Connection mode',
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final mode in pairing.availableModes)
+                  ChoiceChip(
+                    label: Text(connectionModeLabel(mode)),
+                    selected: pairing.effectiveMode == mode,
+                    onSelected: (_) => pairing.chooseMode(mode),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              pairing.effectiveMode == ConnectionMode.lanOnly
+                  ? 'Connects only on your local network. Never uses the public address.'
+                  : 'Tries your local network first, then the public address if LAN is unreachable.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: onUse,

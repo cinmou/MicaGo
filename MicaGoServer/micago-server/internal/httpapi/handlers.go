@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -38,7 +39,7 @@ const (
 
 type queryService interface {
 	ListRecentMessages(ctx context.Context, limit, offset int, service string, includeEmpty bool) ([]store.MessageJSON, error)
-	ListChats(ctx context.Context, limit, offset int, withArchived bool, service string) ([]store.ChatJSON, error)
+	ListChats(ctx context.Context, limit, offset int, withArchived bool, service string, includeDebug bool) ([]store.ChatJSON, error)
 	ChatExists(ctx context.Context, guid string) (bool, error)
 	GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, error)
 	ListChatMessages(ctx context.Context, guid string, limit, offset int, includeEmpty bool) ([]store.MessageJSON, error)
@@ -51,6 +52,7 @@ type pendingSendManager interface {
 	Has(string) bool
 	Resolve(tempGUID, matchedGUID string, matchedROWID int64) bool
 	Reject(tempGUID, reason string)
+	MarkSentUnconfirmed(tempGUID, reason string, recoverFor time.Duration)
 	ClaimedSnapshot() map[string]struct{}
 }
 
@@ -139,7 +141,8 @@ type StatusDeps struct {
 	Network *NetworkController
 	// Capabilities reports detected chat.db schema support (v0.11.x). Zero value
 	// (all false) is a safe default when the schema was not probed.
-	Capabilities store.SchemaCapabilities
+	Capabilities    store.SchemaCapabilities
+	SyncDiagnostics func() store.ServerSyncDiagnostics
 }
 
 // serverVersion is the advertised server build version. It tracks the latest
@@ -167,6 +170,7 @@ type Handlers struct {
 	notifyConfig    notificationConfigurator
 	debug           debugQueryService
 	debugColumns    map[string]bool
+	syncNow         func(context.Context) (store.ServerSyncDiagnostics, error)
 }
 
 // SetRuleService wires the v0.11.3 sync-rule store after construction (kept off
@@ -177,6 +181,10 @@ func (h *Handlers) SetRuleService(rs ruleService) { h.rules = rs }
 // SetNotificationConfigurator wires the v0.12 live dispatcher reload used by the
 // notifications-config write endpoint. Nil means that endpoint is unavailable.
 func (h *Handlers) SetNotificationConfigurator(c notificationConfigurator) { h.notifyConfig = c }
+
+func (h *Handlers) SetSyncNow(fn func(context.Context) (store.ServerSyncDiagnostics, error)) {
+	h.syncNow = fn
+}
 
 func NewHandlers(
 	queries queryService,
@@ -267,8 +275,29 @@ func (h *Handlers) GetServerStatus(w http.ResponseWriter, r *http.Request) {
 		status.Sync.LastSyncAt = readSyncStateInt(h.status.SyncState, "last_sync_at")
 		status.Sync.LastMessageRowID = readSyncStateInt(h.status.SyncState, "last_message_rowid")
 	}
+	if h.status.SyncDiagnostics != nil {
+		diagnostics := h.status.SyncDiagnostics()
+		status.Sync.Diagnostics = &diagnostics
+	}
 
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (h *Handlers) SyncNow(w http.ResponseWriter, r *http.Request) {
+	if h.syncNow == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "sync_unavailable", "sync is not available")
+		return
+	}
+	diagnostics, err := h.syncNow(r.Context())
+	if err != nil {
+		h.logInternal("sync now", err)
+		writeInternalError(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          true,
+		"diagnostics": diagnostics,
+	})
 }
 
 func (h *Handlers) clientCount() int {
@@ -453,7 +482,13 @@ func (h *Handlers) GetChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := h.queries.ListChats(r.Context(), limit, offset, withArchived, service)
+	debug, err := parseDebug(r)
+	if err != nil {
+		writeBadRequest(w, err.Error())
+		return
+	}
+
+	data, err := h.queries.ListChats(r.Context(), limit, offset, withArchived, service, debug)
 	if err != nil {
 		h.logInternal("list chats", err)
 		writeInternalError(w)
@@ -490,11 +525,24 @@ func (h *Handlers) GetChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	debug, err := parseDebug(r)
+	if err != nil {
+		writeBadRequest(w, err.Error())
+		return
+	}
+
 	data, err := h.queries.ListChatMessages(r.Context(), guid, limit, offset, includeEmpty)
 	if err != nil {
 		h.logInternal("list chat messages", err)
 		writeInternalError(w)
 		return
+	}
+
+	// Default to the renderable timeline: drop debug-only/noise rows unless the
+	// caller explicitly asks for the raw timeline (?debug=true). The Message
+	// Inspector and debug API still expose everything.
+	if !debug {
+		data = store.FilterRenderableMessages(data)
 	}
 
 	writeJSON(w, http.StatusOK, store.MessageListResponse{
@@ -543,7 +591,8 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const confirmationTimeout = 15 * time.Second
+	const confirmationTimeout = 20 * time.Second
+	const lateReconciliationWindow = 2 * time.Minute
 
 	now := time.Now()
 	pending := micasend.PendingSend{
@@ -568,7 +617,12 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w)
 		return
 	}
-	defer h.send.Pending.Remove(req.TempGUID)
+	removePendingOnReturn := true
+	defer func() {
+		if removePendingOnReturn {
+			h.send.Pending.Remove(req.TempGUID)
+		}
+	}()
 	h.logSend(req.TempGUID, "pending created", "")
 	h.broadcastSendPending(r.Context(), req.TempGUID, guid)
 
@@ -612,6 +666,11 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 	excluded := h.send.Pending.ClaimedSnapshot()
 	deadline := now.Add(pending.Timeout)
 	for time.Now().Before(deadline) {
+		if h.send.SyncNow != nil {
+			if err := h.send.SyncNow(r.Context()); err != nil {
+				h.logInternal("sync during send confirmation", err)
+			}
+		}
 		match, err := h.queries.FindOutgoingMessageMatch(r.Context(), guid, pending.NormalizedMessage, pending.SentAtUnixMilli, excluded)
 		if err != nil {
 			h.logInternal("find outgoing message match", err)
@@ -661,10 +720,25 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 	// AppleScript completed but no matching outgoing row appeared in time.
 	const timeoutMsg = "AppleScript completed but no matching outgoing message appeared in chat.db before the confirmation timeout"
 	h.logSend(req.TempGUID, "timed out", fmt.Sprintf("chat=%s", guid))
-	h.send.Pending.Reject(req.TempGUID, "send_confirmation_timeout")
-	details := map[string]any{"tempGuid": req.TempGUID, "chatGuid": guid, "text": req.Message}
+	h.send.Pending.MarkSentUnconfirmed(req.TempGUID, "send_confirmation_timeout", lateReconciliationWindow)
+	removePendingOnReturn = false
+	details := map[string]any{
+		"tempGuid":             req.TempGUID,
+		"chatGuid":             guid,
+		"text":                 req.Message,
+		"recoverable":          true,
+		"appleScriptSucceeded": true,
+		"state":                string(micasend.StatusSentUnconfirmed),
+	}
 	h.broadcastSendErrorDetails(r.Context(), req.TempGUID, guid, "send_confirmation_timeout", timeoutMsg, details)
-	writeAPIErrorDetails(w, http.StatusGatewayTimeout, "send_confirmation_timeout", timeoutMsg, details)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"tempGuid":    req.TempGUID,
+		"chatGuid":    guid,
+		"text":        req.Message,
+		"state":       string(micasend.StatusSentUnconfirmed),
+		"recoverable": true,
+		"message":     timeoutMsg,
+	})
 }
 
 func (h *Handlers) GetAttachment(w http.ResponseWriter, r *http.Request) {
@@ -723,6 +797,52 @@ func (h *Handlers) GetAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeContent(w, r, filename, stat.ModTime(), file)
+}
+
+func (h *Handlers) GetAttachmentPreview(w http.ResponseWriter, r *http.Request) {
+	if h.attachments == nil {
+		writeInternalError(w)
+		return
+	}
+
+	guid := r.PathValue("guid")
+	meta, err := h.attachments.GetAttachmentByGUID(r.Context(), guid)
+	if err != nil {
+		h.logInternal("get attachment preview", err)
+		writeInternalError(w)
+		return
+	}
+	if meta == nil || meta.HideAttachment {
+		writeNotFound(w, "attachment not found")
+		return
+	}
+	source, ok := resolveAttachmentPath(h.attachmentsRoot, meta.LocalPath)
+	if !ok {
+		writeNotFound(w, "attachment not found")
+		return
+	}
+	if !attachmentNeedsPreviewConversion(meta) {
+		http.ServeFile(w, r, source)
+		return
+	}
+
+	previewPath := filepath.Join(os.TempDir(), "micago-attachment-previews", safePreviewName(guid)+".png")
+	if _, err := os.Stat(previewPath); err != nil {
+		if err := os.MkdirAll(filepath.Dir(previewPath), 0o700); err != nil {
+			h.logInternal("create attachment preview dir", err)
+			writeInternalError(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := exec.CommandContext(ctx, "sips", "-s", "format", "png", source, "--out", previewPath).Run(); err != nil {
+			h.logInternal("convert attachment preview", err)
+			writeAPIError(w, http.StatusNotImplemented, "preview_unavailable", "preview conversion is not available for this attachment")
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "image/png")
+	http.ServeFile(w, r, previewPath)
 }
 
 func (h *Handlers) RegisterDevice(w http.ResponseWriter, r *http.Request) {
@@ -1039,6 +1159,45 @@ func attachmentFilename(meta *store.AttachmentMeta) string {
 	return meta.GUID
 }
 
+func attachmentNeedsPreviewConversion(meta *store.AttachmentMeta) bool {
+	if meta == nil {
+		return false
+	}
+	mimeType := strings.ToLower(strings.TrimSpace(ptrString(meta.MimeType)))
+	uti := strings.ToLower(strings.TrimSpace(ptrString(meta.Uti)))
+	name := strings.ToLower(strings.TrimSpace(attachmentFilename(meta)))
+	return strings.Contains(mimeType, "image/tif") ||
+		strings.Contains(mimeType, "image/heic") ||
+		strings.Contains(mimeType, "image/heif") ||
+		uti == "public.tiff" ||
+		uti == "public.heic" ||
+		uti == "public.heif" ||
+		strings.HasSuffix(name, ".tif") ||
+		strings.HasSuffix(name, ".tiff") ||
+		strings.HasSuffix(name, ".heic") ||
+		strings.HasSuffix(name, ".heif")
+}
+
+func ptrString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func safePreviewName(guid string) string {
+	var b strings.Builder
+	for _, r := range guid {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "attachment"
+	}
+	return b.String()
+}
+
 func (h *Handlers) buildDeviceRecord(req deviceRegisterRequest) (store.DeviceRecord, error) {
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
@@ -1213,6 +1372,20 @@ func parseIncludeEmpty(r *http.Request) (bool, error) {
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, errors.New("includeEmpty must be a boolean")
+	}
+	return v, nil
+}
+
+// parseDebug reads the optional ?debug=true flag used by the renderable-timeline
+// APIs to include debug-only/noise rows and otherwise-hidden chats.
+func parseDebug(r *http.Request) (bool, error) {
+	raw := r.URL.Query().Get("debug")
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, errors.New("debug must be a boolean")
 	}
 	return v, nil
 }

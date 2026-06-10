@@ -105,6 +105,7 @@ func (db *DB) Migrate() error {
 	// v0.13: BlueBubbles-compatible semantic fields carried from chat.db so the
 	// normal Message API can expose reactions/replies/effects/service events.
 	semanticCols := []struct{ name, typ string }{
+		{"has_attributed_body", "INTEGER"},
 		{"associated_message_type", "INTEGER"},
 		{"associated_message_guid", "TEXT"},
 		{"thread_originator_guid", "TEXT"},
@@ -119,6 +120,18 @@ func (db *DB) Migrate() error {
 		if err := db.ensureColumn("messages", c.name, c.typ); err != nil {
 			return err
 		}
+	}
+
+	// C7: persist the renderable/debug-only classification so the chat list can
+	// hide noise and compute a real last-message preview without re-scanning.
+	if err := db.ensureColumn("messages", "is_debug_only", "INTEGER"); err != nil {
+		return err
+	}
+	// C12 (IMSG-derived): persist reaction rows so the chat-list preview/ordering
+	// aggregate can exclude them — a tapback must not bump a chat or become its
+	// preview. Reaction rows still sync so the client can merge them onto targets.
+	if err := db.ensureColumn("messages", "is_reaction", "INTEGER"); err != nil {
+		return err
 	}
 
 	return nil

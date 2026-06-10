@@ -102,6 +102,16 @@ struct APIClient {
         return try JSONDecoder().decode(PublicURLCheckResult.self, from: data)
     }
 
+    // MARK: - Sync (C11 debug)
+
+    /// Triggers an immediate server sync and returns the resulting diagnostics.
+    @discardableResult
+    func runSyncNow() async throws -> SyncDiagnostics {
+        let (data, response) = try await Self.session().data(for: request("api/sync/now", method: "POST"))
+        try Self.validate(response)
+        return try JSONDecoder().decode(SyncNowResponse.self, from: data).diagnostics
+    }
+
     // MARK: - Sync control (v0.11.3)
 
     func syncRules() async throws -> SyncRulesResponse {

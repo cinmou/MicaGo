@@ -17,7 +17,7 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _index = 0;
 
   static const _destinations = <_Destination>[
@@ -28,12 +28,28 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Open the realtime socket + load endpoints once the shell appears.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final app = context.read<AppController>();
       app.connectWebSocket();
       app.refreshServerUrls().catchError((_) {});
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final app = context.read<AppController>();
+      app.connectWebSocket();
+      app.catchUp(reason: 'resume');
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   Widget _body(int index) {

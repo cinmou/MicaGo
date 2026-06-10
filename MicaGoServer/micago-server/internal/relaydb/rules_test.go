@@ -146,7 +146,7 @@ func TestSyncOnceBlocksMessagesButAdvancesWatermark(t *testing.T) {
 			{GUID: "b1", ChatGUID: "chat-B", SourceRowID: 11},
 		},
 	}
-	res, err := SyncOnce(ctx, source, db, 1000)
+	res, err := SyncOnce(ctx, source, db, 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

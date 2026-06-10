@@ -44,7 +44,9 @@ class MediaGalleryViewer extends StatefulWidget {
 }
 
 class _MediaGalleryViewerState extends State<MediaGalleryViewer> {
-  late final PageController _page = PageController(initialPage: widget.initialIndex);
+  late final PageController _page = PageController(
+    initialPage: widget.initialIndex,
+  );
   late int _index = widget.initialIndex;
 
   @override
@@ -64,10 +66,8 @@ class _MediaGalleryViewerState extends State<MediaGalleryViewer> {
             controller: _page,
             itemCount: widget.images.length,
             onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) => _ZoomableImage(
-              api: widget.api,
-              attachment: widget.images[i],
-            ),
+            itemBuilder: (context, i) =>
+                _ZoomableImage(api: widget.api, attachment: widget.images[i]),
           ),
           // Top bar: close + counter, over a subtle gradient for legibility.
           Positioned(
@@ -123,10 +123,11 @@ class _ZoomableImageState extends State<_ZoomableImage> {
   late Future<Uint8List> _future = _load();
 
   Future<Uint8List> _load() {
-    final cached = imageByteCache[widget.attachment.guid];
+    final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
+    final cached = imageByteCache[cacheKey];
     if (cached != null) return Future.value(cached);
-    return widget.api.getAttachmentBytes(widget.attachment.guid).then((b) {
-      imageByteCache[widget.attachment.guid] = b;
+    return widget.api.getAttachmentPreviewBytes(widget.attachment).then((b) {
+      imageByteCache[cacheKey] = b;
       return b;
     });
   }
@@ -178,12 +179,17 @@ class _ErrorBody extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.broken_image_outlined,
-              color: Colors.white70, size: 48),
+          const Icon(
+            Icons.broken_image_outlined,
+            color: Colors.white70,
+            size: 48,
+          ),
           const SizedBox(height: 12),
-          Text(name,
-              style: const TextStyle(color: Colors.white70),
-              textAlign: TextAlign.center),
+          Text(
+            name,
+            style: const TextStyle(color: Colors.white70),
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(foregroundColor: Colors.white),

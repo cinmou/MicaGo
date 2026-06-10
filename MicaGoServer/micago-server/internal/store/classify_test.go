@@ -89,6 +89,99 @@ func TestClassifyFlagsMissingAttachmentRows(t *testing.T) {
 	}
 }
 
+func TestClassifyMessageJSONForNormalAPI(t *testing.T) {
+	cases := []struct {
+		name       string
+		msg        MessageJSON
+		wantKind   string
+		wantRec    string
+		debugOnly  bool
+		wantReason string
+	}{
+		{
+			name:     "normal text",
+			msg:      MessageJSON{Text: sp("hello")},
+			wantKind: SemanticKindNormalText,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:     "attributed body text",
+			msg:      MessageJSON{Text: sp("hello"), HasAttributedBody: true},
+			wantKind: SemanticKindAttributedBodyText,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:     "attachment",
+			msg:      MessageJSON{Attachments: []AttachmentJSON{{AttachmentKind: AttachmentKindImage}}},
+			wantKind: SemanticKindAttachment,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:       "missing attachment rows",
+			msg:        MessageJSON{CacheHasAttachments: true},
+			wantKind:   SemanticKindMissingAttachmentRows,
+			wantRec:    RenderRecommendationSystem,
+			wantReason: UnsupportedReasonMissingAttachmentRows,
+		},
+		{
+			name: "tapback",
+			msg: MessageJSON{
+				AssociatedMessageType: ip(2000),
+				AssociatedMessageGUID: sp("p:0/target"),
+			},
+			wantKind: SemanticKindTapback,
+			wantRec:  RenderRecommendationMerge,
+		},
+		{
+			name:     "reply",
+			msg:      MessageJSON{ThreadOriginatorGUID: sp("target"), Text: sp("ok")},
+			wantKind: SemanticKindReply,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:     "service event",
+			msg:      MessageJSON{ItemType: ip(1)},
+			wantKind: SemanticKindServiceEvent,
+			wantRec:  RenderRecommendationSystem,
+		},
+		{
+			name:     "effect",
+			msg:      MessageJSON{ExpressiveSendStyleID: sp("effect"), Text: sp("boom")},
+			wantKind: SemanticKindEffect,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:     "edited",
+			msg:      MessageJSON{Text: sp("new"), IsEdited: true},
+			wantKind: SemanticKindEdited,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:     "retracted",
+			msg:      MessageJSON{IsRetracted: true, Text: sp("old")},
+			wantKind: SemanticKindRetracted,
+			wantRec:  RenderRecommendationSystem,
+		},
+		{
+			name:       "sync noise",
+			msg:        MessageJSON{Text: sp("+!")},
+			wantKind:   SemanticKindSyncNoise,
+			wantRec:    RenderRecommendationDebugOnly,
+			debugOnly:  true,
+			wantReason: UnsupportedReasonControlText,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kind, rec, debugOnly, reason := ClassifyMessageJSON(tc.msg)
+			if kind != tc.wantKind || rec != tc.wantRec || debugOnly != tc.debugOnly || reason != tc.wantReason {
+				t.Fatalf("got kind=%q rec=%q debug=%v reason=%q", kind, rec, debugOnly, reason)
+			}
+		})
+	}
+}
+
 func annotate(in []DebugMessageJSON) []DebugMessageJSON {
 	for i := range in {
 		AnnotateDebugMessage(&in[i])
@@ -219,5 +312,31 @@ func TestDebugPayloadRedactionByConstruction(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(s), "bearer ") || strings.Contains(s, "\"token\"") {
 		t.Fatalf("debug JSON leaked a token: %s", s)
+	}
+}
+
+func TestFilterRenderableMessages(t *testing.T) {
+	in := []MessageJSON{
+		{GUID: "a", IsDebugOnly: false},
+		{GUID: "b", IsDebugOnly: true},
+		{GUID: "c", IsDebugOnly: false},
+	}
+	out := FilterRenderableMessages(in)
+	if len(out) != 2 || out[0].GUID != "a" || out[1].GUID != "c" {
+		t.Fatalf("expected [a c], got %d rows", len(out))
+	}
+}
+
+func TestDebugOnlyForSyncRow(t *testing.T) {
+	ctrl := "+!"
+	real := "hello"
+	if !DebugOnlyForSyncRow(SyncMessageRow{Text: &ctrl}) {
+		t.Fatal("control-like text should be debug-only")
+	}
+	if DebugOnlyForSyncRow(SyncMessageRow{Text: &real}) {
+		t.Fatal("real text should not be debug-only")
+	}
+	if DebugOnlyForSyncRow(SyncMessageRow{CacheHasAttachments: true}) {
+		t.Fatal("cacheHasAttachments row is system (missing rows), not debug-only")
 	}
 }

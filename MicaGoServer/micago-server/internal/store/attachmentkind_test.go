@@ -30,6 +30,13 @@ func TestAttachmentKindInference(t *testing.T) {
 			wantMime: "image/heic",
 		},
 		{
+			name:         "tiff image needs preview conversion",
+			uti:          sp("public.tiff"),
+			transferName: sp("screenshot.tiff"),
+			wantKind:     AttachmentKindImage,
+			wantMime:     "image/tiff",
+		},
+		{
 			name:         "pdf file by mime",
 			mimeType:     sp("application/pdf"),
 			transferName: sp("invoice.pdf"),
@@ -154,5 +161,25 @@ func TestDecorateAttachmentJSONFillsDerivedFields(t *testing.T) {
 	}
 	if a.MimeType == nil || *a.MimeType != "audio/x-caf" {
 		t.Errorf("mime = %v, want audio/x-caf", a.MimeType)
+	}
+}
+
+func TestDecorateAttachmentJSONMarksTIFFNotPreviewable(t *testing.T) {
+	a := AttachmentJSON{Uti: sp("public.tiff"), TransferName: sp("shot.tif")}
+	DecorateAttachmentJSON(&a)
+	if a.AttachmentKind != AttachmentKindImage {
+		t.Fatalf("kind = %q, want image", a.AttachmentKind)
+	}
+	if a.MimeType == nil || *a.MimeType != "image/tiff" {
+		t.Fatalf("mime = %v, want image/tiff", a.MimeType)
+	}
+	if !a.NeedsPreviewConversion {
+		t.Fatal("expected TIFF to need preview conversion")
+	}
+	if a.IsPreviewableImage {
+		t.Fatal("TIFF should not be marked previewable")
+	}
+	if a.DisplayKind != DisplayKindImageNeedsPreview {
+		t.Fatalf("displayKind = %q, want %q", a.DisplayKind, DisplayKindImageNeedsPreview)
 	}
 }

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
+import '../../core/network/websocket_client.dart';
 import 'models/chat_summary.dart';
 
 enum ChatListState { idle, loading, loaded, empty, error }
@@ -15,35 +18,80 @@ class ChatListController extends ChangeNotifier {
   ChatListState state = ChatListState.idle;
   List<ChatSummary> chats = const [];
   String? error;
+  StreamSubscription<WsEvent>? _wsSub;
+  Timer? _reloadDebounce;
+
+  /// When true, also request debug-only/noise-only chats from the server.
+  bool includeDebug = false;
 
   bool get isLoading => state == ChatListState.loading;
+
+  void startRealtime() {
+    _wsSub ??= app.ws.events.listen(_onWsEvent);
+    unawaited(app.catchUp(reason: 'chat-list'));
+  }
+
+  /// Updates the debug-chats preference and reloads if it changed.
+  void setIncludeDebug(bool value) {
+    if (includeDebug == value) return;
+    includeDebug = value;
+    unawaited(load(showSpinner: false));
+  }
 
   /// Loads the chat list. [showSpinner] controls whether to flip into the
   /// loading state (false for a silent pull-to-refresh).
   Future<void> load({bool showSpinner = true}) async {
     final api = app.api;
     if (api == null) {
-      state = ChatListState.error;
-      error = 'Not connected to a server.';
+      final cached = await app.cache.listChats(includeDebug: includeDebug);
+      chats = cached;
+      state = cached.isEmpty ? ChatListState.error : ChatListState.loaded;
+      error = cached.isEmpty ? 'Not connected to a server.' : null;
       notifyListeners();
       return;
     }
 
     if (showSpinner) {
-      state = ChatListState.loading;
+      final cached = await app.cache.listChats(includeDebug: includeDebug);
+      if (cached.isNotEmpty) {
+        chats = cached;
+        state = ChatListState.loaded;
+      } else {
+        state = ChatListState.loading;
+      }
       error = null;
       notifyListeners();
     }
 
     try {
-      final result = await api.getChats();
+      final result = await api.getChats(debug: includeDebug);
+      await app.cache.upsertChats(result);
       chats = result;
       state = result.isEmpty ? ChatListState.empty : ChatListState.loaded;
       error = null;
     } on ApiException catch (e) {
-      state = ChatListState.error;
-      error = _humanize(e);
+      final cached = await app.cache.listChats(includeDebug: includeDebug);
+      if (cached.isNotEmpty) {
+        chats = cached;
+        state = ChatListState.loaded;
+        error = null;
+      } else {
+        state = ChatListState.error;
+        error = _humanize(e);
+      }
     }
+    notifyListeners();
+  }
+
+  Future<void> hideChat(String guid, bool hidden) async {
+    await app.cache.setChatHidden(guid, hidden);
+    chats = await app.cache.listChats(includeDebug: includeDebug);
+    notifyListeners();
+  }
+
+  Future<void> alwaysShowChat(String guid, bool visible) async {
+    await app.cache.setChatAlwaysVisible(guid, visible);
+    chats = await app.cache.listChats(includeDebug: includeDebug);
     notifyListeners();
   }
 
@@ -58,5 +106,27 @@ class ChatListController extends ChangeNotifier {
       default:
         return e.message;
     }
+  }
+
+  void _onWsEvent(WsEvent e) {
+    switch (e.type) {
+      case 'message:new':
+      case 'message:update':
+      case 'message:unsend':
+        _reloadDebounce?.cancel();
+        _reloadDebounce = Timer(const Duration(milliseconds: 150), () {
+          load(showSpinner: false);
+        });
+        break;
+      default:
+        break;
+    }
+  }
+
+  @override
+  void dispose() {
+    _reloadDebounce?.cancel();
+    _wsSub?.cancel();
+    super.dispose();
   }
 }

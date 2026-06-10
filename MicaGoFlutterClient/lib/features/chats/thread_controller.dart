@@ -6,17 +6,17 @@ import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/websocket_client.dart';
 import 'models/message_model.dart';
+import 'store/message_collection.dart';
+// Re-export the reconciliation predicate so existing callers/tests that import
+// it from thread_controller continue to work after the store extraction.
+export 'store/message_collection.dart' show shouldReconcileLocalWithServer;
 
 enum ThreadState { loading, loaded, empty, error }
 
-/// Loads a chat's message history, sends text (optimistically), and reacts to
-/// realtime events.
-///
-/// Server gap: `message:new`/`message:update`/`message:unsend` payloads do not
-/// include a chat GUID, so we cannot route an incoming message to a specific
-/// open thread. The safe, documented fallback is a debounced reload of the
-/// thread on any such event. `send:match`/`send:error` carry our `tempGuid`, so
-/// those update the matching optimistic message precisely.
+/// Drives one chat thread. Holds a [MessageCollection] (the per-chat store) and
+/// *patches* it from REST pages + WebSocket events — it never reloads the whole
+/// thread on an event when the payload is complete. Optimistic sends live in the
+/// store and reconcile against later server rows.
 class ThreadController extends ChangeNotifier {
   final AppController app;
   final String chatGuid;
@@ -28,13 +28,8 @@ class ThreadController extends ChangeNotifier {
   ThreadState state = ThreadState.loading;
   String? error;
 
-  // Confirmed messages from the server (chronological), deduped by GUID.
-  final List<MessageModel> _server = [];
-  // Optimistic outgoing messages (pending/failed), keyed by tempId.
-  final List<MessageModel> _locals = [];
-  final Set<String> _serverGuids = {};
+  final MessageCollection _col = MessageCollection();
 
-  /// Older-message pagination (server has no cursor → limit/offset).
   int _offset = 0;
   bool hasMore = true;
   bool loadingOlder = false;
@@ -42,56 +37,67 @@ class ThreadController extends ChangeNotifier {
   StreamSubscription<WsEvent>? _wsSub;
   Timer? _reloadDebounce;
 
-  /// Display list: server history followed by not-yet-confirmed local sends.
   /// Chronological (oldest → newest); the thread view renders it reversed.
-  List<MessageModel> get messages => [..._server, ..._locals];
+  List<MessageModel> get messages => _col.ordered;
 
   void start() {
     _wsSub = app.ws.events.listen(_onWsEvent);
+    unawaited(app.catchUp(reason: 'thread:$chatGuid'));
     load();
   }
 
-  /// Loads (or reloads) the newest page. Resets pagination.
   Future<void> load({bool showSpinner = true}) async {
     final api = app.api;
     if (api == null) {
-      state = ThreadState.error;
-      error = 'Not connected.';
+      final cached = await app.cache.listMessages(chatGuid, limit: _pageSize);
+      if (cached.isNotEmpty) {
+        _col.replaceServerPage(cached);
+        state = ThreadState.loaded;
+        error = null;
+      } else {
+        state = ThreadState.error;
+        error = 'Not connected.';
+      }
       notifyListeners();
       return;
     }
     if (showSpinner) {
-      state = ThreadState.loading;
+      final cached = await app.cache.listMessages(chatGuid, limit: _pageSize);
+      if (cached.isNotEmpty) {
+        _col.replaceServerPage(cached);
+        state = ThreadState.loaded;
+      } else {
+        state = ThreadState.loading;
+      }
       error = null;
       notifyListeners();
     }
     try {
-      final fetched = await api.getMessages(chatGuid, limit: _pageSize, offset: 0);
-      // Server returns newest-first; reverse to chronological (oldest → newest).
-      _server.clear();
-      _serverGuids.clear();
-      for (final m in fetched.reversed) {
-        if (m.guid.isEmpty || _serverGuids.add(m.guid)) _server.add(m);
-      }
+      final fetched = await api.getMessages(
+        chatGuid,
+        limit: _pageSize,
+        offset: 0,
+      );
+      await app.cache.replaceServerPage(chatGuid, fetched);
+      _col.replaceServerPage(fetched);
       _offset = fetched.length;
       hasMore = fetched.length >= _pageSize;
-      // Drop any local message the server now reports (matched by guid).
-      _locals.removeWhere((l) =>
-          l.guid.isNotEmpty && _serverGuids.contains(l.guid));
-      state = (_server.isEmpty && _locals.isEmpty)
-          ? ThreadState.empty
-          : ThreadState.loaded;
+      state = _col.isEmpty ? ThreadState.empty : ThreadState.loaded;
       error = null;
     } on ApiException catch (e) {
-      state = ThreadState.error;
-      error = _humanize(e);
+      final cached = await app.cache.listMessages(chatGuid, limit: _pageSize);
+      if (cached.isNotEmpty) {
+        _col.replaceServerPage(cached);
+        state = ThreadState.loaded;
+        error = null;
+      } else {
+        state = ThreadState.error;
+        error = _humanize(e);
+      }
     }
     notifyListeners();
   }
 
-  /// Loads the next older page and **prepends** it, deduping by GUID. The thread
-  /// view uses a reversed list, so prepending older history does not shift the
-  /// visible viewport (scroll position is preserved).
   Future<void> loadOlder() async {
     if (loadingOlder || !hasMore) return;
     final api = app.api;
@@ -99,37 +105,37 @@ class ThreadController extends ChangeNotifier {
     loadingOlder = true;
     notifyListeners();
     try {
-      final fetched =
-          await api.getMessages(chatGuid, limit: _pageSize, offset: _offset);
-      // Older batch, chronological, deduped, prepended at the front.
-      final older = <MessageModel>[];
-      for (final m in fetched.reversed) {
-        if (m.guid.isEmpty || _serverGuids.add(m.guid)) older.add(m);
+      final fetched = await api.getMessages(
+        chatGuid,
+        limit: _pageSize,
+        offset: _offset,
+      );
+      for (final m in fetched) {
+        await app.cache.upsertMessage(chatGuid, m);
       }
-      _server.insertAll(0, older);
+      _col.mergeOlder(fetched);
       _offset += fetched.length;
       hasMore = fetched.length >= _pageSize;
     } on ApiException {
       // Keep what we have; a transient failure shouldn't break the thread.
-      // hasMore stays true so the user can retry by scrolling up again.
     }
     loadingOlder = false;
     notifyListeners();
   }
 
-  /// Optimistically sends [text]. Returns immediately after queuing; state
-  /// updates flow through [notifyListeners].
   Future<void> send(String text) async {
     final trimmed = text.trim();
     final api = app.api;
     if (trimmed.isEmpty || api == null) return;
 
     final tempId = 'tmp-${DateTime.now().microsecondsSinceEpoch}';
-    _locals.add(MessageModel.optimistic(
+    final optimistic = MessageModel.optimistic(
       tempId: tempId,
       text: trimmed,
       dateCreated: DateTime.now().millisecondsSinceEpoch,
-    ));
+    );
+    _col.addPending(optimistic);
+    await app.cache.addPending(chatGuid, optimistic);
     state = ThreadState.loaded;
     notifyListeners();
 
@@ -139,37 +145,32 @@ class ThreadController extends ChangeNotifier {
         tempGuid: tempId,
         message: trimmed,
       );
-      _confirmLocal(tempId, confirmed);
-    } on ApiException {
-      _markLocalFailed(tempId);
+      _col.confirmPending(tempId, confirmed);
+      await app.cache.confirmPending(chatGuid, tempId, confirmed);
+    } on ApiException catch (e) {
+      // AppleScript succeeded but DB confirmation timed out → sentUnconfirmed,
+      // NOT failed; a later server row / update will upgrade it.
+      _col.setPendingState(
+        tempId,
+        e.code == 'send_confirmation_timeout'
+            ? LocalSendState.sentUnconfirmed
+            : LocalSendState.failed,
+      );
+      await app.cache.setPendingState(
+        tempId,
+        e.code == 'send_confirmation_timeout'
+            ? LocalSendState.sentUnconfirmed
+            : LocalSendState.failed,
+      );
     }
+    notifyListeners();
   }
 
-  /// Retries a previously failed local send.
   Future<void> retry(String tempId) async {
-    final idx = _locals.indexWhere((m) => m.tempId == tempId);
-    if (idx < 0) return;
-    final text = _locals[idx].text ?? '';
-    _locals.removeAt(idx);
+    final text = _col.removePending(tempId);
+    if (text == null) return;
     notifyListeners();
     await send(text);
-  }
-
-  void _confirmLocal(String tempId, MessageModel confirmed) {
-    _locals.removeWhere((m) => m.tempId == tempId);
-    if (confirmed.guid.isEmpty || _serverGuids.add(confirmed.guid)) {
-      _server.add(confirmed);
-    }
-    state = ThreadState.loaded;
-    notifyListeners();
-  }
-
-  void _markLocalFailed(String tempId) {
-    final idx = _locals.indexWhere((m) => m.tempId == tempId);
-    if (idx >= 0) {
-      _locals[idx] = _locals[idx].copyWith(localState: LocalSendState.failed);
-      notifyListeners();
-    }
   }
 
   void _onWsEvent(WsEvent e) {
@@ -177,21 +178,75 @@ class ThreadController extends ChangeNotifier {
       case 'send:match':
         final tempId = e.data['tempGuid'] as String?;
         final msg = e.data['message'];
-        if (tempId != null && msg is Map<String, dynamic>) {
-          if (_locals.any((m) => m.tempId == tempId)) {
-            _confirmLocal(tempId, MessageModel.fromJson(msg));
-          }
+        if (tempId != null &&
+            msg is Map<String, dynamic> &&
+            _col.pendingByTempId(tempId) != null) {
+          _col.confirmPending(tempId, MessageModel.fromJson(msg));
+          unawaited(
+            app.cache.confirmPending(
+              chatGuid,
+              tempId,
+              MessageModel.fromJson(msg),
+            ),
+          );
+          notifyListeners();
         }
         break;
       case 'send:error':
         final tempId = e.data['tempGuid'] as String?;
-        if (tempId != null) _markLocalFailed(tempId);
+        final code = e.data['code'] as String?;
+        final recoverable =
+            e.data['recoverable'] == true ||
+            e.data['state'] == 'sent_unconfirmed' ||
+            code == 'send_confirmation_timeout';
+        if (tempId != null && _col.pendingByTempId(tempId) != null) {
+          _col.setPendingState(
+            tempId,
+            recoverable
+                ? LocalSendState.sentUnconfirmed
+                : LocalSendState.failed,
+          );
+          unawaited(
+            app.cache.setPendingState(
+              tempId,
+              recoverable
+                  ? LocalSendState.sentUnconfirmed
+                  : LocalSendState.failed,
+            ),
+          );
+          notifyListeners();
+        }
         break;
       case 'message:new':
       case 'message:update':
+        final msg = messageFromWsEvent(e);
+        if (msg == null || msg.chatGuid == null) {
+          _scheduleReload();
+          break;
+        }
+        if (msg.chatGuid == chatGuid) {
+          _col.upsertServer(msg);
+          unawaited(app.cache.upsertMessage(chatGuid, msg));
+          state = ThreadState.loaded;
+          notifyListeners();
+        }
+        break;
       case 'message:unsend':
-        // No chatGuid on the payload → safe fallback: debounced reload.
-        _scheduleReload();
+        final eventChat = chatGuidFromWsEvent(e);
+        if (eventChat == null) {
+          _scheduleReload();
+          break;
+        }
+        if (eventChat == chatGuid) {
+          final guid = e.data['guid'] as String?;
+          final dateRetracted = _asInt(e.data['dateRetracted']);
+          if (guid == null || !_col.applyUnsend(guid, dateRetracted)) {
+            _scheduleReload();
+          } else {
+            unawaited(app.cache.applyUnsend(chatGuid, guid, dateRetracted));
+            notifyListeners();
+          }
+        }
         break;
       default:
         break;
@@ -227,3 +282,20 @@ class ThreadController extends ChangeNotifier {
     super.dispose();
   }
 }
+
+MessageModel? messageFromWsEvent(WsEvent e) {
+  final raw = e.type == 'message:update' ? e.data['message'] : e.data;
+  if (raw is Map<String, dynamic>) return MessageModel.fromJson(raw);
+  return null;
+}
+
+String? chatGuidFromWsEvent(WsEvent e) {
+  if (e.data['chatGuid'] is String) return e.data['chatGuid'] as String;
+  final msg = e.data['message'];
+  if (msg is Map<String, dynamic> && msg['chatGuid'] is String) {
+    return msg['chatGuid'] as String;
+  }
+  return null;
+}
+
+int? _asInt(Object? v) => v is num ? v.toInt() : null;

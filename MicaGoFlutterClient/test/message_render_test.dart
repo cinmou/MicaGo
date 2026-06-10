@@ -16,6 +16,8 @@ MessageModel _msg({
   int itemType = 0,
   int groupActionType = 0,
   int errorCode = 0,
+  bool isEdited = false,
+  bool isDebugOnly = false,
   String? tempId,
   LocalSendState localState = LocalSendState.confirmed,
 }) {
@@ -34,6 +36,8 @@ MessageModel _msg({
     itemType: itemType,
     groupActionType: groupActionType,
     errorCode: errorCode,
+    isEdited: isEdited,
+    isDebugOnly: isDebugOnly,
     tempId: tempId,
     localState: localState,
   );
@@ -66,55 +70,111 @@ void main() {
       expect(renderableKindFor(_msg(text: 'Hi')), MessageRenderableKind.normal);
     });
     test('attachmentOnly when no text but attachments', () {
-      final m = _msg(attachments: const [
-        AttachmentModel(guid: 'a', downloadUrl: '/x', attachmentKind: 'image'),
-      ]);
+      final m = _msg(
+        attachments: const [
+          AttachmentModel(
+            guid: 'a',
+            downloadUrl: '/x',
+            attachmentKind: 'image',
+          ),
+        ],
+      );
       expect(renderableKindFor(m), MessageRenderableKind.attachmentOnly);
     });
     test('service for group/item events', () {
-      expect(renderableKindFor(_msg(itemType: 2)),
-          MessageRenderableKind.service);
+      expect(
+        renderableKindFor(_msg(itemType: 2)),
+        MessageRenderableKind.service,
+      );
     });
     test('reaction for associated message', () {
       expect(
-          renderableKindFor(
-              _msg(associatedType: 2000, associatedGuid: 'p:0/abc')),
-          MessageRenderableKind.reaction);
+        renderableKindFor(
+          _msg(associatedType: 2000, associatedGuid: 'p:0/abc'),
+        ),
+        MessageRenderableKind.reaction,
+      );
     });
     test('unknown for control-only text and no attachments', () {
-      expect(renderableKindFor(_msg(text: '+!')), MessageRenderableKind.unknown);
-      expect(renderableKindFor(_msg(text: null)), MessageRenderableKind.unknown);
+      expect(
+        renderableKindFor(_msg(text: '+!')),
+        MessageRenderableKind.unknown,
+      );
+      expect(
+        renderableKindFor(_msg(text: null)),
+        MessageRenderableKind.unknown,
+      );
+    });
+    test('server debug-only recommendation renders as unknown', () {
+      expect(
+        renderableKindFor(_msg(text: 'hidden', isDebugOnly: true)),
+        MessageRenderableKind.unknown,
+      );
+    });
+  });
+
+  group('edited marker', () {
+    test('shows marker for edited non-retracted messages', () {
+      expect(editedMarker(_msg(text: 'hi', isEdited: true)), 'Edited');
+      expect(editedMarker(_msg(text: 'hi')), isNull);
     });
   });
 
   group('deliveryStateFor', () {
     test('incoming never shows outgoing status', () {
-      expect(deliveryStateFor(_msg(isFromMe: false, isDelivered: true)),
-          MessageDeliveryState.incoming);
+      expect(
+        deliveryStateFor(_msg(isFromMe: false, isDelivered: true)),
+        MessageDeliveryState.incoming,
+      );
     });
     test('sending while pending', () {
       expect(
-          deliveryStateFor(_msg(
-              isFromMe: true,
-              tempId: 't',
-              localState: LocalSendState.pending)),
-          MessageDeliveryState.sending);
+        deliveryStateFor(
+          _msg(isFromMe: true, tempId: 't', localState: LocalSendState.pending),
+        ),
+        MessageDeliveryState.sending,
+      );
+      expect(
+        deliveryStateFor(
+          _msg(isFromMe: true, tempId: 't', localState: LocalSendState.sending),
+        ),
+        MessageDeliveryState.sending,
+      );
+    });
+    test('sent_unconfirmed renders as sent unless later state arrives', () {
+      expect(
+        deliveryStateFor(
+          _msg(
+            isFromMe: true,
+            tempId: 't',
+            localState: LocalSendState.sentUnconfirmed,
+          ),
+        ),
+        MessageDeliveryState.sent,
+      );
     });
     test('failed from local state or error code', () {
       expect(
-          deliveryStateFor(
-              _msg(isFromMe: true, localState: LocalSendState.failed)),
-          MessageDeliveryState.failed);
-      expect(deliveryStateFor(_msg(isFromMe: true, errorCode: 22)),
-          MessageDeliveryState.failed);
+        deliveryStateFor(
+          _msg(isFromMe: true, localState: LocalSendState.failed),
+        ),
+        MessageDeliveryState.failed,
+      );
+      expect(
+        deliveryStateFor(_msg(isFromMe: true, errorCode: 22)),
+        MessageDeliveryState.failed,
+      );
     });
     test('read > delivered > sent precedence', () {
-      expect(deliveryStateFor(_msg(isFromMe: true, isRead: true)),
-          MessageDeliveryState.read);
-      expect(deliveryStateFor(_msg(isFromMe: true, isDelivered: true)),
-          MessageDeliveryState.delivered);
-      expect(deliveryStateFor(_msg(isFromMe: true)),
-          MessageDeliveryState.sent);
+      expect(
+        deliveryStateFor(_msg(isFromMe: true, isRead: true)),
+        MessageDeliveryState.read,
+      );
+      expect(
+        deliveryStateFor(_msg(isFromMe: true, isDelivered: true)),
+        MessageDeliveryState.delivered,
+      );
+      expect(deliveryStateFor(_msg(isFromMe: true)), MessageDeliveryState.sent);
     });
   });
 
@@ -124,15 +184,23 @@ void main() {
     });
     test('contact name preferred', () {
       expect(
-          resolveSenderLabel(_msg(handleId: '+15551234567'),
-              isGroup: true, contactName: 'Jane'),
-          'Jane');
+        resolveSenderLabel(
+          _msg(handleId: '+15551234567'),
+          isGroup: true,
+          contactName: 'Jane',
+        ),
+        'Jane',
+      );
     });
     test('falls back to handle then Unknown', () {
       expect(
-          resolveSenderLabel(_msg(handleId: '+15551234567'), isGroup: true),
-          '+15551234567');
-      expect(resolveSenderLabel(_msg(handleId: null), isGroup: true), 'Unknown');
+        resolveSenderLabel(_msg(handleId: '+15551234567'), isGroup: true),
+        '+15551234567',
+      );
+      expect(
+        resolveSenderLabel(_msg(handleId: null), isGroup: true),
+        'Unknown',
+      );
     });
   });
 }

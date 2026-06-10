@@ -13,6 +13,7 @@ import 'message_display.dart';
 import 'message_render.dart';
 import 'models/chat_summary.dart';
 import 'models/message_model.dart';
+import 'store/thread_presentation.dart';
 import 'thread_controller.dart';
 
 /// Real message thread (C2): history, attachments, optimistic text send, and
@@ -135,8 +136,10 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
             children: [
               Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
               if (widget.chat.serviceName != null)
-                Text(widget.chat.serviceName!,
-                    style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  widget.chat.serviceName!,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
             ],
           ),
         ),
@@ -182,8 +185,12 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     );
   }
 
-  Widget _buildBody(BuildContext context, ApiClient? api,
-      ContactsService contacts, MessageDisplayPrefs prefs) {
+  Widget _buildBody(
+    BuildContext context,
+    ApiClient? api,
+    ContactsService contacts,
+    MessageDisplayPrefs prefs,
+  ) {
     switch (_controller.state) {
       case ThreadState.loading:
         return const Center(child: CircularProgressIndicator());
@@ -203,144 +210,82 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
           ),
         );
       case ThreadState.loaded:
-        final msgs = _controller.messages;
-        final rows = buildDisplayRows(msgs, prefs);
-        final items = _buildItems(rows);
-        final showLoader = _controller.loadingOlder;
-        // Reply-target lookup + sender resolution for quoted previews.
-        final byGuid = {for (final m in msgs) m.guid: m};
-        ReplyPreview? replyPreviewFor(MessageModel m) {
-          if (!isReply(m)) return null;
-          final target = byGuid[m.threadOriginatorGuid];
-          if (target == null) {
-            return const ReplyPreview(sender: '', text: null, targetLoaded: false);
-          }
-          return ReplyPreview(
-            sender: resolveSenderLabel(target,
-                isGroup: widget.chat.isGroup,
-                contactName: contacts.displayNameFor(target.handleId)),
-            text: displayText(target),
-            targetLoaded: true,
-          );
-        }
-
-        // Part I: delivery-label visibility depends on the user's preference.
-        String? lastOutgoingKey;
-        for (final m in msgs) {
-          if (m.isFromMe) lastOutgoingKey = m.dedupeKey;
-        }
-        bool showStatusFor(MessageModel m) {
-          switch (prefs.deliveryLabels) {
-            case DeliveryLabelMode.off:
-              return false;
-            case DeliveryLabelMode.compact:
-              return m.dedupeKey == lastOutgoingKey;
-            case DeliveryLabelMode.detailed:
-              return m.isFromMe;
-          }
-        }
+        // Precompute the entire view-item list ONCE (classification, labels,
+        // reply previews, reactions, effects, delivery visibility, date
+        // separators). The hot itemBuilder below only renders.
+        final items = ThreadPresentationBuilder.build(
+          messages: _controller.messages,
+          prefs: prefs,
+          isGroup: widget.chat.isGroup,
+          resolveName: contacts.displayNameFor,
+          loadingOlder: _controller.loadingOlder,
+        );
         // Reversed list: newest at the bottom; prepending older history (top)
         // does not shift the viewport, so scroll position is preserved.
         return ListView.builder(
           controller: _scroll,
           reverse: true,
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-          itemCount: items.length + (showLoader ? 1 : 0),
+          itemCount: items.length,
           itemBuilder: (context, i) {
-            if (i == items.length) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Center(
-                  child: SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2)),
-                ),
-              );
-            }
             final item = items[items.length - 1 - i];
-            if (item.header != null) {
-              return _DateSeparator(label: item.header!);
-            }
-            final row = item.row!;
-            final m = row.message;
-            switch (row.kind) {
-              case MessageRenderableKind.service:
-              case MessageRenderableKind.reaction:
-              case MessageRenderableKind.retracted:
-              case MessageRenderableKind.unknown:
-                return _SystemRow(
-                  message: m,
-                  classification: MessageClassification(
-                      row.kind, classifyMessage(m).reason),
-                  mergedCount: row.mergedSystemCount,
-                  onDebug: () => showMessageDebugSheet(context, m),
-                );
-              case MessageRenderableKind.normal:
-              case MessageRenderableKind.attachmentOnly:
-                return _MessageBubble(
-                  message: m,
-                  api: api,
-                  isGroup: widget.chat.isGroup,
-                  contacts: contacts,
-                  reactions: row.reactions,
-                  reply: replyPreviewFor(m),
-                  effectHint: prefs.showEffectHints
-                      ? effectLabel(m.expressiveSendStyleId)
-                      : null,
-                  showStatus: showStatusFor(m),
-                  onRetry: () {
-                    final t = m.tempId;
-                    if (t != null) _controller.retry(t);
-                  },
-                  onDebug: () => showMessageDebugSheet(context, m),
-                );
-            }
+            return KeyedSubtree(
+              key: ValueKey(item.key),
+              child: _buildRow(context, item, api),
+            );
           },
         );
     }
   }
 
-  /// Inserts a date separator before the first row of each day.
-  List<_ThreadItem> _buildItems(List<DisplayRow> rows) {
-    final items = <_ThreadItem>[];
-    DateTime? lastDay;
-    for (final row in rows) {
-      final ts = row.message.dateCreated;
-      if (ts != null) {
-        final dt = DateTime.fromMillisecondsSinceEpoch(ts);
-        final day = DateTime(dt.year, dt.month, dt.day);
-        if (lastDay == null || day != lastDay) {
-          items.add(_ThreadItem.header(_dayLabel(day)));
-          lastDay = day;
-        }
-      }
-      items.add(_ThreadItem.row(row));
+  Widget _buildRow(BuildContext context, ThreadViewItem item, ApiClient? api) {
+    if (item is DateSeparatorItem) {
+      return _DateSeparator(label: item.label);
     }
-    return items;
+    if (item is LoadingOlderItem) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    final m = item as MessageViewItem;
+    if (m.isSystem) {
+      return _SystemRow(
+        message: m.message,
+        baseLabel: m.systemLabel ?? 'Unsupported message',
+        mergedCount: m.mergedSystemCount,
+        isUnknown: m.kind == MessageRenderableKind.unknown,
+        onDebug: () => showMessageDebugSheet(context, m.message),
+      );
+    }
+    // Wrap media-bearing bubbles in a RepaintBoundary so image decode/paint
+    // doesn't invalidate neighbouring rows during scroll.
+    final bubble = _MessageBubble(
+      message: m.message,
+      api: api,
+      senderName: m.senderLabel,
+      body: m.body,
+      reactions: m.reactions,
+      reply: m.reply,
+      effectHint: m.effectHint,
+      showStatus: m.showStatus,
+      onRetry: () {
+        final t = m.message.tempId;
+        if (t != null) _controller.retry(t);
+      },
+      onDebug: () => showMessageDebugSheet(context, m.message),
+    );
+    return m.message.hasAttachments
+        ? RepaintBoundary(child: bubble)
+        : bubble;
   }
 
-  String _dayLabel(DateTime day) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final diff = today.difference(day).inDays;
-    if (diff == 0) return 'Today';
-    if (diff == 1) return 'Yesterday';
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    final base = '${months[day.month - 1]} ${day.day}';
-    return day.year == now.year ? base : '$base, ${day.year}';
-  }
-}
-
-/// A thread list item: either a date header or a (display-prefs-applied) row.
-class _ThreadItem {
-  final String? header;
-  final DisplayRow? row;
-  _ThreadItem.header(this.header) : row = null;
-  _ThreadItem.row(this.row) : header = null;
 }
 
 class _DateSeparator extends StatelessWidget {
@@ -358,11 +303,12 @@ class _DateSeparator extends StatelessWidget {
           color: scheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(12),
         ),
-        child: Text(label,
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: scheme.onSurfaceVariant)),
+        child: Text(
+          label,
+          style: Theme.of(
+            context,
+          ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
       ),
     );
   }
@@ -371,8 +317,10 @@ class _DateSeparator extends StatelessWidget {
 class _MessageBubble extends StatelessWidget {
   final MessageModel message;
   final ApiClient? api;
-  final bool isGroup;
-  final ContactsService contacts;
+
+  /// Precomputed (ThreadPresentationBuilder): sender label (groups only) + body.
+  final String? senderName;
+  final String? body;
 
   /// Part I: whether to render the delivery-status line.
   final bool showStatus;
@@ -388,8 +336,8 @@ class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
     required this.api,
-    required this.isGroup,
-    required this.contacts,
+    required this.senderName,
+    required this.body,
     required this.showStatus,
     this.reactions = const [],
     this.reply,
@@ -402,19 +350,19 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final fromMe = message.isFromMe;
-    final bubbleColor =
-        fromMe ? scheme.primaryContainer : scheme.surfaceContainerHighest;
+    final bubbleColor = fromMe
+        ? scheme.primaryContainer
+        : scheme.surfaceContainerHighest;
     final textColor = fromMe ? scheme.onPrimaryContainer : scheme.onSurface;
 
-    final senderName = (!fromMe && isGroup)
-        ? resolveSenderLabel(message,
-            isGroup: isGroup,
-            contactName: contacts.displayNameFor(message.handleId))
-        : null;
-    final body = displayText(message);
     final hasMedia = message.hasAttachments && api != null;
-    final images =
-        message.attachments.where((a) => a.isImage).toList(growable: false);
+    final images = message.attachments
+        .where((a) => a.canRenderInlineImage)
+        .toList(growable: false);
+    // Local copies so Dart can flow-promote the nullable presentation fields.
+    final sender = senderName;
+    final bodyText = body;
+    final effect = effectHint;
 
     final bubble = Container(
       margin: const EdgeInsets.symmetric(vertical: 2),
@@ -432,17 +380,20 @@ class _MessageBubble extends StatelessWidget {
         ),
       ),
       child: Column(
-        crossAxisAlignment:
-            fromMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment: fromMe
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
         children: [
-          if (senderName != null && senderName.isNotEmpty)
+          if (sender != null && sender.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 2),
-              child: Text(senderName,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: scheme.primary,
-                        fontWeight: FontWeight.w600,
-                      )),
+              child: Text(
+                sender,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           if (reply != null) _ReplyPreviewBlock(reply: reply!, fromMe: fromMe),
           if (hasMedia)
@@ -453,31 +404,33 @@ class _MessageBubble extends StatelessWidget {
                   api: api!,
                   attachment: a,
                   imageSiblings: images,
-                  imageIndex: a.isImage ? images.indexOf(a) : 0,
+                  imageIndex: a.canRenderInlineImage ? images.indexOf(a) : 0,
                 ),
               ),
-          if (body != null) Text(body, style: TextStyle(color: textColor)),
-          if (effectHint != null)
+          if (bodyText != null) Text(bodyText, style: TextStyle(color: textColor)),
+          if (effect != null)
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.auto_awesome,
-                      size: 11, color: scheme.onSurfaceVariant),
+                  Icon(
+                    Icons.auto_awesome,
+                    size: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 3),
-                  Text(effectHint!,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                          fontStyle: FontStyle.italic)),
+                  Text(
+                    effectHint!,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
                 ],
               ),
             ),
-          _Footer(
-            message: message,
-            showStatus: showStatus,
-            onRetry: onRetry,
-          ),
+          _Footer(message: message, showStatus: showStatus, onRetry: onRetry),
         ],
       ),
     );
@@ -574,31 +527,25 @@ class _ReplyPreviewBlock extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (reply.targetLoaded && reply.sender.isNotEmpty)
-            Text(reply.sender,
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
-                    ?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600)),
-          Text(label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant)),
+            Text(
+              reply.sender,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
         ],
       ),
     );
   }
-}
-
-/// Fallback label for a reaction row when the target bubble isn't shown inline
-/// (we don't yet merge reactions onto the target by default).
-String _reactionRowLabel(MessageModel m) {
-  final t = tapbackFromCode(m.associatedMessageType);
-  if (t == null) return 'Reacted to a message';
-  final emoji = tapbackEmoji(t.kind);
-  return t.isRemoval ? 'Removed a $emoji reaction' : '$emoji Reacted to a message';
 }
 
 /// A subtle, centered row for service/system/unknown items — never a broken
@@ -606,29 +553,27 @@ String _reactionRowLabel(MessageModel m) {
 /// item is unsupported, without dumping raw payloads into the conversation.
 class _SystemRow extends StatelessWidget {
   final MessageModel message;
-  final MessageClassification classification;
+
+  /// Precomputed (ThreadPresentationBuilder): the row label, merge count, and
+  /// whether this is an unsupported/unknown row.
+  final String baseLabel;
   final int mergedCount;
+  final bool isUnknown;
   final VoidCallback onDebug;
   const _SystemRow({
     required this.message,
-    required this.classification,
+    required this.baseLabel,
     this.mergedCount = 1,
+    required this.isUnknown,
     required this.onDebug,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final kind = classification.kind;
-    final base = switch (kind) {
-      MessageRenderableKind.service => serviceEventLabel(message),
-      MessageRenderableKind.reaction => _reactionRowLabel(message),
-      MessageRenderableKind.retracted => retractedLabel(message),
-      _ => 'Unsupported message',
-    };
     // When consecutive system rows were merged, show a compact count.
-    final label = mergedCount > 1 ? '$base · +${mergedCount - 1} more' : base;
-    final isUnknown = kind == MessageRenderableKind.unknown;
+    final label =
+        mergedCount > 1 ? '$baseLabel · +${mergedCount - 1} more' : baseLabel;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 24),
       child: Center(
@@ -643,18 +588,22 @@ class _SystemRow extends StatelessWidget {
                 if (isUnknown)
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
-                    child: Icon(Icons.help_outline,
-                        size: 14, color: scheme.onSurfaceVariant),
+                    child: Icon(
+                      Icons.help_outline,
+                      size: 14,
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 Flexible(
                   child: Text(
                     label,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                          fontStyle:
-                              isUnknown ? FontStyle.italic : FontStyle.normal,
-                        ),
+                      color: scheme.onSurfaceVariant,
+                      fontStyle: isUnknown
+                          ? FontStyle.italic
+                          : FontStyle.normal,
+                    ),
                   ),
                 ),
               ],
@@ -695,8 +644,10 @@ class _Footer extends StatelessWidget {
             children: [
               Icon(Icons.error_outline, size: 13, color: scheme.error),
               const SizedBox(width: 4),
-              Text('Failed — tap to retry',
-                  style: small?.copyWith(color: scheme.error)),
+              Text(
+                'Failed — tap to retry',
+                style: small?.copyWith(color: scheme.error),
+              ),
             ],
           ),
         ),
@@ -706,6 +657,8 @@ class _Footer extends StatelessWidget {
     final parts = <String>[];
     final ts = message.dateCreated;
     if (ts != null) parts.add(_time(ts));
+    final edited = editedMarker(message);
+    if (edited != null) parts.add(edited);
     // Status word is outgoing-only, shown only on the latest outgoing message.
     if (showStatus) {
       switch (state) {
@@ -730,8 +683,10 @@ class _Footer extends StatelessWidget {
     if (parts.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: 2),
-      child: Text(parts.join(' · '),
-          style: small?.copyWith(color: scheme.onSurfaceVariant)),
+      child: Text(
+        parts.join(' · '),
+        style: small?.copyWith(color: scheme.onSurfaceVariant),
+      ),
     );
   }
 
@@ -812,8 +767,11 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off_outlined,
-                size: 48, color: Theme.of(context).colorScheme.error),
+            Icon(
+              Icons.cloud_off_outlined,
+              size: 48,
+              color: Theme.of(context).colorScheme.error,
+            ),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),

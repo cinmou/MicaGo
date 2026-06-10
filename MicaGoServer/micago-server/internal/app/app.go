@@ -35,11 +35,87 @@ type Options struct {
 
 type apiQueryService interface {
 	ListRecentMessages(ctx context.Context, limit, offset int, service string, includeEmpty bool) ([]store.MessageJSON, error)
-	ListChats(ctx context.Context, limit, offset int, withArchived bool, service string) ([]store.ChatJSON, error)
+	ListChats(ctx context.Context, limit, offset int, withArchived bool, service string, includeDebug bool) ([]store.ChatJSON, error)
 	ChatExists(ctx context.Context, guid string) (bool, error)
 	GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, error)
 	ListChatMessages(ctx context.Context, guid string, limit, offset int, includeEmpty bool) ([]store.MessageJSON, error)
 	FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*store.MessageJSON, error)
+}
+
+type syncDiagnostics struct {
+	mu   sync.Mutex
+	data store.ServerSyncDiagnostics
+}
+
+func (d *syncDiagnostics) snapshot(pendingSends, pendingTriggers int) store.ServerSyncDiagnostics {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := d.data
+	out.PendingSendsCount = pendingSends
+	out.PendingTriggerCount = pendingTriggers
+	return out
+}
+
+func (d *syncDiagnostics) recordLockRetry() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.data.LockRetryCount++
+}
+
+func (d *syncDiagnostics) recordRun(start time.Time, result relaydb.SyncResult) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	started := start.UnixMilli()
+	completed := time.Now().UnixMilli()
+	d.data.LastStartedAt = &started
+	d.data.LastCompletedAt = &completed
+	d.data.LastDurationMillis = completed - started
+	d.data.LastInsertedMessages = len(result.NewMessages)
+	d.data.LastSyncedMessages = result.MessagesSynced
+	d.data.LastUpdatePassCount = len(result.Updates)
+	d.data.LastUpdatePassSeeded = result.UpdateSeeded
+	d.data.LastUnsentCount = len(result.Unsent)
+	d.data.LastScannedMessageRowID = result.NewLastMessageRowID
+	d.data.LastSyncError = ""
+}
+
+func (d *syncDiagnostics) recordLateMatches(count int) {
+	if count <= 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.data.LateMatchedSendsCount += count
+}
+
+func (d *syncDiagnostics) recordEvent(eventType string, chatGUID *string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.data.LastEmittedEventType = eventType
+	d.data.LastEmittedChatGUID = chatGUID
+}
+
+func (d *syncDiagnostics) recordTrigger(reason string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.data.LastTriggerReason = reason
+}
+
+func (d *syncDiagnostics) recordDBMtime(chatDB, wal, shm *int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.data.LastChatDBMtime = chatDB
+	d.data.LastWALMtime = wal
+	d.data.LastSHMMtime = shm
+}
+
+func (d *syncDiagnostics) recordError(err error) {
+	if err == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.data.LastSyncError = err.Error()
 }
 
 func Run(options Options) error {
@@ -108,6 +184,8 @@ func Run(options Options) error {
 	hub := realtime.NewHub()
 	defer hub.Close()
 	dispatcher := notify.NewDispatcher(cfg)
+	pendingSends := micasend.NewPendingSendManager()
+	diagnostics := &syncDiagnostics{}
 	// v0.12: prune dead FCM tokens reported by Google (clears the device's token).
 	dispatcher.SetPruneFunc(func(id string) {
 		if err := relay.ClearDevicePushToken(context.Background(), id); err != nil {
@@ -122,7 +200,8 @@ func Run(options Options) error {
 	runSync := func(ctx context.Context) (relaydb.SyncResult, error) {
 		syncMu.Lock()
 		defer syncMu.Unlock()
-		result, err := relaydb.SyncOnce(ctx, queries, relay, cfg.InitialSyncLimit)
+		start := time.Now()
+		result, err := relaydb.SyncOnce(ctx, queries, relay, cfg.InitialSyncLimit, cfg.UpdateLookback)
 		if err != nil {
 			return result, err
 		}
@@ -134,7 +213,34 @@ func Run(options Options) error {
 		} else {
 			result.Updates = updates.Updates
 			result.Unsent = updates.Unsent
+			result.UpdateScanned = updates.Scanned
+			result.UpdateSeeded = updates.Seeded
 		}
+		diagnostics.recordRun(start, result)
+		return result, nil
+	}
+	syncAndBroadcast := func(ctx context.Context, reason string) (relaydb.SyncResult, error) {
+		diagnostics.recordTrigger(reason)
+		result, err := runSync(ctx)
+		if err != nil {
+			diagnostics.recordError(err)
+			return result, err
+		}
+		lateMatches := pendingSends.ReconcileMessages(sendCandidates(result.NewMessages), time.Now())
+		if len(lateMatches) > 0 {
+			diagnostics.recordLateMatches(len(lateMatches))
+		}
+		broadcastSyncResult(ctx, hub, result, diagnostics)
+		for _, match := range lateMatches {
+			for _, message := range result.NewMessages {
+				if message.GUID == match.MatchedGUID {
+					broadcastSendMatch(ctx, hub, match.TempGUID, message, diagnostics)
+					pendingSends.Remove(match.TempGUID)
+					break
+				}
+			}
+		}
+		dispatchNotifications(ctx, dispatcher, relay, result)
 		return result, nil
 	}
 
@@ -148,20 +254,36 @@ func Run(options Options) error {
 		return nil
 	}
 
-	startupSync, err := runSync(ctx)
+	startupSync, err := syncAndBroadcast(ctx, "startup")
 	if err != nil {
 		return err
 	}
 	logSyncResult(startupSync, true)
-	broadcastSyncResult(ctx, hub, startupSync)
-	dispatchNotifications(ctx, dispatcher, relay, startupSync)
+
+	// C11: a single coalescing sync engine consumes all background triggers so a
+	// burst of WAL/mtime/send triggers never piles up (and never gets dropped).
+	// Direct callers (startup, client request, the immediate post-send sync) keep
+	// running through runSync's mutex, so nothing overlaps.
+	engine := NewSyncEngine(func(ctx context.Context, reason string) error {
+		_, err := syncAndBroadcast(ctx, reason)
+		return err
+	})
+	engine.onLockRetry = diagnostics.recordLockRetry
+	engine.Start(ctx)
 
 	if !cfg.DisableSyncLoop {
 		interval := cfg.SyncInterval
 		if interval <= 0 {
 			interval = 5 * time.Second
 		}
-		go runSyncLoop(ctx, interval, runSync, hub, dispatcher, relay)
+		go runSyncLoop(ctx, interval, func(ctx context.Context) (relaydb.SyncResult, error) {
+			engine.Trigger("periodic")
+			return relaydb.SyncResult{}, nil
+		}, hub)
+		go runDBMtimeSyncLoop(ctx, cfg.DBPath, 750*time.Millisecond, diagnostics, func(ctx context.Context) (relaydb.SyncResult, error) {
+			engine.Trigger("chatdb_mtime")
+			return relaydb.SyncResult{}, nil
+		})
 	}
 
 	apiStore := options.APIStore
@@ -175,14 +297,14 @@ func Run(options Options) error {
 	}
 
 	sendDeps := &httpapi.SendDependencies{
-		Pending: micasend.NewPendingSendManager(),
+		Pending: pendingSends,
 		Sender:  micasend.AppleScriptSender{},
 		SyncNow: func(ctx context.Context) error {
-			result, err := runSync(ctx)
-			if err == nil {
-				broadcastSyncResult(ctx, hub, result)
-				dispatchNotifications(ctx, dispatcher, relay, result)
-			}
+			// Immediate sync so the send handler can poll fresh chat.db state,
+			// plus a short coalesced burst so a delayed outgoing DB row (chat.db
+			// write lag) is picked up within a few seconds.
+			_, err := syncAndBroadcast(ctx, "send")
+			engine.TriggerBurst(context.WithoutCancel(ctx), "send_burst", 12, 1500*time.Millisecond)
 			return err
 		},
 		Events: hub,
@@ -205,11 +327,20 @@ func Run(options Options) error {
 		SyncState:    relay.GetSyncState,
 		Network:      netController,
 		Capabilities: capabilities,
+		SyncDiagnostics: func() store.ServerSyncDiagnostics {
+			return diagnostics.snapshot(pendingSends.PendingCount(), engine.PendingCount())
+		},
 	}
 
 	handlers := httpapi.NewHandlers(apiQueries, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
 	handlers.SetRuleService(relay)                   // v0.11.3 sync rules backed by relay.db
 	handlers.SetNotificationConfigurator(dispatcher) // v0.12 live FCM/Firebase config
+	handlers.SetSyncNow(func(ctx context.Context) (store.ServerSyncDiagnostics, error) {
+		if _, err := syncAndBroadcast(ctx, "client_request"); err != nil {
+			return store.ServerSyncDiagnostics{}, err
+		}
+		return diagnostics.snapshot(pendingSends.PendingCount(), engine.PendingCount()), nil
+	})
 
 	// Message inspector (debug): always backed by the live chat.db so it can
 	// surface iMessage fields the synced relay does not keep. Reuses the probed
@@ -249,13 +380,33 @@ func Run(options Options) error {
 	return nil
 }
 
+func sendCandidates(messages []store.MessageJSON) []micasend.ReconcileCandidate {
+	out := make([]micasend.ReconcileCandidate, 0, len(messages))
+	for _, message := range messages {
+		chatGUID := ""
+		if message.ChatGUID != nil {
+			chatGUID = *message.ChatGUID
+		}
+		text := ""
+		if message.Text != nil {
+			text = *message.Text
+		}
+		out = append(out, micasend.ReconcileCandidate{
+			GUID:        message.GUID,
+			ChatGUID:    chatGUID,
+			Text:        text,
+			DateCreated: message.DateCreated,
+			IsFromMe:    message.IsFromMe,
+		})
+	}
+	return out
+}
+
 func runSyncLoop(
 	ctx context.Context,
 	interval time.Duration,
 	syncNow func(context.Context) (relaydb.SyncResult, error),
 	hub *realtime.Hub,
-	dispatcher *notify.Dispatcher,
-	relay *relaydb.DB,
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -279,17 +430,90 @@ func runSyncLoop(
 				continue
 			}
 			logSyncResult(result, false)
-			broadcastSyncResult(ctx, hub, result)
-			dispatchNotifications(ctx, dispatcher, relay, result)
 		}
 	}
 }
 
-func broadcastSyncResult(ctx context.Context, hub *realtime.Hub, result relaydb.SyncResult) {
+func runDBMtimeSyncLoop(
+	ctx context.Context,
+	dbPath string,
+	interval time.Duration,
+	diagnostics *syncDiagnostics,
+	syncNow func(context.Context) (relaydb.SyncResult, error),
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var lastChatDB, lastWAL, lastSHM int64
+	chatDB, wal, shm := messageDBMtimes(dbPath)
+	if chatDB != nil {
+		lastChatDB = *chatDB
+	}
+	if wal != nil {
+		lastWAL = *wal
+	}
+	if shm != nil {
+		lastSHM = *shm
+	}
+	if diagnostics != nil {
+		diagnostics.recordDBMtime(chatDB, wal, shm)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			chatDB, wal, shm := messageDBMtimes(dbPath)
+			if diagnostics != nil {
+				diagnostics.recordDBMtime(chatDB, wal, shm)
+			}
+			chatChanged := chatDB != nil && *chatDB > lastChatDB
+			walChanged := wal != nil && *wal > lastWAL
+			shmChanged := shm != nil && *shm > lastSHM
+			if chatDB != nil {
+				lastChatDB = *chatDB
+			}
+			if wal != nil {
+				lastWAL = *wal
+			}
+			if shm != nil {
+				lastSHM = *shm
+			}
+			if !chatChanged && !walChanged && !shmChanged {
+				continue
+			}
+			if _, err := syncNow(ctx); err != nil {
+				log.Printf("chat.db mtime sync failed: %v", err)
+				if diagnostics != nil {
+					diagnostics.recordError(err)
+				}
+			}
+		}
+	}
+}
+
+func messageDBMtimes(dbPath string) (*int64, *int64, *int64) {
+	return fileMtimeMillis(dbPath), fileMtimeMillis(dbPath + "-wal"), fileMtimeMillis(dbPath + "-shm")
+}
+
+func fileMtimeMillis(path string) *int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	v := info.ModTime().UnixMilli()
+	return &v
+}
+
+func broadcastSyncResult(ctx context.Context, hub *realtime.Hub, result relaydb.SyncResult, diagnostics *syncDiagnostics) {
 	if hub == nil {
 		return
 	}
 	for _, message := range result.NewMessages {
+		if diagnostics != nil {
+			diagnostics.recordEvent("message:new", message.ChatGUID)
+		}
 		_ = hub.Broadcast(ctx, realtime.Event{
 			Type: "message:new",
 			Data: message,
@@ -297,6 +521,9 @@ func broadcastSyncResult(ctx context.Context, hub *realtime.Hub, result relaydb.
 	}
 	// v0.11.x update-pass events.
 	for _, update := range result.Updates {
+		if diagnostics != nil {
+			diagnostics.recordEvent("message:update", update.Message.ChatGUID)
+		}
 		_ = hub.Broadcast(ctx, realtime.Event{
 			Type: "message:update",
 			Data: map[string]any{
@@ -306,6 +533,9 @@ func broadcastSyncResult(ctx context.Context, hub *realtime.Hub, result relaydb.
 		})
 	}
 	for _, unsent := range result.Unsent {
+		if diagnostics != nil {
+			diagnostics.recordEvent("message:unsend", &unsent.ChatGUID)
+		}
 		_ = hub.Broadcast(ctx, realtime.Event{
 			Type: "message:unsend",
 			Data: map[string]any{
@@ -315,6 +545,23 @@ func broadcastSyncResult(ctx context.Context, hub *realtime.Hub, result relaydb.
 			},
 		})
 	}
+}
+
+func broadcastSendMatch(ctx context.Context, hub *realtime.Hub, tempGUID string, message store.MessageJSON, diagnostics *syncDiagnostics) {
+	if hub == nil {
+		return
+	}
+	if diagnostics != nil {
+		diagnostics.recordEvent("send:match", message.ChatGUID)
+	}
+	_ = hub.Broadcast(ctx, realtime.Event{
+		Type: "send:match",
+		Data: map[string]any{
+			"tempGuid": tempGUID,
+			"message":  message,
+			"late":     true,
+		},
+	})
 }
 
 func logSyncResult(result relaydb.SyncResult, force bool) {

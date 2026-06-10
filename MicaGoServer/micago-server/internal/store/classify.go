@@ -25,6 +25,33 @@ const (
 	candidateNoConten = "no_content"
 )
 
+const (
+	SemanticKindNormalText            = "normal_text"
+	SemanticKindAttributedBodyText    = "attributed_body_text"
+	SemanticKindAttachment            = "attachment"
+	SemanticKindMissingAttachmentRows = "missing_attachment_rows"
+	SemanticKindTapback               = "tapback"
+	SemanticKindReply                 = "reply"
+	SemanticKindServiceEvent          = "service_event"
+	SemanticKindEffect                = "effect"
+	SemanticKindEdited                = "edited"
+	SemanticKindRetracted             = "retracted"
+	SemanticKindSyncNoise             = "sync_noise"
+	SemanticKindUnknown               = "unknown"
+
+	RenderRecommendationBubble      = "bubble"
+	RenderRecommendationSystem      = "system"
+	RenderRecommendationMerge       = "merge"
+	RenderRecommendationDebugOnly   = "debug_only"
+	RenderRecommendationUnsupported = "unsupported"
+
+	UnsupportedReasonNone                  = ""
+	UnsupportedReasonControlText           = "control_text"
+	UnsupportedReasonNoContent             = "no_content"
+	UnsupportedReasonMissingAttachmentRows = "missing_attachment_rows"
+	UnsupportedReasonUnknownAttachment     = "unknown_attachment"
+)
+
 // IsControlLikeText reports whether text is a control/typedstream artifact that
 // must not be shown as a normal message — e.g. the "+!"/"+$" attributedBody
 // leak, or a string with no letters/digits at all. Conservative: any letter or
@@ -126,6 +153,118 @@ func ClassifyDebugMessage(m DebugMessageJSON) (kind string, candidates []string)
 // AnnotateDebugMessage fills Kind/Candidates in place.
 func AnnotateDebugMessage(m *DebugMessageJSON) {
 	m.Kind, m.Candidates = ClassifyDebugMessage(*m)
+}
+
+// FilterRenderableMessages returns only the messages a normal client should
+// render — i.e. excludes debug-only/noise rows. Messages must be annotated
+// (IsDebugOnly populated) first; reads already annotate on the way out.
+func FilterRenderableMessages(in []MessageJSON) []MessageJSON {
+	out := make([]MessageJSON, 0, len(in))
+	for _, m := range in {
+		if m.IsDebugOnly {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func AnnotateMessageJSON(m *MessageJSON) {
+	if m == nil {
+		return
+	}
+	m.SemanticKind, m.RenderRecommendation, m.IsDebugOnly, m.UnsupportedReason = ClassifyMessageJSON(*m)
+}
+
+// IsReactionForSyncRow reports whether a synced row is a tapback/reaction
+// (associated_message_type in the 2000–3006 range with an associated target).
+// Mirrors IMSG's reaction filter: reaction rows are real content the client
+// merges onto a target, but they must NOT drive chat-list preview/ordering, so
+// the chat-list aggregate excludes them (see relaydb.ListChats). Depends only on
+// SyncMessageRow fields, so it is safe to compute at sync time.
+func IsReactionForSyncRow(r SyncMessageRow) bool {
+	if r.AssociatedMessageType == nil {
+		return false
+	}
+	t := *r.AssociatedMessageType
+	if t < 2000 || t > 3006 {
+		return false
+	}
+	return r.AssociatedMessageGUID != nil && strings.TrimSpace(*r.AssociatedMessageGUID) != ""
+}
+
+// DebugOnlyForSyncRow reports whether a synced row is debug-only (sync noise).
+// This depends only on fields present on SyncMessageRow (text, cacheHasAttachments,
+// associated/item/thread/effect fields) — not the materialized attachment list —
+// so it is safe to compute at sync time. Used to persist is_debug_only.
+func DebugOnlyForSyncRow(r SyncMessageRow) bool {
+	m := MessageJSON{
+		Text:                  r.Text,
+		HasAttributedBody:     r.HasAttributedBody,
+		CacheHasAttachments:   r.CacheHasAttachments,
+		AssociatedMessageType: r.AssociatedMessageType,
+		AssociatedMessageGUID: r.AssociatedMessageGUID,
+		ThreadOriginatorGUID:  r.ThreadOriginatorGUID,
+		ItemType:              r.ItemType,
+		GroupActionType:       r.GroupActionType,
+		GroupTitle:            r.GroupTitle,
+		BalloonBundleID:       r.BalloonBundleID,
+		ExpressiveSendStyleID: r.ExpressiveSendStyleID,
+	}
+	_, _, isDebugOnly, _ := ClassifyMessageJSON(m)
+	return isDebugOnly
+}
+
+func ClassifyMessageJSON(m MessageJSON) (semanticKind, renderRecommendation string, isDebugOnly bool, unsupportedReason string) {
+	text := strings.TrimSpace(deref(m.Text))
+	hasText := text != "" && !IsControlLikeText(text)
+	hasControlText := text != "" && IsControlLikeText(text)
+	hasAttachments := len(m.Attachments) > 0
+
+	switch {
+	case m.IsRetracted || m.DateRetracted != nil:
+		return SemanticKindRetracted, RenderRecommendationSystem, false, UnsupportedReasonNone
+	case m.AssociatedMessageType != nil && *m.AssociatedMessageType >= 2000 && *m.AssociatedMessageType <= 3005 &&
+		m.AssociatedMessageGUID != nil && strings.TrimSpace(*m.AssociatedMessageGUID) != "":
+		return SemanticKindTapback, RenderRecommendationMerge, false, UnsupportedReasonNone
+	case m.ItemType != nil && *m.ItemType != 0:
+		return SemanticKindServiceEvent, RenderRecommendationSystem, false, UnsupportedReasonNone
+	case m.GroupActionType != nil && *m.GroupActionType != 0:
+		return SemanticKindServiceEvent, RenderRecommendationSystem, false, UnsupportedReasonNone
+	case m.GroupTitle != nil && strings.TrimSpace(*m.GroupTitle) != "":
+		return SemanticKindServiceEvent, RenderRecommendationSystem, false, UnsupportedReasonNone
+	case m.DateEdited != nil || m.IsEdited:
+		return SemanticKindEdited, RenderRecommendationBubble, false, UnsupportedReasonNone
+	case m.ThreadOriginatorGUID != nil && strings.TrimSpace(*m.ThreadOriginatorGUID) != "":
+		return SemanticKindReply, RenderRecommendationBubble, false, UnsupportedReasonNone
+	case m.ExpressiveSendStyleID != nil && strings.TrimSpace(*m.ExpressiveSendStyleID) != "":
+		return SemanticKindEffect, RenderRecommendationBubble, false, UnsupportedReasonNone
+	case hasAttachments:
+		if anyJSONAttachmentKind(m, AttachmentKindUnknown) {
+			return SemanticKindAttachment, RenderRecommendationBubble, false, UnsupportedReasonUnknownAttachment
+		}
+		return SemanticKindAttachment, RenderRecommendationBubble, false, UnsupportedReasonNone
+	case m.CacheHasAttachments:
+		return SemanticKindMissingAttachmentRows, RenderRecommendationSystem, false, UnsupportedReasonMissingAttachmentRows
+	case hasText:
+		if m.HasAttributedBody {
+			return SemanticKindAttributedBodyText, RenderRecommendationBubble, false, UnsupportedReasonNone
+		}
+		return SemanticKindNormalText, RenderRecommendationBubble, false, UnsupportedReasonNone
+	case hasControlText:
+		return SemanticKindSyncNoise, RenderRecommendationDebugOnly, true, UnsupportedReasonControlText
+	default:
+		return SemanticKindSyncNoise, RenderRecommendationDebugOnly, true, UnsupportedReasonNoContent
+	}
+}
+
+func anyJSONAttachmentKind(m MessageJSON, kind string) bool {
+	for _, a := range m.Attachments {
+		if a.AttachmentKind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // DebugFilter is the post-fetch, in-Go refinement of debug rows.

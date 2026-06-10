@@ -24,7 +24,8 @@ class ApiException implements Exception {
   });
 
   @override
-  String toString() => 'ApiException($code'
+  String toString() =>
+      'ApiException($code'
       '${statusCode != null ? ' [$statusCode]' : ''}): $message';
 
   /// A plain-language explanation suitable for the UI. Never contains the token.
@@ -86,9 +87,9 @@ class ApiClient {
   }
 
   Map<String, String> get _authHeaders => {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-      };
+    'Authorization': 'Bearer $token',
+    'Accept': 'application/json',
+  };
 
   /// The exact URLs the diagnostics view probes (no token in the URL).
   String get healthUrl => _uri('/api/health').toString();
@@ -96,9 +97,14 @@ class ApiClient {
 
   /// `GET /api/health` — no auth. Returns true when the server reports `ok`.
   Future<bool> health() async {
-    final res = await _send(() => _http
-        .get(_uri('/api/health'), headers: const {'Accept': 'application/json'})
-        .timeout(timeout));
+    final res = await _send(
+      () => _http
+          .get(
+            _uri('/api/health'),
+            headers: const {'Accept': 'application/json'},
+          )
+          .timeout(timeout),
+    );
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
@@ -109,9 +115,11 @@ class ApiClient {
   /// `POST /api/auth/check` — verifies the bearer token. Throws [ApiException]
   /// (`code: unauthorized`) on 401, or another code on failure.
   Future<void> authCheck() async {
-    final res = await _send(() => _http
-        .post(_uri('/api/auth/check'), headers: _authHeaders)
-        .timeout(timeout));
+    final res = await _send(
+      () => _http
+          .post(_uri('/api/auth/check'), headers: _authHeaders)
+          .timeout(timeout),
+    );
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
@@ -119,13 +127,29 @@ class ApiClient {
 
   /// `GET /api/server/urls` — aggregated connection endpoints (v0.11).
   Future<ServerUrls> getServerUrls() async {
-    final res = await _send(() => _http
-        .get(_uri('/api/server/urls'), headers: _authHeaders)
-        .timeout(timeout));
+    final res = await _send(
+      () => _http
+          .get(_uri('/api/server/urls'), headers: _authHeaders)
+          .timeout(timeout),
+    );
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
     return ServerUrls.fromJson(_decodeObject(res));
+  }
+
+  /// `POST /api/sync/now` — asks the server to run a lightweight foreground
+  /// catch-up sync. The response is intentionally ignored by most callers; WS
+  /// events and subsequent list/thread fetches carry the user-facing data.
+  Future<void> syncNow() async {
+    final res = await _send(
+      () => _http
+          .post(_uri('/api/sync/now'), headers: _authHeaders)
+          .timeout(const Duration(seconds: 20)),
+    );
+    if (res.statusCode != 200) {
+      throw _errorFrom(res);
+    }
   }
 
   /// `GET /api/chats` — the chat list. Returns the `data` array decoded into
@@ -135,14 +159,18 @@ class ApiClient {
     String? service,
     bool? withArchived,
     int? limit,
+    bool debug = false,
   }) async {
     final query = <String, String>{};
     if (service != null) query['service'] = service;
     if (withArchived != null) query['withArchived'] = '$withArchived';
     if (limit != null) query['limit'] = '$limit';
-    final res = await _send(() => _http
-        .get(_uri('/api/chats', query), headers: _authHeaders)
-        .timeout(timeout));
+    if (debug) query['debug'] = 'true';
+    final res = await _send(
+      () => _http
+          .get(_uri('/api/chats', query), headers: _authHeaders)
+          .timeout(timeout),
+    );
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
@@ -168,16 +196,28 @@ class ApiClient {
     int offset = 0,
     bool includeEmpty = false,
   }) async {
-    final res = await _send(() => _http
-        .get(
-          _uri('/api/chats/${Uri.encodeComponent(chatGuid)}/messages', {
-            'limit': '$limit',
-            'offset': '$offset',
-            'includeEmpty': '$includeEmpty',
-          }),
-          headers: _authHeaders,
-        )
-        .timeout(timeout));
+    final res = await _send(
+      () => _http
+          .get(
+            _uri('/api/chats/${Uri.encodeComponent(chatGuid)}/messages', {
+              'limit': '$limit',
+              'offset': '$offset',
+              'includeEmpty': '$includeEmpty',
+            }),
+            headers: _authHeaders,
+          )
+          .timeout(timeout),
+    );
+    if (res.statusCode == 202) {
+      final body = _decodeObject(res);
+      throw ApiException(
+        code: 'send_confirmation_timeout',
+        message:
+            (body['message'] as String?) ??
+            'Message sent, but server confirmation is still pending.',
+        statusCode: res.statusCode,
+      );
+    }
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
@@ -202,14 +242,16 @@ class ApiClient {
     required String tempGuid,
     required String message,
   }) async {
-    final res = await _send(() => _http
-        .post(
-          _uri('/api/chats/${Uri.encodeComponent(chatGuid)}/send'),
-          headers: {..._authHeaders, 'Content-Type': 'application/json'},
-          body: jsonEncode({'tempGuid': tempGuid, 'message': message}),
-        )
-        // Send confirmation can take up to ~15s server-side.
-        .timeout(const Duration(seconds: 20)));
+    final res = await _send(
+      () => _http
+          .post(
+            _uri('/api/chats/${Uri.encodeComponent(chatGuid)}/send'),
+            headers: {..._authHeaders, 'Content-Type': 'application/json'},
+            body: jsonEncode({'tempGuid': tempGuid, 'message': message}),
+          )
+          // Send confirmation can take up to ~15s server-side.
+          .timeout(const Duration(seconds: 20)),
+    );
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
@@ -218,12 +260,33 @@ class ApiClient {
 
   /// `GET /api/attachments/{guid}` — raw attachment bytes (authenticated).
   Future<Uint8List> getAttachmentBytes(String attachmentGuid) async {
-    final res = await _send(() => _http
-        .get(
-          _uri('/api/attachments/${Uri.encodeComponent(attachmentGuid)}'),
-          headers: {'Authorization': 'Bearer $token'},
-        )
-        .timeout(const Duration(seconds: 30)));
+    final res = await _send(
+      () => _http
+          .get(
+            _uri('/api/attachments/${Uri.encodeComponent(attachmentGuid)}'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 30)),
+    );
+    if (res.statusCode != 200) {
+      throw _errorFrom(res);
+    }
+    return res.bodyBytes;
+  }
+
+  Future<Uint8List> getAttachmentPreviewBytes(
+    AttachmentModel attachment,
+  ) async {
+    final preview = attachment.previewUrl;
+    if (preview == null || preview.isEmpty) {
+      return getAttachmentBytes(attachment.guid);
+    }
+    final path = preview.startsWith('/') ? preview : '/$preview';
+    final res = await _send(
+      () => _http
+          .get(_uri(path), headers: {'Authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 30)),
+    );
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
@@ -233,12 +296,15 @@ class ApiClient {
   /// Absolute URL for an attachment, for media players that stream by URL.
   /// Pair it with [mediaAuthHeaders] so the token travels in the header, not
   /// the URL.
-  String attachmentUrl(String attachmentGuid) =>
-      _uri('/api/attachments/${Uri.encodeComponent(attachmentGuid)}').toString();
+  String attachmentUrl(String attachmentGuid) => _uri(
+    '/api/attachments/${Uri.encodeComponent(attachmentGuid)}',
+  ).toString();
 
   /// Authorization headers for streaming media (e.g. just_audio). Kept out of
   /// the URL so the token isn't logged by proxies.
-  Map<String, String> get mediaAuthHeaders => {'Authorization': 'Bearer $token'};
+  Map<String, String> get mediaAuthHeaders => {
+    'Authorization': 'Bearer $token',
+  };
 
   void close() => _http.close();
 
@@ -290,6 +356,10 @@ class ApiClient {
     } catch (_) {
       // Non-JSON body; keep the generic HTTP message.
     }
-    return ApiException(code: code, message: message, statusCode: res.statusCode);
+    return ApiException(
+      code: code,
+      message: message,
+      statusCode: res.statusCode,
+    );
   }
 }

@@ -6,9 +6,10 @@ import "time"
 type SendStatus string
 
 const (
-	StatusPending   SendStatus = "pending"
-	StatusConfirmed SendStatus = "confirmed"
-	StatusFailed    SendStatus = "failed"
+	StatusPending         SendStatus = "pending"
+	StatusSentUnconfirmed SendStatus = "sent_unconfirmed"
+	StatusConfirmed       SendStatus = "confirmed"
+	StatusFailed          SendStatus = "failed"
 )
 
 // PendingSend tracks one in-flight plain-text send while we wait for the
@@ -31,4 +32,5 @@ type PendingSend struct {
 	MatchedGUID  string
 	MatchedROWID int64
 	FailReason   string
+	RecoverUntil time.Time
 }

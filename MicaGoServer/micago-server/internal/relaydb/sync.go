@@ -17,7 +17,34 @@ type syncSource interface {
 	ListSyncAttachmentsForMessages(ctx context.Context, messageGUIDs []string) ([]store.SyncAttachmentRow, error)
 }
 
-func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int) (SyncResult, error) {
+// byDateSource is an optional capability: a sync source that can scan a bounded
+// date window (C11). The live chat.db source implements it; lightweight test
+// fakes need not.
+type byDateSource interface {
+	ListSyncRecentMessagesByDate(ctx context.Context, afterUnixMilli int64, limit int) ([]store.SyncMessageRow, error)
+}
+
+// unionByGUID appends rows from b not already present (by GUID) in a.
+func unionByGUID(a, b []store.SyncMessageRow) []store.SyncMessageRow {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]struct{}, len(a))
+	for _, m := range a {
+		seen[m.GUID] = struct{}{}
+	}
+	out := a
+	for _, m := range b {
+		if _, ok := seen[m.GUID]; ok {
+			continue
+		}
+		seen[m.GUID] = struct{}{}
+		out = append(out, m)
+	}
+	return out
+}
+
+func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int, lookback time.Duration) (SyncResult, error) {
 	lastRowIDValue, hasLastRowID, err := relay.GetSyncState("last_message_rowid")
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("get last_message_rowid: %w", err)
@@ -48,6 +75,19 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int) (Syn
 		messages, err = source.ListSyncRecentMessagesSince(ctx, previousLastRowID, limit)
 		if err != nil {
 			return SyncResult{}, fmt.Errorf("list incremental sync messages: %w", err)
+		}
+		// C11: also scan a bounded date window (BlueBubbles-style) so rows the
+		// ROWID watermark skipped under WAL/rowid races are recovered. Idempotent
+		// — the relay upsert dedupes by guid and only truly-new rows broadcast.
+		if lookback > 0 {
+			if bd, ok := source.(byDateSource); ok {
+				afterMs := time.Now().Add(-lookback).UnixMilli()
+				dated, derr := bd.ListSyncRecentMessagesByDate(ctx, afterMs, limit)
+				if derr != nil {
+					return SyncResult{}, fmt.Errorf("list date-lookback messages: %w", derr)
+				}
+				messages = unionByGUID(messages, dated)
+			}
 		}
 	}
 
@@ -217,9 +257,10 @@ func upsertMessagesTx(tx *sql.Tx, messages []store.SyncMessageRow, createdAt int
 INSERT INTO messages (
 	guid, chat_guid, source_rowid, text, subject, service, date_created, date_read, date_delivered,
 	is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments, created_at,
-	associated_message_type, associated_message_guid, thread_originator_guid, item_type,
-	group_action_type, group_title, balloon_bundle_id, expressive_send_style_id, payload_data_present
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	has_attributed_body, associated_message_type, associated_message_guid, thread_originator_guid, item_type,
+	group_action_type, group_title, balloon_bundle_id, expressive_send_style_id, payload_data_present,
+	is_debug_only, is_reaction
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(guid) DO UPDATE SET
 	chat_guid = excluded.chat_guid,
 	source_rowid = excluded.source_rowid,
@@ -235,6 +276,7 @@ ON CONFLICT(guid) DO UPDATE SET
 	handle_id = excluded.handle_id,
 	handle_service = excluded.handle_service,
 	cache_has_attachments = excluded.cache_has_attachments,
+	has_attributed_body = excluded.has_attributed_body,
 	associated_message_type = excluded.associated_message_type,
 	associated_message_guid = excluded.associated_message_guid,
 	thread_originator_guid = excluded.thread_originator_guid,
@@ -243,7 +285,9 @@ ON CONFLICT(guid) DO UPDATE SET
 	group_title = excluded.group_title,
 	balloon_bundle_id = excluded.balloon_bundle_id,
 	expressive_send_style_id = excluded.expressive_send_style_id,
-	payload_data_present = excluded.payload_data_present;
+	payload_data_present = excluded.payload_data_present,
+	is_debug_only = excluded.is_debug_only,
+	is_reaction = excluded.is_reaction;
 `)
 	if err != nil {
 		return nil, err
@@ -275,6 +319,7 @@ ON CONFLICT(guid) DO UPDATE SET
 			message.HandleService,
 			boolToInt(message.CacheHasAttachments),
 			createdAt,
+			boolToInt(message.HasAttributedBody),
 			message.AssociatedMessageType,
 			message.AssociatedMessageGUID,
 			message.ThreadOriginatorGUID,
@@ -284,6 +329,8 @@ ON CONFLICT(guid) DO UPDATE SET
 			message.BalloonBundleID,
 			message.ExpressiveSendStyleID,
 			boolToInt(message.PayloadDataPresent),
+			boolToInt(store.DebugOnlyForSyncRow(message)),
+			boolToInt(store.IsReactionForSyncRow(message)),
 		); err != nil {
 			return nil, err
 		}

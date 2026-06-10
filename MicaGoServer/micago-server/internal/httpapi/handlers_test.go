@@ -25,7 +25,9 @@ type stubQueries struct {
 	recentIncludeEmpty bool
 	chatService        string
 	chatWithArchived   bool
+	chatIncludeDebug   bool
 	chatMessagesEmpty  bool
+	chatMessages       []store.MessageJSON
 	match              *store.MessageJSON
 }
 
@@ -35,9 +37,10 @@ func (s *stubQueries) ListRecentMessages(_ context.Context, _ int, _ int, servic
 	return []store.MessageJSON{}, nil
 }
 
-func (s *stubQueries) ListChats(_ context.Context, _ int, _ int, withArchived bool, service string) ([]store.ChatJSON, error) {
+func (s *stubQueries) ListChats(_ context.Context, _ int, _ int, withArchived bool, service string, includeDebug bool) ([]store.ChatJSON, error) {
 	s.chatService = service
 	s.chatWithArchived = withArchived
+	s.chatIncludeDebug = includeDebug
 	return []store.ChatJSON{}, nil
 }
 
@@ -52,6 +55,9 @@ func (s *stubQueries) GetChatInfo(_ context.Context, guid string) (*store.ChatIn
 
 func (s *stubQueries) ListChatMessages(_ context.Context, _ string, _ int, _ int, includeEmpty bool) ([]store.MessageJSON, error) {
 	s.chatMessagesEmpty = includeEmpty
+	if s.chatMessages != nil {
+		return s.chatMessages, nil
+	}
 	return []store.MessageJSON{}, nil
 }
 
@@ -173,6 +179,56 @@ func TestGetChatsUsesRequestedServiceAndArchivedFlag(t *testing.T) {
 	}
 }
 
+func TestGetChatsPassesDebugFlag(t *testing.T) {
+	queries := &stubQueries{}
+	handlers := newTestHandlers(queries)
+	req := httptest.NewRequest(http.MethodGet, "/api/chats?debug=true", nil)
+	rec := httptest.NewRecorder()
+	handlers.GetChats(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !queries.chatIncludeDebug {
+		t.Fatal("expected includeDebug=true to be forwarded")
+	}
+}
+
+func TestGetChatMessagesFiltersDebugOnlyByDefault(t *testing.T) {
+	debugRow := store.MessageJSON{GUID: "noise", IsDebugOnly: true}
+	textRow := store.MessageJSON{GUID: "real", IsDebugOnly: false}
+
+	// Default: renderable timeline only.
+	queries := &stubQueries{chatMessages: []store.MessageJSON{textRow, debugRow}}
+	handlers := newTestHandlers(queries)
+	req := httptest.NewRequest(http.MethodGet, "/api/chats/c1/messages", nil)
+	rec := httptest.NewRecorder()
+	handlers.GetChatMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp store.MessageListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].GUID != "real" {
+		t.Fatalf("default should drop debug-only rows, got %d rows", len(resp.Data))
+	}
+
+	// debug=true: include the raw timeline.
+	queries2 := &stubQueries{chatMessages: []store.MessageJSON{textRow, debugRow}}
+	handlers2 := newTestHandlers(queries2)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/chats/c1/messages?debug=true", nil)
+	rec2 := httptest.NewRecorder()
+	handlers2.GetChatMessages(rec2, req2)
+	var resp2 store.MessageListResponse
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp2.Data) != 2 {
+		t.Fatalf("debug=true should include all rows, got %d", len(resp2.Data))
+	}
+}
+
 func TestGetRecentMessagesRejectsInvalidService(t *testing.T) {
 	queries := &stubQueries{}
 	handlers := newTestHandlers(queries)
@@ -210,12 +266,13 @@ func TestGetChatMessagesIncludeEmptyParsing(t *testing.T) {
 
 type duplicatePendingManager struct{}
 
-func (duplicatePendingManager) Add(micasend.PendingSend) error       { return micasend.ErrDuplicateTempGUID }
-func (duplicatePendingManager) Remove(string)                        {}
-func (duplicatePendingManager) Has(string) bool                      { return true }
-func (duplicatePendingManager) Resolve(string, string, int64) bool   { return true }
-func (duplicatePendingManager) Reject(string, string)                {}
-func (duplicatePendingManager) ClaimedSnapshot() map[string]struct{} { return nil }
+func (duplicatePendingManager) Add(micasend.PendingSend) error                    { return micasend.ErrDuplicateTempGUID }
+func (duplicatePendingManager) Remove(string)                                     {}
+func (duplicatePendingManager) Has(string) bool                                   { return true }
+func (duplicatePendingManager) Resolve(string, string, int64) bool                { return true }
+func (duplicatePendingManager) Reject(string, string)                             {}
+func (duplicatePendingManager) MarkSentUnconfirmed(string, string, time.Duration) {}
+func (duplicatePendingManager) ClaimedSnapshot() map[string]struct{}              { return nil }
 
 type noopSender struct{}
 
@@ -279,6 +336,13 @@ func (m *fakePendingManager) Resolve(tempGUID, matchedGUID string, _ int64) bool
 }
 
 func (m *fakePendingManager) Reject(tempGUID, reason string) {
+	if m.rejected == nil {
+		m.rejected = map[string]string{}
+	}
+	m.rejected[tempGUID] = reason
+}
+
+func (m *fakePendingManager) MarkSentUnconfirmed(tempGUID, reason string, _ time.Duration) {
 	if m.rejected == nil {
 		m.rejected = map[string]string{}
 	}

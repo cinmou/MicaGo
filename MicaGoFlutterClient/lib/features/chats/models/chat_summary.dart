@@ -22,6 +22,11 @@ class ChatSummary {
   final bool isPinned;
   final bool isMuted;
 
+  // --- C7 renderable-timeline summary (server-computed) ---
+  final bool hasRenderableMessages;
+  final bool unsupportedOnly;
+  final String hiddenReason; // "" | "debug_only" | "empty"
+
   const ChatSummary({
     required this.guid,
     this.chatIdentifier,
@@ -35,7 +40,14 @@ class ChatSummary {
     this.isGroupRaw,
     this.isPinned = false,
     this.isMuted = false,
+    this.hasRenderableMessages = true,
+    this.unsupportedOnly = false,
+    this.hiddenReason = '',
   });
+
+  /// True when this chat has no normal content (only debug/noise or empty) and
+  /// should be hidden from the default list.
+  bool get isNoiseOnly => !hasRenderableMessages;
 
   /// Best display title: group/display name, else the handle/identifier, else
   /// the opaque GUID as a last resort.
@@ -62,7 +74,10 @@ class ChatSummary {
     if (source.isEmpty) return '#';
     // Phone numbers / handles: use a generic glyph rather than digits.
     if (RegExp(r'^[+\d][\d\s()\-]*$').hasMatch(source)) return '#';
-    final words = source.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final words = source
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
     if (words.isEmpty) return '#';
     if (words.length == 1) return _firstLetter(words.first);
     return _firstLetter(words[0]) + _firstLetter(words[1]);
@@ -83,17 +98,45 @@ class ChatSummary {
       serviceName: json['serviceName'] as String?,
       displayName: json['displayName'] as String?,
       isArchived: (json['isArchived'] as bool?) ?? false,
-      lastMessagePreview: json['lastMessagePreview'] as String? ??
+      // Prefer the C7 server-computed renderable preview/timestamp (real data).
+      lastMessagePreview:
+          json['latestRenderablePreview'] as String? ??
+          json['lastMessagePreview'] as String? ??
           json['lastMessage'] as String?,
-      lastMessageAt: asInt(json['lastMessageAt']) ?? asInt(json['lastMessageDate']),
+      lastMessageAt:
+          asInt(json['latestRenderableAt']) ??
+          asInt(json['lastMessageAt']) ??
+          asInt(json['lastMessageDate']),
       unreadCount: asInt(json['unreadCount']),
-      participants: (json['participants'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
+      participants:
+          (json['participants'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       isGroupRaw: json['isGroup'] as bool?,
       isPinned: (json['isPinned'] as bool?) ?? false,
       isMuted: (json['isMuted'] as bool?) ?? false,
+      hasRenderableMessages: (json['hasRenderableMessages'] as bool?) ?? true,
+      unsupportedOnly: (json['unsupportedOnly'] as bool?) ?? false,
+      hiddenReason: (json['hiddenReason'] as String?) ?? '',
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'guid': guid,
+    'chatIdentifier': chatIdentifier,
+    'serviceName': serviceName,
+    'displayName': displayName,
+    'isArchived': isArchived,
+    'latestRenderablePreview': lastMessagePreview,
+    'latestRenderableAt': lastMessageAt,
+    'unreadCount': unreadCount,
+    'participants': participants,
+    'isGroup': isGroupRaw,
+    'isPinned': isPinned,
+    'isMuted': isMuted,
+    'hasRenderableMessages': hasRenderableMessages,
+    'unsupportedOnly': unsupportedOnly,
+    'hiddenReason': hiddenReason,
+  };
 }

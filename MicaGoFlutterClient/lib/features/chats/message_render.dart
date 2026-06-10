@@ -56,9 +56,7 @@ bool isControlLikeText(String text) {
   final t = text.replaceAll(_objectReplacement, '').trim();
   if (t.isEmpty) return true;
   // Any letter, digit, or CJK ideograph means it's real content.
-  final hasAlnum = RegExp(
-    r'[A-Za-z0-9À-ɏЀ-ӿ぀-ヿ一-鿿가-힯]',
-  ).hasMatch(t);
+  final hasAlnum = RegExp(r'[A-Za-z0-9À-ɏЀ-ӿ぀-ヿ一-鿿가-힯]').hasMatch(t);
   if (hasAlnum) return false;
   // Real protocol artifacts ("+!", "+$") are pure ASCII punctuation. Any
   // non-ASCII rune (emoji, symbols, other scripts) is genuine content — never
@@ -76,11 +74,16 @@ String? displayText(MessageModel m) {
 }
 
 MessageRenderableKind renderableKindFor(MessageModel m) {
+  if (m.isDebugOnly || m.renderRecommendation == 'debug_only') {
+    return MessageRenderableKind.unknown;
+  }
   if (m.isRetracted || m.dateRetracted != null) {
     return MessageRenderableKind.retracted;
   }
   if (isReaction(m)) return MessageRenderableKind.reaction;
-  if (m.itemType > 0 || m.groupActionType > 0 || (m.groupTitle?.isNotEmpty ?? false)) {
+  if (m.itemType > 0 ||
+      m.groupActionType > 0 ||
+      (m.groupTitle?.isNotEmpty ?? false)) {
     return MessageRenderableKind.service;
   }
   final hasText = displayText(m) != null;
@@ -94,7 +97,16 @@ MessageRenderableKind renderableKindFor(MessageModel m) {
 // chat.db integer code: 1000 sticker; 2000-2005 add; 3000-3005 remove.
 // ---------------------------------------------------------------------------
 
-enum TapbackKind { love, like, dislike, laugh, emphasize, question, sticker, unknown }
+enum TapbackKind {
+  love,
+  like,
+  dislike,
+  laugh,
+  emphasize,
+  question,
+  sticker,
+  unknown,
+}
 
 class Tapback {
   final TapbackKind kind;
@@ -194,7 +206,11 @@ class ReplyPreview {
   final String sender; // resolved sender label of the quoted message
   final String? text; // sanitized quoted text (null if media/unknown)
   final bool targetLoaded;
-  const ReplyPreview({required this.sender, this.text, required this.targetLoaded});
+  const ReplyPreview({
+    required this.sender,
+    this.text,
+    required this.targetLoaded,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -228,12 +244,18 @@ String? effectLabel(String? expressiveSendStyleId) {
 String retractedLabel(MessageModel m) =>
     m.isFromMe ? 'You unsent a message' : 'This message was unsent';
 
+String? editedMarker(MessageModel m) =>
+    (m.isEdited || m.dateEdited != null) && !m.isRetracted ? 'Edited' : null;
+
 MessageDeliveryState deliveryStateFor(MessageModel m) {
   if (!m.isFromMe) return MessageDeliveryState.incoming;
   if (m.localState == LocalSendState.failed || m.errorCode > 0) {
     return MessageDeliveryState.failed;
   }
-  if (m.localState == LocalSendState.pending) return MessageDeliveryState.sending;
+  if (m.localState == LocalSendState.pending ||
+      m.localState == LocalSendState.sending) {
+    return MessageDeliveryState.sending;
+  }
   if (m.isRead || m.dateRead != null) return MessageDeliveryState.read;
   if (m.isDelivered || m.dateDelivered != null) {
     return MessageDeliveryState.delivered;
@@ -312,16 +334,24 @@ MessageClassification classifyMessage(MessageModel m) {
   }
   // Unknown: figure out why.
   final rawText = m.text;
-  if (rawText != null && rawText.trim().isNotEmpty && isControlLikeText(rawText)) {
+  if (rawText != null &&
+      rawText.trim().isNotEmpty &&
+      isControlLikeText(rawText)) {
     return const MessageClassification(
-        MessageRenderableKind.unknown, UnsupportedReason.controlText);
+      MessageRenderableKind.unknown,
+      UnsupportedReason.controlText,
+    );
   }
   if (m.cacheHasAttachments && m.attachments.isEmpty) {
     return const MessageClassification(
-        MessageRenderableKind.unknown, UnsupportedReason.missingServerFields);
+      MessageRenderableKind.unknown,
+      UnsupportedReason.missingServerFields,
+    );
   }
   return const MessageClassification(
-      MessageRenderableKind.unknown, UnsupportedReason.noContent);
+    MessageRenderableKind.unknown,
+    UnsupportedReason.noContent,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -363,8 +393,15 @@ bool _isSensitiveKey(String key) {
 }
 
 String _redactString(String s) {
-  var out = s.replaceAll(RegExp(r'[Bb]earer\s+[A-Za-z0-9._\-]+'), 'Bearer $_redacted');
-  out = out.replaceAll(RegExp(r'([?&]token=)[^&\s]+'), r'$1' '$_redacted');
+  var out = s.replaceAll(
+    RegExp(r'[Bb]earer\s+[A-Za-z0-9._\-]+'),
+    'Bearer $_redacted',
+  );
+  out = out.replaceAll(
+    RegExp(r'([?&]token=)[^&\s]+'),
+    r'$1'
+    '$_redacted',
+  );
   return out;
 }
 
@@ -379,10 +416,14 @@ Map<String, dynamic> messageDebugMap(MessageModel m) {
     'handleId': m.handleId,
     'service': m.service ?? m.handleService,
     'classification': cls.kind.name,
-    'unsupportedReason': unsupportedReasonLabel(cls.reason),
+    'classificationReason': unsupportedReasonLabel(cls.reason),
     'textLength': m.text?.length ?? 0,
     'textPreview': clip(sanitizeMessageText(m.text)),
     'hasAttachments': m.hasAttachments,
+    'semanticKind': m.semanticKind,
+    'renderRecommendation': m.renderRecommendation,
+    'isDebugOnly': m.isDebugOnly,
+    'unsupportedReason': m.unsupportedReason,
     'attachmentCount': m.attachments.length,
     'attachments': [
       for (final a in m.attachments)
@@ -393,10 +434,13 @@ Map<String, dynamic> messageDebugMap(MessageModel m) {
           'mimeType': a.mimeType,
           'uti': a.uti,
           'attachmentKind': a.attachmentKind,
+          'displayKind': a.displayKind,
+          'isPreviewableImage': a.isPreviewableImage,
+          'needsPreviewConversion': a.needsPreviewConversion,
           'isVoiceMessage': a.isVoiceMessage,
           'totalBytes': a.totalBytes,
           'hasDownloadUrl': a.downloadUrl.isNotEmpty,
-        }
+        },
     ],
     'dateCreated': m.dateCreated,
     'dateDelivered': m.dateDelivered,
@@ -449,13 +493,27 @@ class ThreadDiagnostics {
   });
 
   static const empty = ThreadDiagnostics(
-    total: 0, text: 0, image: 0, audio: 0, file: 0, service: 0,
-    reaction: 0, unsupported: 0, reasons: {}, lastUnsupported: null,
+    total: 0,
+    text: 0,
+    image: 0,
+    audio: 0,
+    file: 0,
+    service: 0,
+    reaction: 0,
+    unsupported: 0,
+    reasons: {},
+    lastUnsupported: null,
   );
 }
 
 ThreadDiagnostics computeThreadDiagnostics(List<MessageModel> messages) {
-  var text = 0, image = 0, audio = 0, file = 0, service = 0, reaction = 0, unsupported = 0;
+  var text = 0,
+      image = 0,
+      audio = 0,
+      file = 0,
+      service = 0,
+      reaction = 0,
+      unsupported = 0;
   final reasons = <UnsupportedReason, int>{};
   MessageModel? lastUnsupported;
   for (final m in messages) {
@@ -468,7 +526,7 @@ ThreadDiagnostics computeThreadDiagnostics(List<MessageModel> messages) {
         final a = m.attachments.isNotEmpty ? m.attachments.first : null;
         if (a == null) {
           file++;
-        } else if (a.isImage) {
+        } else if (a.canRenderInlineImage) {
           image++;
         } else if (a.isAudio) {
           audio++;
@@ -512,7 +570,9 @@ String threadDiagnosticsReport(ThreadDiagnostics d) {
     ..writeln('image: ${d.image}  audio: ${d.audio}  file: ${d.file}')
     ..writeln('service: ${d.service}  reaction: ${d.reaction}')
     ..writeln('unsupported: ${d.unsupported}');
-  d.reasons.forEach((r, n) => buf.writeln('  - ${unsupportedReasonLabel(r)}: $n'));
+  d.reasons.forEach(
+    (r, n) => buf.writeln('  - ${unsupportedReasonLabel(r)}: $n'),
+  );
   if (d.lastUnsupported != null) {
     buf
       ..writeln('last unsupported:')
