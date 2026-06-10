@@ -9,14 +9,28 @@ import '../../features/chats/models/message_model.dart';
 class LocalCacheStore {
   Database? _db;
 
+  // Bump on any schema OR pipeline-semantics change. C12 (v2): the server now
+  // ships a single canonical renderable timeline (debug-only/noise rows are
+  // filtered server-side and never broadcast). A v1 cache may still hold noise
+  // rows persisted under the old pipeline, so the upgrade is destructive: drop
+  // and recreate. The app is unreleased, so discarding the local cache is safe —
+  // it is repopulated from the server on next sync.
+  static const int _schemaVersion = 2;
+
   Future<void> open() async {
     if (_db != null) return;
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'micago_client_cache.db'),
-      version: 1,
-      onCreate: (db, _) async {
-        await db.execute('''
+      version: _schemaVersion,
+      onCreate: (db, _) => _createSchema(db),
+      onUpgrade: (db, _, _) => _rebuildSchema(db),
+      onDowngrade: (db, _, _) => _rebuildSchema(db),
+    );
+  }
+
+  Future<void> _createSchema(Database db) async {
+    await db.execute('''
 CREATE TABLE chats (
   guid TEXT PRIMARY KEY,
   json TEXT NOT NULL,
@@ -26,7 +40,7 @@ CREATE TABLE chats (
   updated_at INTEGER NOT NULL
 );
 ''');
-        await db.execute('''
+    await db.execute('''
 CREATE TABLE messages (
   key TEXT PRIMARY KEY,
   guid TEXT,
@@ -38,20 +52,27 @@ CREATE TABLE messages (
   updated_at INTEGER NOT NULL
 );
 ''');
-        await db.execute(
-          'CREATE INDEX messages_chat_date ON messages(chat_guid, date_created);',
-        );
-        await db.execute('CREATE INDEX messages_guid ON messages(guid);');
-        await db.execute('CREATE INDEX messages_temp ON messages(temp_id);');
-        await db.execute('''
+    await db.execute(
+      'CREATE INDEX messages_chat_date ON messages(chat_guid, date_created);',
+    );
+    await db.execute('CREATE INDEX messages_guid ON messages(guid);');
+    await db.execute('CREATE INDEX messages_temp ON messages(temp_id);');
+    await db.execute('''
 CREATE TABLE metadata (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
 ''');
-      },
-    );
+  }
+
+  // Destructive rebuild: discard any rows persisted under an older pipeline so
+  // pre-C12 noise rows cannot survive, then recreate the current schema.
+  Future<void> _rebuildSchema(Database db) async {
+    await db.execute('DROP TABLE IF EXISTS messages;');
+    await db.execute('DROP TABLE IF EXISTS chats;');
+    await db.execute('DROP TABLE IF EXISTS metadata;');
+    await _createSchema(db);
   }
 
   Future<void> close() async {
@@ -248,6 +269,12 @@ CREATE TABLE metadata (
   ) {
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final message in messages) {
+      // The local cache is the renderable timeline only. The server already
+      // filters debug-only/noise rows from the thread API and the realtime feed,
+      // so this is defense-in-depth: a noise row can never enter the normal
+      // thread even if one slips through. The raw timeline lives behind the
+      // server's Message Inspector API, not in this cache.
+      if (message.isDebugOnly) continue;
       final key = message.guid.isNotEmpty
           ? 'guid:${message.guid}'
           : 'temp:${message.tempId}';

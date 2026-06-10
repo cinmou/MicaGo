@@ -179,7 +179,12 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int, look
 		if err != nil {
 			return SyncResult{}, err
 		}
-		result.NotificationEvents = buildNotificationEvents(result.NewMessages, syncedMessages, chats, snapshot)
+		// C12: notifications fire only for renderable rows — a freshly-synced
+		// debug-only/noise row must never raise a notification (or, via the
+		// realtime broadcast, land in the normal client thread). result.NewMessages
+		// itself stays raw so send-reconciliation and the rowid watermark are
+		// unaffected; the realtime broadcaster applies the same renderable filter.
+		result.NotificationEvents = buildNotificationEvents(store.FilterRenderableMessages(result.NewMessages), syncedMessages, chats, snapshot)
 	}
 
 	return result, nil

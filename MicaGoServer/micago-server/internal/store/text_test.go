@@ -85,16 +85,15 @@ func TestExtractMessageTextSpecificPrefixStrings(t *testing.T) {
 	}
 }
 
-func TestRowToMessageJSONUsesAttributedBodyTextForMatching(t *testing.T) {
-	message := rowToMessageJSON(MessageRow{
-		GUID:           "msg-1",
-		AttributedBody: syntheticAttributedBody("Hello World"),
-	})
-
-	if message.Text == nil {
+// The canonical decode path is ExtractMessageText (used by both the sync reader
+// and the send-error matcher). A row with no plain text but an attributedBody
+// must yield text usable for outgoing-send matching.
+func TestExtractMessageTextFromAttributedBodyForMatching(t *testing.T) {
+	text := ExtractMessageText(nil, syntheticAttributedBody("Hello World"))
+	if text == nil {
 		t.Fatal("expected text from attributedBody")
 	}
-	if normalized := micasend.NormalizeText(*message.Text); normalized != "helloworld" {
+	if normalized := micasend.NormalizeText(*text); normalized != "helloworld" {
 		t.Fatalf("unexpected normalized text %q", normalized)
 	}
 }

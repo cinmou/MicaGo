@@ -9,7 +9,6 @@ import (
 
 func main() {
 	syncOnce := flag.Bool("sync-once", false, "run one relay.db sync and exit")
-	apiStore := flag.String("api-store", "", "API backing store: relaydb or chatdb")
 	syncInterval := flag.String("sync-interval", "", "periodic relay sync interval")
 	disableSyncLoop := flag.Bool("disable-sync-loop", false, "disable periodic relay sync loop")
 	addr := flag.String("addr", "", "HTTP listen address")
@@ -20,7 +19,6 @@ func main() {
 
 	if err := app.Run(app.Options{
 		SyncOnce:        *syncOnce,
-		APIStore:        *apiStore,
 		SyncInterval:    *syncInterval,
 		DisableSyncLoop: *disableSyncLoop,
 		Addr:            *addr,

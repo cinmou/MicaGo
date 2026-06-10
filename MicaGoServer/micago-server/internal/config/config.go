@@ -20,7 +20,6 @@ const (
 	defaultInitialSyncLimit = 1000
 	defaultNotificationProv = "none"
 	defaultNotificationPrev = "sender"
-	defaultDefaultAPIStore  = "relaydb"
 	tokenBytes              = 32
 	defaultPreferredPairing = "auto"
 	defaultUpdateLookback   = 168 * time.Hour // 7 days
@@ -39,7 +38,6 @@ type Options struct {
 	SyncInterval    string
 	DisableSyncLoop bool
 	SyncOnce        bool
-	APIStore        string
 }
 
 type Config struct {
@@ -58,7 +56,6 @@ type Config struct {
 	PreferredPairingEndpoint string
 	AuthDisabled             bool
 	InitialSyncLimit         int
-	DefaultAPIStore          string
 	SyncInterval             time.Duration
 	UpdateLookback           time.Duration
 	DisableSyncLoop          bool
@@ -191,7 +188,6 @@ func Load(opts Options) (Config, error) {
 		AuthToken:                valueOrDefault(opts.Token, fileCfg.Auth.Token, ""),
 		AuthDisabled:             opts.DisableAuth,
 		InitialSyncLimit:         defaultInitialSyncLimit,
-		DefaultAPIStore:          valueOrDefault(opts.APIStore, "", defaultDefaultAPIStore),
 		SyncInterval:             syncInterval,
 		UpdateLookback:           updateLookback,
 		DisableSyncLoop:          opts.DisableSyncLoop,

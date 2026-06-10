@@ -31,10 +31,10 @@ type stubQueries struct {
 	match              *store.MessageJSON
 }
 
-func (s *stubQueries) ListRecentMessages(_ context.Context, _ int, _ int, service string, includeEmpty bool) ([]store.MessageJSON, error) {
+func (s *stubQueries) ListRecentMessages(_ context.Context, _ int, _ int, service string, includeDebug bool) ([]store.MessageJSON, error) {
 	s.recentService = service
-	s.recentIncludeEmpty = includeEmpty
-	return []store.MessageJSON{}, nil
+	s.recentIncludeEmpty = includeDebug
+	return filterStubRows(s.chatMessages, includeDebug), nil
 }
 
 func (s *stubQueries) ListChats(_ context.Context, _ int, _ int, withArchived bool, service string, includeDebug bool) ([]store.ChatJSON, error) {
@@ -53,12 +53,25 @@ func (s *stubQueries) GetChatInfo(_ context.Context, guid string) (*store.ChatIn
 	return &store.ChatInfo{GUID: guid, ServiceName: &service}, nil
 }
 
-func (s *stubQueries) ListChatMessages(_ context.Context, _ string, _ int, _ int, includeEmpty bool) ([]store.MessageJSON, error) {
-	s.chatMessagesEmpty = includeEmpty
-	if s.chatMessages != nil {
-		return s.chatMessages, nil
+func (s *stubQueries) ListChatMessages(_ context.Context, _ string, _ int, _ int, includeDebug bool) ([]store.MessageJSON, error) {
+	s.chatMessagesEmpty = includeDebug
+	// Model the relay contract: the renderable timeline is filtered in the query
+	// layer (here, the stub) — the handler no longer post-filters. includeDebug
+	// returns the raw timeline for the Inspector.
+	return filterStubRows(s.chatMessages, includeDebug), nil
+}
+
+// filterStubRows mimics the relay's SQL-level renderable filter: drop debug-only
+// rows unless the caller asked for the raw timeline.
+func filterStubRows(rows []store.MessageJSON, includeDebug bool) []store.MessageJSON {
+	out := make([]store.MessageJSON, 0, len(rows))
+	for _, m := range rows {
+		if !includeDebug && m.IsDebugOnly {
+			continue
+		}
+		out = append(out, m)
 	}
-	return []store.MessageJSON{}, nil
+	return out
 }
 
 func (s *stubQueries) FindOutgoingMessageMatch(_ context.Context, _ string, _ string, _ int64, _ map[string]struct{}) (*store.MessageJSON, error) {

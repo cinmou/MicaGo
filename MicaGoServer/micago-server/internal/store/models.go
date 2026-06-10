@@ -101,14 +101,6 @@ type MessageListResponse struct {
 	Meta ListMeta      `json:"meta"`
 }
 
-type ChatRow struct {
-	GUID           string
-	ChatIdentifier *string
-	ServiceName    *string
-	DisplayName    *string
-	IsArchived     bool
-}
-
 type MessageRow struct {
 	ChatGUID            *string
 	SourceRowID         *int64

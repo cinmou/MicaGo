@@ -182,6 +182,43 @@ func TestClassifyMessageJSONForNormalAPI(t *testing.T) {
 	}
 }
 
+// C12 (req #8): an IMSG/imsgweb-style attachment message — a real attachment row
+// with empty text — must render as a proper bubble, not be dropped as noise nor
+// shown as a broken/empty bubble. It survives FilterRenderableMessages; an
+// attachment placeholder with no real rows (cache_has_attachments but zero
+// attachments) is flagged unsupported (system), never a silent broken bubble.
+func TestAttachmentOnlyMessageIsRenderableNotBrokenBubble(t *testing.T) {
+	image := MessageJSON{
+		GUID:                "att-1",
+		Attachments:         []AttachmentJSON{{GUID: "a1", AttachmentKind: AttachmentKindImage, MimeType: sp("image/jpeg")}},
+		CacheHasAttachments: true,
+	}
+	AnnotateMessageJSON(&image)
+	if image.IsDebugOnly {
+		t.Fatal("an attachment-only message must not be debug-only")
+	}
+	if image.SemanticKind != SemanticKindAttachment {
+		t.Fatalf("kind = %q, want attachment", image.SemanticKind)
+	}
+	if image.RenderRecommendation != RenderRecommendationBubble {
+		t.Fatalf("rec = %q, want bubble", image.RenderRecommendation)
+	}
+
+	// It must survive the renderable filter (the normal timeline keeps it).
+	kept := FilterRenderableMessages([]MessageJSON{image})
+	if len(kept) != 1 || kept[0].GUID != "att-1" {
+		t.Fatalf("attachment message dropped by renderable filter: %v", kept)
+	}
+
+	// A placeholder with cache_has_attachments but no real rows is surfaced as an
+	// unsupported/system message, not a silent broken bubble.
+	placeholder := MessageJSON{GUID: "ph-1", CacheHasAttachments: true}
+	AnnotateMessageJSON(&placeholder)
+	if placeholder.SemanticKind != SemanticKindMissingAttachmentRows {
+		t.Fatalf("placeholder kind = %q, want missing_attachment_rows", placeholder.SemanticKind)
+	}
+}
+
 func annotate(in []DebugMessageJSON) []DebugMessageJSON {
 	for i := range in {
 		AnnotateDebugMessage(&in[i])

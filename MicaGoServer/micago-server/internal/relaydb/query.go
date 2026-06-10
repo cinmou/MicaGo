@@ -106,13 +106,17 @@ FROM messages AS m
 LEFT JOIN message_state AS ms ON ms.guid = m.guid
 `
 
-func (db *DB) ListRecentMessages(ctx context.Context, limit, offset int, service string, _ bool) ([]store.MessageJSON, error) {
+// ListRecentMessages returns the renderable timeline by default: debug-only /
+// noise rows are excluded in SQL (before LIMIT/OFFSET, so pagination is stable).
+// includeDebug=true returns the raw timeline for the Message Inspector.
+func (db *DB) ListRecentMessages(ctx context.Context, limit, offset int, service string, includeDebug bool) ([]store.MessageJSON, error) {
 	query := relayMessageSelect + `
 WHERE (? = 'all' OR m.service = ?)
+  AND (? = 1 OR COALESCE(m.is_debug_only, 0) = 0)
 ORDER BY m.source_rowid DESC, m.date_created DESC
 LIMIT ? OFFSET ?;
 `
-	rows, err := db.sqlDB.QueryContext(ctx, query, service, service, limit, offset)
+	rows, err := db.sqlDB.QueryContext(ctx, query, service, service, boolToInt(includeDebug), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -145,13 +149,19 @@ func (db *DB) GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, er
 	return &info, nil
 }
 
-func (db *DB) ListChatMessages(ctx context.Context, guid string, limit, offset int, _ bool) ([]store.MessageJSON, error) {
+// ListChatMessages returns one chat's renderable thread by default: debug-only /
+// noise rows are excluded in SQL (before LIMIT/OFFSET, so a page is never
+// silently shrunk by post-filtering). Reaction rows are kept — they carry
+// renderRecommendation=merge so the client folds tapbacks onto their target.
+// includeDebug=true returns the raw thread for the Message Inspector.
+func (db *DB) ListChatMessages(ctx context.Context, guid string, limit, offset int, includeDebug bool) ([]store.MessageJSON, error) {
 	query := relayMessageSelect + `
 WHERE m.chat_guid = ?
+  AND (? = 1 OR COALESCE(m.is_debug_only, 0) = 0)
 ORDER BY m.source_rowid DESC, m.date_created DESC
 LIMIT ? OFFSET ?;
 `
-	rows, err := db.sqlDB.QueryContext(ctx, query, guid, limit, offset)
+	rows, err := db.sqlDB.QueryContext(ctx, query, guid, boolToInt(includeDebug), limit, offset)
 	if err != nil {
 		return nil, err
 	}

@@ -445,13 +445,15 @@ func (h *Handlers) GetRecentMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	includeEmpty, err := parseIncludeEmpty(r)
+	// The raw/debug timeline is requested with ?debug=true (canonical) or the
+	// legacy ?include_empty=true alias. Both bypass the renderable filter.
+	raw, err := parseRawTimeline(r)
 	if err != nil {
 		writeBadRequest(w, err.Error())
 		return
 	}
 
-	data, err := h.queries.ListRecentMessages(r.Context(), limit, offset, service, includeEmpty)
+	data, err := h.queries.ListRecentMessages(r.Context(), limit, offset, service, raw)
 	if err != nil {
 		h.logInternal("list recent messages", err)
 		writeInternalError(w)
@@ -507,12 +509,6 @@ func (h *Handlers) GetChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	includeEmpty, err := parseIncludeEmpty(r)
-	if err != nil {
-		writeBadRequest(w, err.Error())
-		return
-	}
-
 	guid := r.PathValue("guid")
 	exists, err := h.queries.ChatExists(r.Context(), guid)
 	if err != nil {
@@ -525,24 +521,20 @@ func (h *Handlers) GetChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	debug, err := parseDebug(r)
+	// One canonical thread path: the relay filters debug-only/noise rows in SQL
+	// (before pagination) for the normal renderable timeline. ?debug=true (or the
+	// legacy ?include_empty=true alias) returns the raw thread for the Inspector.
+	raw, err := parseRawTimeline(r)
 	if err != nil {
 		writeBadRequest(w, err.Error())
 		return
 	}
 
-	data, err := h.queries.ListChatMessages(r.Context(), guid, limit, offset, includeEmpty)
+	data, err := h.queries.ListChatMessages(r.Context(), guid, limit, offset, raw)
 	if err != nil {
 		h.logInternal("list chat messages", err)
 		writeInternalError(w)
 		return
-	}
-
-	// Default to the renderable timeline: drop debug-only/noise rows unless the
-	// caller explicitly asks for the raw timeline (?debug=true). The Message
-	// Inspector and debug API still expose everything.
-	if !debug {
-		data = store.FilterRenderableMessages(data)
 	}
 
 	writeJSON(w, http.StatusOK, store.MessageListResponse{
@@ -1363,17 +1355,24 @@ func parseService(r *http.Request) (string, error) {
 	}
 }
 
-func parseIncludeEmpty(r *http.Request) (bool, error) {
-	raw := r.URL.Query().Get("includeEmpty")
-	if raw == "" {
-		return false, nil
+// parseRawTimeline reports whether the caller wants the raw (unfiltered) message
+// timeline rather than the default renderable one. The canonical flag is
+// ?debug=true; ?includeEmpty=true is kept as a backward-compatible alias. Either
+// being true makes the relay return debug-only/noise rows for the Inspector.
+func parseRawTimeline(r *http.Request) (bool, error) {
+	debug, err := parseDebug(r)
+	if err != nil {
+		return false, err
 	}
-
-	v, err := strconv.ParseBool(raw)
+	rawEmpty := r.URL.Query().Get("includeEmpty")
+	if rawEmpty == "" {
+		return debug, nil
+	}
+	v, err := strconv.ParseBool(rawEmpty)
 	if err != nil {
 		return false, errors.New("includeEmpty must be a boolean")
 	}
-	return v, nil
+	return debug || v, nil
 }
 
 // parseDebug reads the optional ?debug=true flag used by the renderable-timeline

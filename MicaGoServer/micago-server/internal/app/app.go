@@ -24,7 +24,6 @@ import (
 
 type Options struct {
 	SyncOnce        bool
-	APIStore        string
 	SyncInterval    string
 	DisableSyncLoop bool
 	Addr            string
@@ -127,7 +126,6 @@ func Run(options Options) error {
 		SyncInterval:    options.SyncInterval,
 		DisableSyncLoop: options.DisableSyncLoop,
 		SyncOnce:        options.SyncOnce,
-		APIStore:        options.APIStore,
 	})
 	if err != nil {
 		return err
@@ -286,15 +284,12 @@ func Run(options Options) error {
 		})
 	}
 
-	apiStore := options.APIStore
-	if apiStore == "" {
-		apiStore = cfg.DefaultAPIStore
-	}
-
-	apiQueries, err := selectAPIStore(apiStore, queries, relay)
-	if err != nil {
-		return err
-	}
+	// C12: there is exactly one normal serving path — the relay cache. The old
+	// selectable "chatdb" direct-read API path was deleted (it was a second,
+	// competing implementation of ListChats/ListChatMessages/ListRecentMessages).
+	// chat.db is read only by the sync reader (store.Queries sync methods) and the
+	// debug inspector; clients always read the classified relay.
+	var apiQueries apiQueryService = relay
 
 	sendDeps := &httpapi.SendDependencies{
 		Pending: pendingSends,
@@ -322,7 +317,7 @@ func Run(options Options) error {
 	})
 
 	statusDeps := httpapi.StatusDeps{
-		APIStore:     apiStore,
+		APIStore:     "relaydb",
 		ClientCount:  hub.ClientCount,
 		SyncState:    relay.GetSyncState,
 		Network:      netController,
@@ -366,7 +361,7 @@ func Run(options Options) error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("api-store: %s", apiStore)
+	log.Printf("api-store: relaydb (single canonical path)")
 	log.Printf("listening on http://%s", cfg.HTTPAddr)
 
 	err = srv.ListenAndServe()
@@ -510,7 +505,11 @@ func broadcastSyncResult(ctx context.Context, hub *realtime.Hub, result relaydb.
 	if hub == nil {
 		return
 	}
-	for _, message := range result.NewMessages {
+	// C12: the realtime timeline is renderable-only. Debug-only/noise rows are
+	// persisted (the Inspector reads them) but are never broadcast as message:new,
+	// so a freshly-synced noise row cannot enter the normal client thread. Reaction
+	// rows survive (renderRecommendation=merge) so tapbacks reach the client.
+	for _, message := range store.FilterRenderableMessages(result.NewMessages) {
 		if diagnostics != nil {
 			diagnostics.recordEvent("message:new", message.ChatGUID)
 		}
@@ -590,16 +589,5 @@ func dispatchNotifications(ctx context.Context, dispatcher *notify.Dispatcher, r
 	}
 	if err := dispatcher.DispatchNewMessages(ctx, devices, result.NotificationEvents); err != nil {
 		log.Printf("dispatch notifications: %v", err)
-	}
-}
-
-func selectAPIStore(name string, chatdb *store.Queries, relay *relaydb.DB) (apiQueryService, error) {
-	switch name {
-	case "relaydb":
-		return relay, nil
-	case "chatdb":
-		return chatdb, nil
-	default:
-		return nil, fmt.Errorf("invalid api-store %q: expected relaydb or chatdb", name)
 	}
 }

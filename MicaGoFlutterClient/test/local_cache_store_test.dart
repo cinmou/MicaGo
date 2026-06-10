@@ -109,6 +109,42 @@ void main() {
     expect(messages.single.localState, LocalSendState.confirmed);
   });
 
+  test('debug-only/noise rows cannot enter the normal thread cache', () async {
+    // C12: the local cache is the renderable timeline only. Even if a debug-only
+    // row reaches the client, it must not be stored in (or returned from) the
+    // normal thread — the raw timeline lives behind the server Inspector API.
+    await store.replaceServerPage('chat-1', [
+      MessageModel.fromJson({
+        'guid': 'real',
+        'chatGuid': 'chat-1',
+        'text': 'hello',
+        'dateCreated': 20,
+      }),
+      MessageModel.fromJson({
+        'guid': 'noise',
+        'chatGuid': 'chat-1',
+        'dateCreated': 21,
+        'isDebugOnly': true,
+      }),
+    ]);
+
+    final messages = await store.listMessages('chat-1');
+    expect(messages, hasLength(1));
+    expect(messages.single.guid, 'real');
+
+    // Direct single-row upsert of a noise row is also rejected.
+    await store.upsertMessage(
+      'chat-1',
+      MessageModel.fromJson({
+        'guid': 'noise-2',
+        'chatGuid': 'chat-1',
+        'dateCreated': 22,
+        'isDebugOnly': true,
+      }),
+    );
+    expect((await store.listMessages('chat-1')), hasLength(1));
+  });
+
   test('hidden chat is hidden locally and always visible overrides', () async {
     await store.upsertChats([
       const ChatSummary(guid: 'noise', hasRenderableMessages: false),
