@@ -16,6 +16,9 @@ cloud service: your messages stay between your Mac and the devices you connect.
   Tunnel is **external and optional**; MicaGo does not bundle or manage it.
 - **[Android Client Connection](android-client-connection.md)** — how to use the
   current Android app (an early "C0" build) and what it can and cannot do yet.
+- **[C18 Client Connection Fallback](c18-client-connection-fallback.md)** —
+  implementation notes for LAN/Public candidate storage, fallback, and
+  diagnostics.
 - **[Manual Test Flow](manual-test-flow.md)** — a step‑by‑step checklist you can
   run from zero to confirm local, LAN, public, and client connectivity.
 

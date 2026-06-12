@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/websocket_client.dart';
-import 'chat_service.dart';
 import 'models/message_model.dart';
 import 'realtime_event_helpers.dart' as rt;
 import 'store/message_collection.dart';
@@ -41,26 +40,6 @@ class ThreadController extends ChangeNotifier {
 
   /// Chronological (oldest → newest); the thread view renders it reversed.
   List<MessageModel> get messages => _col.ordered;
-
-  /// Server-authoritative service for this thread, taken from the NEWEST server
-  /// message that carries a usable service field. Message-level data wins over
-  /// the chat row (whose service_name can be stale in chat.db — e.g. a chat
-  /// labeled SMS whose recent messages are iMessage). Returns
-  /// [ChatService.unknown] when no server message states a service; the caller
-  /// may then fall back to the chat row. Never inferred from GUID/handle shape.
-  ChatService get serviceFromMessages {
-    final ordered = _col.ordered;
-    for (var i = ordered.length - 1; i >= 0; i--) {
-      final m = ordered[i];
-      if (m.guid.isEmpty) continue; // skip optimistic pending rows
-      final s = chatServiceFromServer(
-        category: m.serviceCategory,
-        rawService: m.service,
-      );
-      if (s != ChatService.unknown) return s;
-    }
-    return ChatService.unknown;
-  }
 
   void start() {
     _wsSub = app.ws.events.listen(_onWsEvent);

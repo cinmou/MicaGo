@@ -48,6 +48,31 @@ void main() {
       final roundTripped = ChatSummary.fromJson(c.toJson());
       expect(roundTripped.service, ChatService.imessage);
     });
+
+    test('thread badge and composer use chat iMessage over message SMS', () {
+      final c = ChatSummary.fromJson({
+        'guid': 'any;-;+8618083772301',
+        'chatIdentifier': '+8618083772301',
+        'serviceName': 'iMessage',
+        'serviceCategory': 'imessage',
+      });
+
+      expect(c.service, ChatService.imessage);
+      expect(c.service.label, 'iMessage');
+      expect(c.service.canSend, isTrue);
+    });
+
+    test('any phone-number iMessage chat is send-enabled', () {
+      final c = ChatSummary.fromJson({
+        'guid': 'any;-;+8618083772301',
+        'chatIdentifier': '+8618083772301',
+        'serviceName': 'iMessage',
+        'serviceCategory': 'imessage',
+      });
+
+      expect(c.service, ChatService.imessage);
+      expect(c.service.canSend, isTrue);
+    });
   });
 
   group('SMS and unknown', () {
@@ -56,6 +81,19 @@ void main() {
       expect(s, ChatService.sms);
       expect(s.label, 'SMS');
       expect(s.canSend, isFalse);
+    });
+
+    test('phone-number SMS chat stays read-only', () {
+      final c = ChatSummary.fromJson({
+        'guid': 'SMS;-;+8618083772301',
+        'chatIdentifier': '+8618083772301',
+        'serviceName': 'SMS',
+        'serviceCategory': 'sms',
+      });
+
+      expect(c.service, ChatService.sms);
+      expect(c.service.label, 'SMS');
+      expect(c.service.canSend, isFalse);
     });
 
     test('raw service fallback normalizes like the server', () {
@@ -72,6 +110,16 @@ void main() {
       expect(s, ChatService.unknown);
       expect(s.label, 'Unknown');
       expect(s.canSend, isFalse);
+    });
+
+    test('unknown chat remains read-only even with phone-shaped handle', () {
+      final c = ChatSummary.fromJson({
+        'guid': 'any;-;+8618083772301',
+        'chatIdentifier': '+8618083772301',
+      });
+
+      expect(c.service, ChatService.unknown);
+      expect(c.service.canSend, isFalse);
     });
 
     test('phone-shaped chat with no service is Unknown, not SMS', () {

@@ -99,15 +99,10 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     return widget.chat.title;
   }
 
-  /// Server-authoritative service for this thread. The newest server message's
-  /// service wins (chat.db chat rows can carry a stale service_name); the chat
-  /// row is only the fallback when no message states one. Never guessed from
-  /// the GUID/handle/phone shape.
-  ChatService get _effectiveService {
-    final fromMessages = _controller.serviceFromMessages;
-    if (fromMessages != ChatService.unknown) return fromMessages;
-    return widget.chat.service;
-  }
+  /// Server-authoritative service for this thread. The chat row is the
+  /// conversation authority for UI behavior. Never guessed from the
+  /// GUID/handle/phone shape.
+  ChatService get _effectiveService => widget.chat.service;
 
   /// Header badge text, e.g. "iMessage", "SMS · Read only", "Unknown · Read only".
   String get _serviceBadge {

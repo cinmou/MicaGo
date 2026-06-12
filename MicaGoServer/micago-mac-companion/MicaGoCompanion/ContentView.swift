@@ -4,8 +4,10 @@ import AppKit
 // MARK: - Sidebar
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    // Devices + Permissions moved into the Dashboard (no longer separate items).
-    case dashboard, connections, syncControl, messageInspector, notifications, server, logs, tutorials, advanced
+    // The Server page was dissolved (Live Sync Monitor → Dashboard, bind
+    // address → Connections, binary/runtime → Advanced). Sync Control and
+    // Debug stay separate: sync controls are not debug tools.
+    case dashboard, connections, syncControl, debug, notifications, tutorials, advanced
 
     var id: String { rawValue }
 
@@ -14,10 +16,8 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .dashboard: return "Dashboard"
         case .connections: return "Connections"
         case .syncControl: return "Sync Control"
-        case .messageInspector: return "Message Inspector"
+        case .debug: return "Debug"
         case .notifications: return "Notifications"
-        case .server: return "Server"
-        case .logs: return "Logs"
         case .tutorials: return "Tutorials"
         case .advanced: return "Advanced"
         }
@@ -27,11 +27,9 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "gauge.with.dots.needle.bottom.50percent"
         case .connections: return "network"
-        case .syncControl: return "line.3.horizontal.decrease.circle"
-        case .messageInspector: return "ladybug"
+        case .syncControl: return "arrow.triangle.2.circlepath"
+        case .debug: return "ladybug"
         case .notifications: return "bell"
-        case .server: return "server.rack"
-        case .logs: return "text.alignleft"
         case .tutorials: return "book"
         case .advanced: return "slider.horizontal.3"
         }
@@ -40,7 +38,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
 // MARK: - Shell
 
-/// Shared sidebar selection so deep views can switch tabs (e.g. "Open Logs").
+/// Shared sidebar selection so deep views can switch tabs.
 @MainActor final class NavState: ObservableObject {
     @Published var selection: SidebarItem? = .dashboard
 }
@@ -91,10 +89,10 @@ struct ContentView: View {
         case .dashboard: DashboardPage()
         case .connections: ConnectionsPage()
         case .syncControl: SyncControlPage()
-        case .messageInspector: MessageInspectorPage()
+        case .debug:
+            MessageInspectorPage()
+            LogsPage()
         case .notifications: NotificationsPage()
-        case .server: ServerPage()
-        case .logs: LogsPage()
         case .tutorials: TutorialsPage()
         case .advanced: AdvancedPage()
         }
@@ -233,7 +231,6 @@ private struct ServerPrimaryToolbarButton: View {
 
 private struct DashboardPage: View {
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var runtime: RuntimeMonitor
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
@@ -279,25 +276,10 @@ private struct DashboardPage: View {
 
         DashboardDevicesCard()
 
-        SectionCard(title: "Permissions") {
-            SummaryRow(label: "Messages.app", ok: runtime.messagesRunning,
-                       value: runtime.messagesRunning ? "running" : "not running")
-            SummaryRow(label: "Keep Awake", ok: runtime.keepAwakeActive,
-                       value: runtime.keepAwakeActive ? "active" : "off", neutralWhenOff: true)
-            if let p = model.status?.permissions {
-                StatusValueRow(label: "Full Disk Access", status: p.fullDiskAccess.status)
-                StatusValueRow(label: "Automation", status: p.automation.status)
-            } else {
-                Text("Start the server to read permission diagnostics.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if fdaNeeded(backend, model) {
-                Button("Open Full Disk Access Settings") { openFullDiskAccessSettings() }
-                    .controlSize(.small)
-            }
-        }
-
-        CapabilitiesCard()
+        // C18: the live sync monitor moved here from the dissolved Server page —
+        // it is the most-consulted runtime panel. Permissions + chat.db
+        // capabilities moved to Advanced.
+        LiveSyncMonitorCard()
     }
 
     private func managedLabel(_ state: ServerDisplayState) -> String {
@@ -484,51 +466,6 @@ private struct TutorialsPage: View {
     }
 }
 
-private struct SummaryRow: View {
-    let label: String
-    let ok: Bool
-    let value: String
-    var neutralWhenOff: Bool = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: ok ? "checkmark.circle.fill" : (neutralWhenOff ? "circle" : "exclamationmark.triangle.fill"))
-                .foregroundStyle(ok ? Color.green : (neutralWhenOff ? Color.secondary : Color.orange))
-            Text(label)
-            Spacer()
-            Text(value).font(.caption).foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct StatusValueRow: View {
-    let label: String
-    let status: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon).foregroundStyle(color)
-            Text(label)
-            Spacer()
-            Text(status).font(.caption).foregroundStyle(color)
-        }
-    }
-
-    private var icon: String {
-        switch status {
-        case "ok": return "checkmark.circle.fill"
-        case "denied": return "xmark.circle.fill"
-        default: return "questionmark.circle.fill"
-        }
-    }
-    private var color: Color {
-        switch status {
-        case "ok": return .green
-        case "denied": return .red
-        default: return .secondary
-        }
-    }
-}
 
 private struct CapabilitiesCard: View {
     @EnvironmentObject var model: AppModel
@@ -570,21 +507,9 @@ private struct CapabilityRow: View {
 private struct ConnectionsPage: View {
     var body: some View {
         ConnectionEndpointsSection()
-    }
-}
-
-// MARK: - Permissions page
-
-private struct PermissionsPage: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var backend: BackendController
-
-    var body: some View {
-        if fdaNeeded(backend, model) {
-            FullDiskAccessBanner()
-        }
-        DiagnosticsSection()
-        RuntimeCard()
+        // C18: the server bind address is a connection concern; it moved here
+        // from the dissolved Server page.
+        ServerBindAddressCard()
     }
 }
 
@@ -621,23 +546,9 @@ private struct RuntimeCard: View {
     }
 }
 
-// MARK: - Server page (runtime + bind address + advanced binary)
-
-private struct ServerPage: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var backend: BackendController
-
-    var body: some View {
-        ServerRuntimeCard()
-
-        if fdaNeeded(backend, model) {
-            FullDiskAccessBanner()
-        }
-
-        LiveSyncMonitorCard()
-        ServerBindAddressCard()
-    }
-}
+// C18: the Server page was dissolved — its Server Runtime card duplicated the
+// Dashboard Status card and the toolbar start/stop control. Live Sync Monitor
+// → Dashboard, bind address → Connections, binary path/identity → Advanced.
 
 /// C11 live sync monitor: shows chat.db/WAL/SHM mtimes, last sync trigger /
 /// timing / result, pending triggers, lock retries, pending/late sends, and the
@@ -699,96 +610,6 @@ private struct LiveSyncMonitorCard: View {
             Text("Diagnostics only — no tokens or message text are shown.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
-    }
-}
-
-private struct ServerRuntimeCard: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var backend: BackendController
-    @EnvironmentObject var nav: NavState
-
-    var body: some View {
-        let state = displayState(backend, model)
-
-        SectionCard(title: "Server Runtime") {
-            HStack(spacing: 10) {
-                StatusDot(on: state.isHealthyDot)
-                Text(state.label).font(.headline)
-                Spacer()
-                if let version = model.status?.version {
-                    Text("v\(version)").foregroundStyle(.secondary)
-                }
-            }
-
-            if state == .externalUnmanaged {
-                Text("A server is already reachable at this address but was not launched by the companion. It will not be stopped or restarted from here.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(spacing: 12) {
-                Button { backend.start() } label: { Label("Start", systemImage: "play.fill") }
-                    .disabled(!backend.binaryExists || backend.isProcessAlive || state == .externalUnmanaged)
-                Button { backend.stop() } label: { Label("Stop", systemImage: "stop.fill") }
-                    .disabled(!backend.isProcessAlive)
-                Button { backend.restart() } label: { Label("Restart", systemImage: "arrow.clockwise") }
-                    .disabled(!backend.binaryExists || state == .externalUnmanaged)
-                Spacer()
-                Button { Task { await model.refresh() } } label: { Label("Refresh", systemImage: "arrow.triangle.2.circlepath") }
-            }
-
-            if let listen = model.status?.address.listen, !listen.isEmpty {
-                LabeledRow(label: "Listening on", value: "http://\(listen)")
-            }
-            if let code = backend.lastExitCode, backend.processState != .running {
-                LabeledRow(label: "Last exit code", value: "\(code)")
-            }
-            if case .failed(let reason) = backend.processState {
-                Text("Exited: \(reason)").font(.callout).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let next = backend.nextRestartInfo {
-                Text(next).font(.caption).foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            // Logs live on their own page — link to it instead of duplicating.
-            Button {
-                nav.selection = .logs
-            } label: {
-                Label("Open Logs", systemImage: "text.alignleft")
-            }
-            .controlSize(.small)
-
-            DisclosureGroup("Advanced") {
-                BinaryPathRow()
-            }
-            .font(.subheadline)
-        }
-    }
-}
-
-private struct RecentOutputView: View {
-    @EnvironmentObject var backend: BackendController
-
-    var body: some View {
-        Group {
-            if backend.logLines.isEmpty {
-                Text("No output yet. Output appears when the companion launches the backend. Tokens are redacted.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ScrollView {
-                    Text(backend.logLines.suffix(60).joined(separator: "\n"))
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(height: 160)
-            }
-        }
-        .padding(.top, 4)
     }
 }
 
@@ -1062,6 +883,14 @@ private struct AdvancedPage: View {
         }
 
         LaunchAtLoginSection()
+
+        // C18: permissions + runtime + detected chat.db capabilities moved here
+        // from the Dashboard — diagnostics, not daily-driver info.
+        if fdaNeeded(backend, model) {
+            FullDiskAccessBanner()
+        }
+        DiagnosticsSection()
+        RuntimeCard()
         CapabilitiesCard()
 
         SectionCard(title: "Configuration") {
@@ -1071,9 +900,7 @@ private struct AdvancedPage: View {
                 LabeledRow(label: "Preferred pairing", value: url.preferredPairingEndpoint)
                 LabeledRow(label: "Verify TLS (public)", value: url.public.verifyTls ? "yes" : "no")
             }
-            Text("Notification provider configuration and Firebase self-host (FCM) are planned for v0.12.")
-                .font(.caption2).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            BinaryPathRow()
         }
 
         BackendIdentityCard()
@@ -1469,7 +1296,10 @@ private struct ClientSetupSection: View {
                 HStack {
                     Text("LAN address").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: Binding(
-                        get: { selectedLan?.baseUrl ?? lanTargets.first!.baseUrl },
+                        // No force unwrap: this getter runs lazily and the LAN
+                        // list can empty between renders (poll update / server
+                        // stop). "" is a safe no-match tag value.
+                        get: { selectedLan?.baseUrl ?? lanTargets.first?.baseUrl ?? "" },
                         set: { model.selectedPairingBaseURL = $0 }
                     )) {
                         ForEach(lanTargets) { Text($0.baseUrl).tag($0.baseUrl) }

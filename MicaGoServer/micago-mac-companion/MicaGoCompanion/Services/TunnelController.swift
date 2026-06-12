@@ -51,6 +51,10 @@ final class TunnelController: ObservableObject {
     init() {
         startWithServer = defaults.bool(forKey: K.startWithServer)
         stopWithServer = defaults.bool(forKey: K.stopWithServer)
+        // C18: discovery is async, off the main thread. The old synchronous init
+        // (login-shell `command -v` + pgrep, each with waitUntilExit) ran during
+        // app bootstrap and could delay backend auto-start. The backend never
+        // waits on tunnel discovery; the tunnel is purely optional.
         refreshDiscovery()
     }
 
@@ -61,16 +65,46 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    // MARK: - Discovery
+    // MARK: - Discovery (async, never blocks the main thread)
+
+    /// Result bundle produced by the background probes.
+    private struct Discovery: Sendable {
+        let cloudflaredPath: String?
+        let configFound: Bool
+        let tunnelName: String?
+        let publicHostname: String?
+        let externalRunning: Bool
+    }
 
     /// Re-detects cloudflared, the config file, tunnel name + hostname, and any
-    /// externally-running tunnel.
+    /// externally-running tunnel. All probes (file stats, login shell, pgrep)
+    /// run detached; only the published-state update touches the main actor.
     func refreshDiscovery() {
-        cloudflaredPath = Self.findCloudflared()
-        installed = cloudflaredPath != nil
-        readConfig()
+        Task.detached(priority: .utility) {
+            let path = Self.findCloudflared()
+            let config = Self.readConfigFile()
+            let external = Self.externalTunnelRunning()
+            let discovery = Discovery(
+                cloudflaredPath: path,
+                configFound: config != nil,
+                tunnelName: config?.tunnelName,
+                publicHostname: config?.hostname,
+                externalRunning: external
+            )
+            await MainActor.run { TunnelController.shared.apply(discovery) }
+        }
+    }
+
+    private func apply(_ d: Discovery) {
+        cloudflaredPath = d.cloudflaredPath
+        installed = d.cloudflaredPath != nil
+        configFound = d.configFound
+        if let name = d.tunnelName, !name.isEmpty { tunnelName = name }
+        if let host = d.publicHostname, !host.isEmpty, publicHostname.isEmpty {
+            publicHostname = host
+        }
         if process == nil {
-            if Self.externalTunnelRunning() {
+            if d.externalRunning {
                 state = .runningExternally
             } else if state == .runningExternally {
                 state = .stopped
@@ -78,29 +112,32 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    private func readConfig() {
+    private nonisolated static func readConfigFile() -> (tunnelName: String?, hostname: String?)? {
         let path = (NSHomeDirectory() as NSString).appendingPathComponent(".cloudflared/config.yml")
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
-            configFound = false
-            return
+            return nil
         }
-        configFound = true
+        var name: String?
+        var hostname: String?
         for raw in text.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("tunnel:") {
                 let v = line.dropFirst("tunnel:".count).trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
-                if !v.isEmpty { tunnelName = v }
+                if !v.isEmpty { name = v }
             } else if line.hasPrefix("- hostname:") || line.hasPrefix("hostname:") {
                 let v = line.replacingOccurrences(of: "- hostname:", with: "")
                     .replacingOccurrences(of: "hostname:", with: "")
                     .trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
-                if !v.isEmpty && publicHostname.isEmpty { publicHostname = v }
+                if !v.isEmpty && hostname == nil { hostname = v }
             }
         }
+        return (name, hostname)
     }
 
     /// Locates cloudflared in common install paths, then the login-shell PATH.
-    private static func findCloudflared() -> String? {
+    /// nonisolated: must only run from the detached discovery task (the login
+    /// shell can take seconds and must never block the main actor).
+    private nonisolated static func findCloudflared() -> String? {
         let fm = FileManager.default
         let candidates = [
             "/opt/homebrew/bin/cloudflared",
@@ -128,7 +165,7 @@ final class TunnelController: ObservableObject {
     }
 
     /// True if a `cloudflared tunnel run` process is already running.
-    private static func externalTunnelRunning() -> Bool {
+    private nonisolated static func externalTunnelRunning() -> Bool {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
         proc.arguments = ["-f", "cloudflared tunnel run"]
@@ -232,14 +269,28 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    /// Called by the app when the local server health changes, to coordinate the
-    /// "start/stop tunnel with server" settings.
+    private var lastObservedServerHealthy: Bool?
+
+    /// The tunnel optionally FOLLOWS server health ("start/stop tunnel with
+    /// server"); the backend never depends on the tunnel. Decisions come from
+    /// the pure TunnelAutopilot and fire only on health transitions, so a
+    /// steady poll loop cannot repeatedly retry a failed tunnel, and a backend
+    /// that is simply down at app launch never kills anything.
     func serverHealthChanged(healthy: Bool) {
-        guard installed, configFound else { return }
-        if healthy, startWithServer, state == .stopped {
-            start()
-        } else if !healthy, stopWithServer, process != nil {
-            stop()
+        let action = TunnelAutopilot.decide(
+            previousHealthy: lastObservedServerHealthy,
+            healthy: healthy,
+            startWithServer: startWithServer,
+            stopWithServer: stopWithServer,
+            tunnelUsable: installed && configFound,
+            tunnelStopped: state == .stopped,
+            tunnelProcessAlive: process != nil
+        )
+        lastObservedServerHealthy = healthy
+        switch action {
+        case .none: break
+        case .start: start()
+        case .stop: stop()
         }
     }
 

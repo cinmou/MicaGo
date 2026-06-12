@@ -132,6 +132,9 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
   @override
   Widget build(BuildContext context) {
     final profile = widget.app.profile;
+    final active = widget.app.activeCandidate;
+    final candidates = widget.app.connectionCandidates;
+    final connectionLog = widget.app.connectionLog;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -143,11 +146,46 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 12),
-            _kv(context, 'Server', profile?.baseUrl ?? '—'),
+            _kv(context, 'Mode', profile?.mode.name ?? '—'),
             const SizedBox(height: 6),
-            _kv(context, 'WebSocket', profile?.effectiveWsUrl ?? '—'),
+            _kv(context, 'Active', active?.label ?? '—'),
+            const SizedBox(height: 6),
+            _kv(
+              context,
+              'Server',
+              active?.baseUrl ?? profile?.effectiveBaseUrl ?? '—',
+            ),
+            const SizedBox(height: 6),
+            _kv(
+              context,
+              'WebSocket',
+              active?.wsUrl ?? profile?.effectiveWsUrl ?? '—',
+            ),
             const SizedBox(height: 6),
             _tokenRow(context, profile?.token ?? ''),
+            if (candidates.isNotEmpty) ...[
+              const Divider(height: 20),
+              Text(
+                'Connection candidates',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 6),
+              for (final candidate in candidates) ...[
+                _candidateRow(
+                  context,
+                  candidate.label,
+                  candidate.baseUrl,
+                  active?.baseUrl == candidate.baseUrl,
+                ),
+                const SizedBox(height: 4),
+                _candidateRow(
+                  context,
+                  '${candidate.label} WS',
+                  candidate.wsUrl,
+                  active?.wsUrl == candidate.wsUrl,
+                ),
+              ],
+            ],
             const Divider(height: 20),
             _statusRow(context, 'REST health', _checking ? null : _healthOk),
             const SizedBox(height: 4),
@@ -225,14 +263,46 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
                 ),
                 const Spacer(),
                 TextButton.icon(
-                  onPressed: () {
-                    widget.app.connectWebSocket();
-                  },
+                  onPressed: () => widget.app.selectReachableCandidate(
+                    reason: 'manual_reconnect',
+                  ),
                   icon: const Icon(Icons.refresh, size: 18),
                   label: const Text('Reconnect'),
                 ),
               ],
             ),
+            if (connectionLog.isNotEmpty) ...[
+              const Divider(height: 20),
+              Text(
+                'Connection selection log',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxHeight: 160),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SingleChildScrollView(
+                  reverse: true,
+                  child: SelectableText(
+                    connectionLog.reversed
+                        .take(20)
+                        .toList()
+                        .reversed
+                        .join('\n'),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -317,6 +387,39 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
           ),
         ),
         Expanded(child: SelectableText(v)),
+      ],
+    );
+  }
+
+  Widget _candidateRow(
+    BuildContext context,
+    String label,
+    String value,
+    bool active,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 88,
+          child: Text(
+            label,
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+        ),
+        Expanded(
+          child: SelectableText(value, style: const TextStyle(fontSize: 12)),
+        ),
+        if (active) ...[
+          const SizedBox(width: 6),
+          Chip(
+            label: const Text('active'),
+            visualDensity: VisualDensity.compact,
+            labelStyle: const TextStyle(fontSize: 11),
+            padding: EdgeInsets.zero,
+          ),
+        ],
       ],
     );
   }

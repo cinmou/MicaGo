@@ -35,7 +35,6 @@ final class BackendController: ObservableObject {
     @Published private(set) var processState: BackendProcessState = .stopped
     @Published private(set) var logLines: [String] = []
     @Published private(set) var lastExitCode: Int32?
-    @Published private(set) var lastExitReason: String?
     @Published private(set) var lastStderrLine: String?
     @Published private(set) var failureKind: BackendFailureKind?
     @Published private(set) var nextRestartInfo: String?
@@ -422,7 +421,6 @@ final class BackendController: ObservableObject {
         let kind = classifyFailure()
         failureKind = kind
         let reason = summarize(kind: kind, code: code)
-        lastExitReason = reason
         processState = .failed(reason)
         appendLog("backend exited unexpectedly (code \(code)): \(reason)")
         scheduleRestartIfEnabled(kind: kind)

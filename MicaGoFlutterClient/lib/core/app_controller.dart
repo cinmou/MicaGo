@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'models/connection_profile.dart';
 import 'models/server_urls.dart';
 import 'network/api_client.dart';
+import 'network/connection_candidate.dart';
 import 'network/websocket_client.dart';
 import 'storage/local_cache_store.dart';
 import 'storage/secure_store.dart';
@@ -59,6 +60,8 @@ class AppController extends ChangeNotifier {
   ConnectionProfile? _profile;
   ApiClient? _api;
   ServerUrls? _serverUrls;
+  ConnectionCandidate? _activeCandidate;
+  final List<String> _connectionLog = <String>[];
   bool _bootstrapped = false;
   DateTime? _lastCatchUpSyncAt;
   bool _catchUpInFlight = false;
@@ -73,6 +76,10 @@ class AppController extends ChangeNotifier {
   ConnectionProfile? get profile => _profile;
   ApiClient? get api => _api;
   ServerUrls? get serverUrls => _serverUrls;
+  ConnectionCandidate? get activeCandidate => _activeCandidate;
+  List<ConnectionCandidate> get connectionCandidates =>
+      _profile == null ? const [] : connectionCandidatesForProfile(_profile!);
+  List<String> get connectionLog => List.unmodifiable(_connectionLog);
   bool get hasProfile => _profile?.isComplete ?? false;
   bool get bootstrapped => _bootstrapped;
   DateTime? get lastCatchUpSyncAt => _lastCatchUpSyncAt;
@@ -83,6 +90,13 @@ class AppController extends ChangeNotifier {
     await cache.open();
     await _loadRealtimeDiagnostics();
     _profile = await store.loadProfile();
+    if (_profile != null) {
+      _activeCandidate = connectionCandidatesForProfile(_profile!).firstOrNull;
+      _logConnectionSelection('bootstrap profile mode=${_profile!.mode.name}');
+      _logConnectionSelection(
+        'candidates: ${connectionCandidates.join(' | ')}',
+      );
+    }
     _rebuildApi();
     _bootstrapped = true;
     notifyListeners();
@@ -99,9 +113,14 @@ class AppController extends ChangeNotifier {
     await store.saveProfile(profile);
     _profile = profile;
     _serverUrls = null;
+    _activeCandidate = null;
+    _logConnectionSelection('save profile mode=${profile.mode.name}');
+    _logConnectionSelection(
+      'candidates: ${connectionCandidatesForProfile(profile).join(' | ')}',
+    );
     _rebuildApi();
     notifyListeners();
-    unawaited(catchUp(reason: 'profile'));
+    unawaited(selectReachableCandidate(reason: 'profile'));
   }
 
   /// Fetches `GET /api/server/urls` using the active client.
@@ -125,6 +144,7 @@ class AppController extends ChangeNotifier {
       publicWsUrl: pub?.wsUrl,
     );
     _profile = next;
+    _activeCandidate = null;
     await store.saveProfile(next);
     _rebuildApi();
   }
@@ -133,7 +153,64 @@ class AppController extends ChangeNotifier {
   void connectWebSocket() {
     final profile = _profile;
     if (profile == null) return;
-    ws.connect(profile.effectiveWsUrl, profile.token);
+    final candidate =
+        _activeCandidate ?? connectionCandidatesForProfile(profile).firstOrNull;
+    if (candidate == null) return;
+    _activeCandidate = candidate;
+    _logConnectionSelection(
+      'WS connect ${candidate.label}: ${candidate.wsUrl}',
+    );
+    ws.connect(candidate.wsUrl, profile.token);
+  }
+
+  Future<bool> selectReachableCandidate({
+    required String reason,
+    ConnectionCandidateKind? skipKind,
+  }) async {
+    final profile = _profile;
+    if (profile == null) return false;
+    final allCandidates = connectionCandidatesForProfile(profile);
+    final candidates = allCandidates
+        .where((c) => c.kind != skipKind)
+        .toList(growable: false);
+    _logConnectionSelection(
+      'select candidate reason=$reason mode=${profile.mode.name}',
+    );
+    _logConnectionSelection('all candidates: ${allCandidates.join(' | ')}');
+    if (skipKind != null) {
+      _logConnectionSelection('trying candidates: ${candidates.join(' | ')}');
+    }
+    for (final candidate in candidates) {
+      _logConnectionSelection(
+        'checking ${candidate.label}: ${candidate.baseUrl}',
+      );
+      final client = ApiClient(
+        baseUrl: candidate.baseUrl,
+        token: profile.token,
+      );
+      try {
+        final healthy = await client.health();
+        if (healthy) {
+          await client.authCheck();
+          _activeCandidate = candidate;
+          _logConnectionSelection('${candidate.label} health=true auth=true');
+          _logConnectionSelection('selected ${candidate.label}');
+          _rebuildApi();
+          notifyListeners();
+          connectWebSocket();
+          unawaited(catchUp(reason: reason, minInterval: Duration.zero));
+          return true;
+        }
+        _logConnectionSelection('${candidate.label} health=false');
+      } catch (error) {
+        _logConnectionSelection('${candidate.label} failed: $error');
+      } finally {
+        client.close();
+      }
+    }
+    _logConnectionSelection('no reachable candidate');
+    notifyListeners();
+    return false;
   }
 
   Future<void> catchUp({
@@ -171,6 +248,19 @@ class AppController extends ChangeNotifier {
   void _onWebSocketStatusChanged() {
     if (ws.status == WsStatus.connected) {
       unawaited(_handleWebSocketReconnect());
+    } else if (ws.status == WsStatus.failed) {
+      _logConnectionSelection(
+        'WS ${ws.status.name}: ${ws.lastError ?? 'closed'}',
+      );
+      if (_profile?.mode == ConnectionMode.lanFirst ||
+          _profile?.mode == ConnectionMode.auto) {
+        unawaited(
+          selectReachableCandidate(
+            reason: 'websocket_${ws.status.name}',
+            skipKind: _activeCandidate?.kind,
+          ),
+        );
+      }
     }
   }
 
@@ -416,15 +506,30 @@ class AppController extends ChangeNotifier {
     _api = null;
     _profile = null;
     _serverUrls = null;
+    _activeCandidate = null;
     notifyListeners();
   }
 
   void _rebuildApi() {
     _api?.close();
     final profile = _profile;
-    _api = profile != null && profile.isComplete
-        ? ApiClient(baseUrl: profile.effectiveBaseUrl, token: profile.token)
+    final candidate = profile == null
+        ? null
+        : (_activeCandidate ??
+              connectionCandidatesForProfile(profile).firstOrNull);
+    _activeCandidate = candidate;
+    _api = profile != null && candidate != null && profile.token.isNotEmpty
+        ? ApiClient(baseUrl: candidate.baseUrl, token: profile.token)
         : null;
+  }
+
+  void _logConnectionSelection(String message) {
+    final line = '${DateTime.now().toIso8601String()} $message';
+    debugPrint('[MicaGo connection] $line');
+    _connectionLog.add(line);
+    if (_connectionLog.length > 80) {
+      _connectionLog.removeRange(0, _connectionLog.length - 80);
+    }
   }
 
   @override
@@ -435,4 +540,8 @@ class AppController extends ChangeNotifier {
     unawaited(cache.close());
     super.dispose();
   }
+}
+
+extension _FirstOrNull<E> on List<E> {
+  E? get firstOrNull => isEmpty ? null : first;
 }

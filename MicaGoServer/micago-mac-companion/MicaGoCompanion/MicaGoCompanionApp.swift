@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 @main
 struct MicaGoCompanionApp: App {
@@ -66,6 +67,8 @@ struct MicaGoCompanionApp: App {
 /// AppDelegate owns app-lifetime bootstrap (so polling/auto-start run even when
 /// launched silently with no window) and clean shutdown of the child backend.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var cancellables = Set<AnyCancellable>()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let hidden = UserDefaults.standard.bool(forKey: "launchHidden")
         if hidden {
@@ -93,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Bootstrap regardless of whether a window is shown.
         Task { @MainActor in
             AppModel.shared.reloadConfig()
+            installTunnelFollower()
             await AppModel.shared.refresh()
             BackendController.shared.autoStartIfNeeded(externalReachable: AppModel.shared.reachable)
             AppModel.shared.startPolling()
@@ -113,6 +117,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { NSApp.activate(ignoringOtherApps: true) }
         return true
+    }
+
+    @MainActor
+    private func installTunnelFollower() {
+        guard cancellables.isEmpty else { return }
+        AppModel.shared.$reachable
+            .removeDuplicates()
+            .sink { healthy in
+                Task { @MainActor in
+                    TunnelController.shared.serverHealthChanged(healthy: healthy)
+                }
+            }
+            .store(in: &cancellables)
     }
 }
 

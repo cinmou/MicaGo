@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_go/core/models/connection_profile.dart';
+import 'package:mica_go/core/network/connection_candidate.dart';
 import 'package:mica_go/features/pairing/endpoint_selection.dart';
 import 'package:mica_go/features/pairing/pairing_payload.dart';
 
@@ -53,6 +54,27 @@ void main() {
       expect(prof.lanBaseUrl, 'http://192.168.1.23:3000');
       expect(prof.publicBaseUrl, 'https://micago.example.com');
       expect(prof.mode, ConnectionMode.lanFirst);
+    });
+
+    test('setup payload with LAN + Public becomes two runtime candidates', () {
+      final prof = parsePairingPayload(_v2()).toProfile();
+      final candidates = connectionCandidatesForProfile(prof);
+
+      expect(candidates.map((e) => e.kind), [
+        ConnectionCandidateKind.lan,
+        ConnectionCandidateKind.public,
+      ]);
+      expect(candidates[0].baseUrl, 'http://192.168.1.23:3000');
+      expect(candidates[1].baseUrl, 'https://micago.example.com');
+    });
+
+    test('public HTTPS candidate derives WSS /ws URL', () {
+      final prof = parsePairingPayload(_v2()).toProfile();
+      final public = connectionCandidatesForProfile(
+        prof,
+      ).singleWhere((e) => e.kind == ConnectionCandidateKind.public);
+
+      expect(public.wsUrl, 'wss://micago.example.com/ws');
     });
 
     test('LAN-only payload drops any public endpoint', () {

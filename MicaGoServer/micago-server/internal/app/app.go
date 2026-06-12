@@ -33,15 +33,6 @@ type Options struct {
 	PublicURL       string
 }
 
-type apiQueryService interface {
-	ListRecentMessages(ctx context.Context, limit, offset int, service string, includeEmpty bool) ([]store.MessageJSON, error)
-	ListChats(ctx context.Context, limit, offset int, withArchived bool, service string, includeDebug bool) ([]store.ChatJSON, error)
-	ChatExists(ctx context.Context, guid string) (bool, error)
-	GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, error)
-	ListChatMessages(ctx context.Context, guid string, limit, offset int, includeEmpty bool) ([]store.MessageJSON, error)
-	FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*store.MessageJSON, error)
-}
-
 type syncDiagnostics struct {
 	mu   sync.Mutex
 	data store.ServerSyncDiagnostics
@@ -297,13 +288,6 @@ func Run(options Options) error {
 		})
 	}
 
-	// C12: there is exactly one normal serving path — the relay cache. The old
-	// selectable "chatdb" direct-read API path was deleted (it was a second,
-	// competing implementation of ListChats/ListChatMessages/ListRecentMessages).
-	// chat.db is read only by the sync reader (store.Queries sync methods) and the
-	// debug inspector; clients always read the classified relay.
-	var apiQueries apiQueryService = relay
-
 	sendDeps := &httpapi.SendDependencies{
 		Pending: pendingSends,
 		Sender:  micasend.AppleScriptSender{},
@@ -378,7 +362,7 @@ func Run(options Options) error {
 		},
 	}
 
-	handlers := httpapi.NewHandlers(apiQueries, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
+	handlers := httpapi.NewHandlers(relay, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
 	handlers.SetRuleService(relay)                   // v0.11.3 sync rules backed by relay.db
 	handlers.SetSyncSettingsService(relay)           // C13 service scope + backfill strategy
 	handlers.SetNotificationConfigurator(dispatcher) // v0.12 live FCM/Firebase config

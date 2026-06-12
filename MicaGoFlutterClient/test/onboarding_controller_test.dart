@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_go/core/models/connection_profile.dart';
+import 'package:mica_go/core/network/connection_candidate.dart';
 import 'package:mica_go/features/pairing/onboarding_controller.dart';
 import 'package:mica_go/features/pairing/pairing_payload.dart';
 
@@ -68,6 +69,10 @@ void main() {
     expect(c.activeEndpoint!.kind, EndpointKind.public);
     expect(profile!.baseUrl, 'https://pub.example.com');
     expect(profile.mode, ConnectionMode.lanFirst);
+    expect(connectionCandidatesForProfile(profile).map((e) => e.kind), [
+      ConnectionCandidateKind.lan,
+      ConnectionCandidateKind.public,
+    ]);
   });
 
   test(

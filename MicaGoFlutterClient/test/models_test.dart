@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_go/core/models/connection_profile.dart';
 import 'package:mica_go/core/models/server_urls.dart';
+import 'package:mica_go/core/network/connection_candidate.dart';
 
 void main() {
   group('ConnectionProfile', () {
@@ -31,6 +32,31 @@ void main() {
       expect(back.baseUrl, p.baseUrl);
       expect(back.token, p.token);
       expect(back.wsUrlOverride, isNull);
+    });
+
+    test('candidate list and token survive json round-trip', () {
+      const p = ConnectionProfile(
+        baseUrl: 'http://192.168.1.5:3000',
+        token: 'tok',
+        lanBaseUrl: 'http://192.168.1.5:3000',
+        lanWsUrl: 'ws://192.168.1.5:3000/ws',
+        publicBaseUrl: 'https://micago.example.com',
+        publicWsUrl: 'wss://micago.example.com/ws',
+        mode: ConnectionMode.lanFirst,
+      );
+
+      final back = ConnectionProfile.fromJson(p.toJson());
+      final candidates = connectionCandidatesForProfile(back);
+
+      expect(back.token, 'tok');
+      expect(candidates.map((e) => e.kind), [
+        ConnectionCandidateKind.lan,
+        ConnectionCandidateKind.public,
+      ]);
+      expect(candidates.map((e) => e.wsUrl), [
+        'ws://192.168.1.5:3000/ws',
+        'wss://micago.example.com/ws',
+      ]);
     });
 
     test('toString never leaks the token', () {
