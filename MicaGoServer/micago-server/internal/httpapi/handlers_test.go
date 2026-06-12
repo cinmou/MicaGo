@@ -18,6 +18,7 @@ import (
 	"micagoserver/internal/notify"
 	micasend "micagoserver/internal/send"
 	"micagoserver/internal/store"
+	"micagoserver/internal/version"
 )
 
 type stubQueries struct {
@@ -623,8 +624,8 @@ func TestGetServerStatus(t *testing.T) {
 	if !status.OK {
 		t.Fatalf("expected ok=true")
 	}
-	if status.Version != serverVersion {
-		t.Fatalf("expected version %q, got %q", serverVersion, status.Version)
+	if status.Version != version.Version {
+		t.Fatalf("expected version %q, got %q", version.Version, status.Version)
 	}
 	if status.Store != "relaydb" {
 		t.Fatalf("expected store relaydb, got %q", status.Store)

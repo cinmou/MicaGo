@@ -54,14 +54,17 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
     if (_pairing.stage == PairingStage.preview) {
       _scanner.stop();
     } else if (_pairing.message != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_pairing.message!)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_pairing.message!)));
     }
   }
 
   Future<void> _useScanned() async {
-    final perChat = context.read<MessageDisplayController>().prefs.messagesPerChat;
+    final perChat = context
+        .read<MessageDisplayController>()
+        .prefs
+        .messagesPerChat;
     final ok = await _pairing.useScanned(messagesPerChat: perChat);
     if (ok && mounted) {
       context.go(Routes.home);
@@ -138,7 +141,10 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
             width: 240,
             height: 240,
             decoration: BoxDecoration(
-              border: Border.all(color: Colors.white.withValues(alpha: 0.9), width: 3),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.9),
+                width: 3,
+              ),
               borderRadius: BorderRadius.circular(20),
             ),
           ),
@@ -222,8 +228,10 @@ class _PreviewPane extends StatelessWidget {
                     children: [
                       const Icon(Icons.qr_code_2),
                       const SizedBox(width: 8),
-                      Text('Pairing code found',
-                          style: Theme.of(context).textTheme.titleMedium),
+                      Text(
+                        'Pairing code found',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -242,8 +250,10 @@ class _PreviewPane extends StatelessWidget {
           ),
           if (pairing.availableModes.length > 1) ...[
             const SizedBox(height: 16),
-            Text('Connection mode',
-                style: Theme.of(context).textTheme.titleSmall),
+            Text(
+              'Connection mode',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -287,14 +297,18 @@ class _PreviewPane extends StatelessWidget {
       children: [
         SizedBox(
           width: 92,
-          child: Text(k,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  )),
+          child: Text(
+            k,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
         ),
         Expanded(
-          child: SelectableText(v,
-              style: const TextStyle(fontFamily: 'monospace')),
+          child: SelectableText(
+            v,
+            style: const TextStyle(fontFamily: 'monospace'),
+          ),
         ),
       ],
     );
@@ -327,14 +341,20 @@ class _FailurePane extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline,
-                size: 48, color: Theme.of(context).colorScheme.error),
+            Icon(
+              Icons.error_outline,
+              size: 48,
+              color: Theme.of(context).colorScheme.error,
+            ),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 20),
             FilledButton(onPressed: onRetry, child: const Text('Try again')),
             const SizedBox(height: 8),
-            TextButton(onPressed: onScanAgain, child: const Text('Scan a different code')),
+            TextButton(
+              onPressed: onScanAgain,
+              child: const Text('Scan a different code'),
+            ),
           ],
         ),
       ),

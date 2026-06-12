@@ -8,7 +8,11 @@ type SyncResult struct {
 	NewLastMessageRowID      int64
 	ChatsSynced              int
 	MessagesSynced           int
+	RenderableRowsInserted   int
+	DebugOnlyRowsHidden      int
 	AttachmentsSynced        int
+	PerChatLimit             int
+	RowsScanned              int
 	LastMessageGUID          string
 	LastMessageDateCreated   int64
 	NewMessages              []store.MessageJSON

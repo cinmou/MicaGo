@@ -50,6 +50,91 @@ void main() {
     expect(messages.single.text, 'hello');
   });
 
+  test('diagnostics reports local DB path schema and counts', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'chat-1', hasRenderableMessages: true),
+    ]);
+    await store.replaceServerPage('chat-1', [
+      MessageModel.fromJson({
+        'guid': 'm1',
+        'chatGuid': 'chat-1',
+        'text': 'hello',
+        'dateCreated': 20,
+      }),
+    ]);
+    await store.writeMetadata('last_bootstrap_time', '123');
+    await store.writeMetadata('last_write_count', '2');
+
+    final diag = await store.diagnostics();
+    expect(diag['path'], contains('micago_client_cache.db'));
+    expect(diag['schemaVersion'], isA<int>());
+    expect(diag['chatCount'], 1);
+    expect(diag['messageCount'], 1);
+    expect(diag['pendingSendCount'], 0);
+    expect(diag['lastBootstrapTime'], '123');
+    expect(diag['lastWriteCount'], '2');
+  });
+
+  test('realtime cursor metadata persists across reopen', () async {
+    await store.writeMetadata('last_applied_event_cursor', 'n:42');
+    await store.writeMetadata('last_event_at', '1234');
+    await store.close();
+
+    store = LocalCacheStore();
+    await store.open();
+    final diag = await store.diagnostics();
+    expect(diag['lastAppliedEventCursor'], 'n:42');
+    expect(diag['lastEventAt'], '1234');
+  });
+
+  test(
+    'message event bumps known chat locally without server reload',
+    () async {
+      await store.upsertChats([
+        const ChatSummary(
+          guid: 'chat-1',
+          chatIdentifier: '+15550001',
+          lastMessageAt: 20,
+          lastMessagePreview: 'old',
+        ),
+      ]);
+      final ok = await store.bumpChatWithMessage(
+        MessageModel.fromJson({
+          'guid': 'm2',
+          'chatGuid': 'chat-1',
+          'text': 'new',
+          'dateCreated': 30,
+        }),
+      );
+      final chats = await store.listChats();
+      expect(ok, isTrue);
+      expect(chats.single.lastMessagePreview, 'new');
+      expect(chats.single.lastMessageAt, 30);
+    },
+  );
+
+  test('older message event does not move chat preview backward', () async {
+    await store.upsertChats([
+      const ChatSummary(
+        guid: 'chat-1',
+        lastMessageAt: 50,
+        lastMessagePreview: 'newer',
+      ),
+    ]);
+    final ok = await store.bumpChatWithMessage(
+      MessageModel.fromJson({
+        'guid': 'old',
+        'chatGuid': 'chat-1',
+        'text': 'older',
+        'dateCreated': 10,
+      }),
+    );
+    final chat = (await store.listChats()).single;
+    expect(ok, isTrue);
+    expect(chat.lastMessagePreview, 'newer');
+    expect(chat.lastMessageAt, 50);
+  });
+
   test('message update and unsend patch existing row', () async {
     await store.upsertMessage(
       'chat-1',
@@ -79,35 +164,69 @@ void main() {
     expect(retracted.text, '');
   });
 
-  test('sentUnconfirmed survives restart and reconciles with send match', () async {
-    final pending = MessageModel.optimistic(
-      tempId: 'tmp-1',
-      text: 'slow',
-      dateCreated: 100,
-    ).copyWith(localState: LocalSendState.sentUnconfirmed);
-    await store.addPending('chat-1', pending);
-    await store.close();
+  test(
+    'reaction event updates target message instead of standalone row',
+    () async {
+      await store.upsertMessage(
+        'chat-1',
+        MessageModel.fromJson({
+          'guid': 'target',
+          'chatGuid': 'chat-1',
+          'text': 'hello',
+          'dateCreated': 20,
+        }),
+      );
+      final ok = await store.applyReactionEvent(
+        'chat-1',
+        MessageModel.fromJson({
+          'guid': 'reaction-1',
+          'chatGuid': 'chat-1',
+          'associatedMessageType': 2001,
+          'associatedMessageGuid': 'p:target',
+          'handle': {'id': '+15550001'},
+          'dateCreated': 30,
+        }),
+      );
+      final messages = await store.listMessages('chat-1');
+      expect(ok, isTrue);
+      expect(messages, hasLength(1));
+      expect(messages.single.guid, 'target');
+      expect(messages.single.reactions.single.type, 'like');
+    },
+  );
 
-    store = LocalCacheStore();
-    await store.open();
-    var messages = await store.listMessages('chat-1');
-    expect(messages.single.localState, LocalSendState.sentUnconfirmed);
+  test(
+    'sentUnconfirmed survives restart and reconciles with send match',
+    () async {
+      final pending = MessageModel.optimistic(
+        tempId: 'tmp-1',
+        text: 'slow',
+        dateCreated: 100,
+      ).copyWith(localState: LocalSendState.sentUnconfirmed);
+      await store.addPending('chat-1', pending);
+      await store.close();
 
-    await store.confirmPending(
-      'chat-1',
-      'tmp-1',
-      MessageModel.fromJson({
-        'guid': 'real-1',
-        'chatGuid': 'chat-1',
-        'text': 'slow',
-        'dateCreated': 101,
-        'isFromMe': true,
-      }),
-    );
-    messages = await store.listMessages('chat-1');
-    expect(messages.single.guid, 'real-1');
-    expect(messages.single.localState, LocalSendState.confirmed);
-  });
+      store = LocalCacheStore();
+      await store.open();
+      var messages = await store.listMessages('chat-1');
+      expect(messages.single.localState, LocalSendState.sentUnconfirmed);
+
+      await store.confirmPending(
+        'chat-1',
+        'tmp-1',
+        MessageModel.fromJson({
+          'guid': 'real-1',
+          'chatGuid': 'chat-1',
+          'text': 'slow',
+          'dateCreated': 101,
+          'isFromMe': true,
+        }),
+      );
+      messages = await store.listMessages('chat-1');
+      expect(messages.single.guid, 'real-1');
+      expect(messages.single.localState, LocalSendState.confirmed);
+    },
+  );
 
   test('debug-only/noise rows cannot enter the normal thread cache', () async {
     // C12: the local cache is the renderable timeline only. Even if a debug-only

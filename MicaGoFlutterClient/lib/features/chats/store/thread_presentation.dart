@@ -107,8 +107,11 @@ class ThreadPresentationBuilder {
         return const ReplyPreview(sender: '', text: null, targetLoaded: false);
       }
       return ReplyPreview(
-        sender: resolveSenderLabel(target,
-            isGroup: isGroup, contactName: resolveName(target.handleId)),
+        sender: resolveSenderLabel(
+          target,
+          isGroup: isGroup,
+          contactName: resolveName(target.handleId),
+        ),
         text: displayText(target),
         targetLoaded: true,
       );
@@ -128,29 +131,36 @@ class ThreadPresentationBuilder {
         }
       }
 
-      final isSystem = row.kind == MessageRenderableKind.service ||
+      final isSystem =
+          row.kind == MessageRenderableKind.service ||
           row.kind == MessageRenderableKind.reaction ||
           row.kind == MessageRenderableKind.retracted ||
           row.kind == MessageRenderableKind.unknown;
 
-      items.add(MessageViewItem(
-        message: m,
-        kind: row.kind,
-        isSystem: isSystem,
-        systemLabel: isSystem ? _systemLabel(row.kind, m) : null,
-        mergedSystemCount: row.mergedSystemCount,
-        senderLabel: (!isSystem && !m.isFromMe && isGroup)
-            ? resolveSenderLabel(m,
-                isGroup: isGroup, contactName: resolveName(m.handleId))
-            : null,
-        body: isSystem ? null : displayText(m),
-        reply: isSystem ? null : replyFor(m),
-        reactions: row.reactions,
-        effectHint:
-            (!isSystem && prefs.showEffectHints) ? effectLabel(m.expressiveSendStyleId) : null,
-        deliveryState: deliveryStateFor(m),
-        showStatus: !isSystem && showStatusFor(m),
-      ));
+      items.add(
+        MessageViewItem(
+          message: m,
+          kind: row.kind,
+          isSystem: isSystem,
+          systemLabel: isSystem ? _systemLabel(row.kind, m) : null,
+          mergedSystemCount: row.mergedSystemCount,
+          senderLabel: (!isSystem && !m.isFromMe && isGroup)
+              ? resolveSenderLabel(
+                  m,
+                  isGroup: isGroup,
+                  contactName: resolveName(m.handleId),
+                )
+              : null,
+          body: isSystem ? null : displayText(m),
+          reply: isSystem ? null : replyFor(m),
+          reactions: row.reactions,
+          effectHint: (!isSystem && prefs.showEffectHints)
+              ? effectLabel(m.expressiveSendStyleId)
+              : null,
+          deliveryState: deliveryStateFor(m),
+          showStatus: !isSystem && showStatusFor(m),
+        ),
+      );
     }
 
     if (loadingOlder) items.add(LoadingOlderItem());
@@ -185,7 +195,7 @@ String dayLabel(DateTime day) {
   if (diff == 1) return 'Yesterday';
   const months = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
   ];
   final base = '${months[day.month - 1]} ${day.day}';
   return day.year == now.year ? base : '$base, ${day.year}';

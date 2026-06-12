@@ -6,6 +6,7 @@ import '../contacts/contacts_service.dart';
 import '../settings/message_display_controller.dart';
 import 'avatar.dart';
 import 'chat_list_controller.dart';
+import 'chat_service.dart';
 import 'models/chat_summary.dart';
 
 /// The chat list: loads `GET /api/chats` and shows loading/empty/error/loaded
@@ -31,8 +32,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void initState() {
     super.initState();
     _controller = ChatListController(context.read<AppController>());
-    _controller.includeDebug =
-        context.read<MessageDisplayController>().prefs.showDebugChats;
+    _controller.includeDebug = context
+        .read<MessageDisplayController>()
+        .prefs
+        .showDebugChats;
     _controller.startRealtime();
     WidgetsBinding.instance.addPostFrameCallback((_) => _controller.load());
   }
@@ -59,7 +62,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             c.title,
             name ?? '',
             c.chatIdentifier ?? '',
-            c.serviceName ?? '',
+            c.service.label,
             c.lastMessagePreview ?? '',
           ].join(' ').toLowerCase();
           return hay.contains(q);
@@ -71,7 +74,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Widget build(BuildContext context) {
     // React to the "show debug chats" preference: reloads with/without noise.
     _controller.setIncludeDebug(
-        context.watch<MessageDisplayController>().prefs.showDebugChats);
+      context.watch<MessageDisplayController>().prefs.showDebugChats,
+    );
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -243,9 +247,10 @@ class _ChatRow extends StatelessWidget {
   String _subtitle(ChatSummary chat) {
     final preview = chat.lastMessagePreview?.trim() ?? '';
     if (preview.isNotEmpty) return preview;
+    // Server-authoritative service label (normalized), never the raw chat.db
+    // string and never guessed from the handle/GUID shape.
     final parts = <String>[
-      if (chat.serviceName != null && chat.serviceName!.isNotEmpty)
-        chat.serviceName!,
+      if (chat.service != ChatService.unknown) chat.service.label,
       if (chat.isGroup) 'Group',
     ];
     if (parts.isEmpty && chat.chatIdentifier != null) {

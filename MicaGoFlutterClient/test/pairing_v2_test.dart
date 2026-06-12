@@ -5,16 +5,16 @@ import 'package:mica_go/core/models/connection_profile.dart';
 import 'package:mica_go/features/pairing/endpoint_selection.dart';
 import 'package:mica_go/features/pairing/pairing_payload.dart';
 
-String _v2({
-  String mode = 'lanFirst',
-  bool lan = true,
-  bool public = true,
-}) {
+String _v2({String mode = 'lanFirst', bool lan = true, bool public = true}) {
   final endpoints = <Map<String, dynamic>>[
     if (lan)
       {'kind': 'lan', 'baseUrl': 'http://192.168.1.23:3000', 'priority': 1},
     if (public)
-      {'kind': 'public', 'baseUrl': 'https://micago.example.com', 'priority': 2},
+      {
+        'kind': 'public',
+        'baseUrl': 'https://micago.example.com',
+        'priority': 2,
+      },
   ];
   return jsonEncode({
     'version': 2,
@@ -29,7 +29,8 @@ void main() {
   group('v1 back-compat', () {
     test('legacy single-baseUrl payload still parses', () {
       final p = parsePairingPayload(
-          '{"baseUrl":"https://go.example.com","token":"t"}');
+        '{"baseUrl":"https://go.example.com","token":"t"}',
+      );
       expect(p.version, 1);
       expect(p.baseUrl, 'https://go.example.com');
       expect(p.token, 't');
@@ -84,18 +85,31 @@ void main() {
           {'kind': 'local', 'baseUrl': 'http://127.0.0.1:3000'},
         ],
       });
-      expect(() => parsePairingPayload(raw), throwsA(isA<PairingParseException>()));
+      expect(
+        () => parsePairingPayload(raw),
+        throwsA(isA<PairingParseException>()),
+      );
     });
 
     test('missing token rejected', () {
-      expect(() => parsePairingPayload('{"version":2,"endpoints":[]}'),
-          throwsA(isA<PairingParseException>()));
+      expect(
+        () => parsePairingPayload('{"version":2,"endpoints":[]}'),
+        throwsA(isA<PairingParseException>()),
+      );
     });
   });
 
   group('endpoint try order', () {
-    final lan = const PairingEndpoint(kind: EndpointKind.lan, baseUrl: 'http://lan', priority: 1);
-    final pub = const PairingEndpoint(kind: EndpointKind.public, baseUrl: 'https://pub', priority: 2);
+    final lan = const PairingEndpoint(
+      kind: EndpointKind.lan,
+      baseUrl: 'http://lan',
+      priority: 1,
+    );
+    final pub = const PairingEndpoint(
+      kind: EndpointKind.public,
+      baseUrl: 'https://pub',
+      priority: 2,
+    );
 
     test('lanOnly returns LAN only, never public', () {
       final order = endpointTryOrder(ConnectionMode.lanOnly, [lan, pub]);
@@ -116,7 +130,10 @@ void main() {
   group('offered modes', () {
     test('lan + public offers LAN-only and LAN+Public', () {
       final p = parsePairingPayload(_v2());
-      expect(offeredModes(p), [ConnectionMode.lanOnly, ConnectionMode.lanFirst]);
+      expect(offeredModes(p), [
+        ConnectionMode.lanOnly,
+        ConnectionMode.lanFirst,
+      ]);
     });
     test('lan only offers LAN-only', () {
       final p = parsePairingPayload(_v2(public: false));

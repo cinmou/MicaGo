@@ -22,19 +22,22 @@ import (
 	"micagoserver/internal/config"
 	"micagoserver/internal/notify"
 	"micagoserver/internal/realtime"
+	"micagoserver/internal/relaydb"
 	micasend "micagoserver/internal/send"
 	"micagoserver/internal/store"
+	"micagoserver/internal/version"
 )
 
 const (
 	defaultLimit    = 100
 	maxLimit        = 500
 	defaultOffset   = 0
-	defaultService  = "iMessage"
+	defaultService  = "all"
 	serviceAll      = "all"
 	serviceIMessage = "iMessage"
 	serviceSMS      = "SMS"
 	serviceRCS      = "RCS"
+	serviceUnknown  = "unknown"
 )
 
 type queryService interface {
@@ -107,6 +110,11 @@ type notificationConfigurator interface {
 	FirestoreSyncEnabled() bool
 }
 
+type syncSettingsService interface {
+	GetSyncSettings(ctx context.Context) (relaydb.SyncSettings, error)
+	SetSyncSettings(ctx context.Context, settings relaydb.SyncSettings) (relaydb.SyncSettings, error)
+}
+
 type sendRequest struct {
 	TempGUID string `json:"tempGuid"`
 	Message  string `json:"message"`
@@ -143,11 +151,14 @@ type StatusDeps struct {
 	// (all false) is a safe default when the schema was not probed.
 	Capabilities    store.SchemaCapabilities
 	SyncDiagnostics func() store.ServerSyncDiagnostics
+	// Backend identifies the exact running binary (C17): executable path,
+	// version/commit/buildTime, config + DB paths, and the chat.db open options
+	// (so the absence of immutable=1 is verifiable). Nil omits the block.
+	Backend *store.ServerBackendStatus
+	// SyncSettings returns the live relay sync settings (backfill mode, service
+	// scope) for the status echo. Nil omits them.
+	SyncSettings func(ctx context.Context) *store.ServerSyncSettings
 }
-
-// serverVersion is the advertised server build version. It tracks the latest
-// implemented spec milestone (see docs/).
-const serverVersion = "0.11.0"
 
 // implementedNotificationProviders are providers that actually deliver today;
 // all others advertised by the dispatcher are stubs. Keep in sync with
@@ -171,6 +182,7 @@ type Handlers struct {
 	debug           debugQueryService
 	debugColumns    map[string]bool
 	syncNow         func(context.Context) (store.ServerSyncDiagnostics, error)
+	syncSettings    syncSettingsService
 }
 
 // SetRuleService wires the v0.11.3 sync-rule store after construction (kept off
@@ -184,6 +196,10 @@ func (h *Handlers) SetNotificationConfigurator(c notificationConfigurator) { h.n
 
 func (h *Handlers) SetSyncNow(fn func(context.Context) (store.ServerSyncDiagnostics, error)) {
 	h.syncNow = fn
+}
+
+func (h *Handlers) SetSyncSettingsService(svc syncSettingsService) {
+	h.syncSettings = svc
 }
 
 func NewHandlers(
@@ -214,7 +230,7 @@ func NewHandlers(
 		startedAt:       time.Now().UnixMilli(),
 		serverInfo: store.ServerInfoResponse{
 			Name:         "MicaGoServer",
-			Version:      serverVersion,
+			Version:      version.Version,
 			BaseURL:      config.DeriveBaseURL(serverCfg),
 			WebSocketURL: config.DeriveWebSocketURL(serverCfg),
 			Features: store.ServerFeatures{
@@ -279,6 +295,12 @@ func (h *Handlers) GetServerStatus(w http.ResponseWriter, r *http.Request) {
 		diagnostics := h.status.SyncDiagnostics()
 		status.Sync.Diagnostics = &diagnostics
 	}
+	// C17: identify the exact running binary + the live sync settings so the
+	// companion can prove the launched backend is the intended build.
+	status.Backend = h.status.Backend
+	if h.status.SyncSettings != nil {
+		status.Sync.Settings = h.status.SyncSettings(r.Context())
+	}
 
 	writeJSON(w, http.StatusOK, status)
 }
@@ -298,6 +320,45 @@ func (h *Handlers) SyncNow(w http.ResponseWriter, r *http.Request) {
 		"ok":          true,
 		"diagnostics": diagnostics,
 	})
+}
+
+func (h *Handlers) GetSyncSettings(w http.ResponseWriter, r *http.Request) {
+	if h.syncSettings == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "sync_settings_unavailable", "sync settings are not available")
+		return
+	}
+	settings, err := h.syncSettings.GetSyncSettings(r.Context())
+	if err != nil {
+		h.logInternal("get sync settings", err)
+		writeInternalError(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (h *Handlers) PutSyncSettings(w http.ResponseWriter, r *http.Request) {
+	if h.syncSettings == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "sync_settings_unavailable", "sync settings are not available")
+		return
+	}
+	var req relaydb.SyncSettings
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeBadRequest(w, "invalid JSON body")
+		return
+	}
+	settings, err := h.syncSettings.SetSyncSettings(r.Context(), req)
+	if err != nil {
+		h.logInternal("put sync settings", err)
+		writeInternalError(w)
+		return
+	}
+	var diagnostics *store.ServerSyncDiagnostics
+	if h.syncNow != nil {
+		if d, err := h.syncNow(r.Context()); err == nil {
+			diagnostics = &d
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "diagnostics": diagnostics})
 }
 
 func (h *Handlers) clientCount() int {
@@ -1348,10 +1409,10 @@ func parseService(r *http.Request) (string, error) {
 	}
 
 	switch raw {
-	case serviceIMessage, serviceSMS, serviceRCS, serviceAll:
+	case serviceIMessage, serviceSMS, serviceRCS, serviceUnknown, serviceAll:
 		return raw, nil
 	default:
-		return "", errors.New("service must be one of iMessage, SMS, RCS, all")
+		return "", errors.New("service must be one of iMessage, SMS, RCS, unknown, all")
 	}
 }
 

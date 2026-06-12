@@ -42,14 +42,14 @@ class _MicaGoAppState extends State<MicaGoApp> {
         ChangeNotifierProvider<ContactsService>.value(value: widget.contacts),
         ChangeNotifierProvider<ThemeController>.value(value: widget.theme),
         ChangeNotifierProvider<MessageDisplayController>.value(
-            value: widget.messageDisplay),
+          value: widget.messageDisplay,
+        ),
       ],
       child: Consumer<ThemeController>(
         builder: (context, theme, _) {
           return DynamicColorBuilder(
             builder: (lightDynamic, darkDynamic) {
-              final useDynamic =
-                  theme.useSystemColors && lightDynamic != null;
+              final useDynamic = theme.useSystemColors && lightDynamic != null;
               final lightScheme = useDynamic
                   ? lightDynamic.harmonized()
                   : ColorScheme.fromSeed(seedColor: theme.seedColor);
@@ -57,7 +57,8 @@ class _MicaGoAppState extends State<MicaGoApp> {
                   ? darkDynamic.harmonized()
                   : ColorScheme.fromSeed(
                       seedColor: theme.seedColor,
-                      brightness: Brightness.dark);
+                      brightness: Brightness.dark,
+                    );
 
               return MaterialApp.router(
                 title: 'MicaGo',

@@ -62,21 +62,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.chat_bubble_outline),
                 title: const Text('Message display'),
-                subtitle:
-                    const Text('Reactions, replies, effects, hide/merge rows'),
+                subtitle: const Text(
+                  'Reactions, replies, effects, hide/merge rows',
+                ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _push(
-                    context, 'Message Display', const MessageDisplayPage()),
+                  context,
+                  'Message Display',
+                  const MessageDisplayPage(),
+                ),
               ),
               const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.insights_outlined),
                 title: const Text('Message compatibility diagnostics'),
-                subtitle:
-                    const Text('Why messages render as unsupported'),
+                subtitle: const Text('Why messages render as unsupported'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _push(
-                    context, 'Message Diagnostics', const DiagnosticsPage()),
+                  context,
+                  'Message Diagnostics',
+                  const DiagnosticsPage(),
+                ),
               ),
               const Divider(height: 1),
               ListTile(
@@ -85,13 +91,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: const Text('Recent WebSocket event log'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _push(
-                    context,
-                    'Debug',
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: DebugLogPanel(
-                          ws: context.read<AppController>().ws),
-                    )),
+                  context,
+                  'Debug',
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: DebugLogPanel(
+                      ws: context.read<AppController>().ws,
+                      app: context.read<AppController>(),
+                    ),
+                  ),
+                ),
               ),
               const Divider(height: 1),
               ListTile(
@@ -128,9 +137,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(_tokenText(profile?.token ?? '')),
                 trailing: IconButton(
                   tooltip: _revealToken ? 'Hide' : 'Reveal',
-                  icon: Icon(_revealToken
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined),
+                  icon: Icon(
+                    _revealToken
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
                   onPressed: (profile?.token.isEmpty ?? true)
                       ? null
                       : () => setState(() => _revealToken = !_revealToken),
@@ -184,7 +195,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _confirmDisconnect(BuildContext context, AppController app) async {
+  Future<void> _confirmDisconnect(
+    BuildContext context,
+    AppController app,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -194,11 +208,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Disconnect')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Disconnect'),
+          ),
         ],
       ),
     );
@@ -255,8 +271,7 @@ class _AppearanceCard extends StatelessWidget {
                     onSelected: (_) => theme.setColorChoice(c),
                     avatar: c == ThemeColorChoice.system
                         ? const Icon(Icons.auto_awesome, size: 16)
-                        : CircleAvatar(
-                            radius: 8, backgroundColor: _seedFor(c)),
+                        : CircleAvatar(radius: 8, backgroundColor: _seedFor(c)),
                     label: Text(_colorLabel(c)),
                   ),
               ],
@@ -274,13 +289,17 @@ class _AppearanceCard extends StatelessWidget {
               },
               items: const [
                 DropdownMenuItem(
-                    value: LanguageChoice.system,
-                    child: Text('System language')),
+                  value: LanguageChoice.system,
+                  child: Text('System language'),
+                ),
                 DropdownMenuItem(
-                    value: LanguageChoice.english, child: Text('English')),
+                  value: LanguageChoice.english,
+                  child: Text('English'),
+                ),
                 DropdownMenuItem(
-                    value: LanguageChoice.chinese,
-                    child: Text('简体中文 (Simplified Chinese)')),
+                  value: LanguageChoice.chinese,
+                  child: Text('简体中文 (Simplified Chinese)'),
+                ),
               ],
             ),
             Text(
@@ -351,13 +370,16 @@ class _AboutBody extends StatelessWidget {
           leading: Icon(Icons.lock_outline),
           title: Text('Privacy'),
           subtitle: Text(
-              'Your messages stay between your Mac and your devices. There is '
-              'no MicaGo cloud. Contacts are matched locally and never uploaded.'),
+            'Your messages stay between your Mac and your devices. There is '
+            'no MicaGo cloud. Contacts are matched locally and never uploaded.',
+          ),
         ),
         const ListTile(
           leading: Icon(Icons.science_outlined),
           title: Text('Status'),
-          subtitle: Text('Pre-release. Text + media display; sending text only.'),
+          subtitle: Text(
+            'Pre-release. Text + media display; sending text only.',
+          ),
         ),
         Padding(
           padding: const EdgeInsets.all(16),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'chat_service.dart';
 import 'models/chat_summary.dart';
 
 /// Placeholder thread screen (C1). Message history/sending arrive in a later
@@ -18,9 +19,10 @@ class ChatThreadPlaceholderScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(chat.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (chat.serviceName != null)
-              Text(chat.serviceName!,
-                  style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              chat.service.label,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ],
         ),
       ),
@@ -32,17 +34,19 @@ class ChatThreadPlaceholderScreen extends StatelessWidget {
             children: [
               Icon(Icons.forum_outlined, size: 56, color: scheme.primary),
               const SizedBox(height: 16),
-              Text('Messages will appear here in the next phase.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'Messages will appear here in the next phase.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               SelectableText(
                 'Chat GUID:\n${chat.guid}',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      color: scheme.onSurfaceVariant,
-                    ),
+                  fontFamily: 'monospace',
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),

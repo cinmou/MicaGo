@@ -40,8 +40,13 @@ class ContactAvatar extends StatelessWidget {
       foregroundColor: fg,
       child: isGroup
           ? Icon(Icons.group, size: radius)
-          : Text(_initials(title),
-              style: TextStyle(fontSize: radius * 0.7, fontWeight: FontWeight.w600)),
+          : Text(
+              _initials(title),
+              style: TextStyle(
+                fontSize: radius * 0.7,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
     );
   }
 
@@ -49,7 +54,10 @@ class ContactAvatar extends StatelessWidget {
     final source = title.trim();
     if (source.isEmpty) return '#';
     if (RegExp(r'^[+\d][\d\s()\-]*$').hasMatch(source)) return '#';
-    final words = source.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final words = source
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
     if (words.isEmpty) return '#';
     String first(String w) =>
         w.isEmpty ? '' : String.fromCharCode(w.runes.first).toUpperCase();
@@ -97,8 +105,11 @@ class HandleAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fallback =
-        ContactAvatar(title: title, isGroup: isGroup, radius: radius);
+    final fallback = ContactAvatar(
+      title: title,
+      isGroup: isGroup,
+      radius: radius,
+    );
     if (isGroup || handle == null || handle!.isEmpty) return fallback;
     final contacts = context.watch<ContactsService>();
     if (!contacts.isReady) return fallback;

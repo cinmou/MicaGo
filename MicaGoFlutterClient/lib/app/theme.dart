@@ -12,10 +12,9 @@ class MicaGoTheme {
 
   /// Builds a theme from a seed color (used when dynamic color is off).
   static ThemeData fromSeed(Color seedColor, Brightness brightness) =>
-      fromScheme(ColorScheme.fromSeed(
-        seedColor: seedColor,
-        brightness: brightness,
-      ));
+      fromScheme(
+        ColorScheme.fromSeed(seedColor: seedColor, brightness: brightness),
+      );
 
   /// Builds a theme from a ready-made [ColorScheme] (used for Android 12+
   /// dynamic / Material You colors).
@@ -36,9 +35,7 @@ class MicaGoTheme {
         border: OutlineInputBorder(),
       ),
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          minimumSize: const Size.fromHeight(48),
-        ),
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
       ),
     );
   }

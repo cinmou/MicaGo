@@ -8,6 +8,7 @@ import '../../features/chats/models/message_model.dart';
 
 class LocalCacheStore {
   Database? _db;
+  String? _path;
 
   // Bump on any schema OR pipeline-semantics change. C12 (v2): the server now
   // ships a single canonical renderable timeline (debug-only/noise rows are
@@ -20,14 +21,18 @@ class LocalCacheStore {
   Future<void> open() async {
     if (_db != null) return;
     final dir = await getDatabasesPath();
+    _path = p.join(dir, 'micago_client_cache.db');
     _db = await openDatabase(
-      p.join(dir, 'micago_client_cache.db'),
+      _path!,
       version: _schemaVersion,
       onCreate: (db, _) => _createSchema(db),
       onUpgrade: (db, _, _) => _rebuildSchema(db),
       onDowngrade: (db, _, _) => _rebuildSchema(db),
     );
   }
+
+  String? get databasePath => _path;
+  int get schemaVersion => _schemaVersion;
 
   Future<void> _createSchema(Database db) async {
     await db.execute('''
@@ -153,6 +158,19 @@ CREATE TABLE metadata (
     return rows.map(_messageFromRow).toList(growable: false);
   }
 
+  Future<bool> hasMessageGuid(String guid) async {
+    if (guid.isEmpty) return false;
+    final db = await _ready();
+    final rows = await db.query(
+      'messages',
+      columns: const ['key'],
+      where: 'guid = ?',
+      whereArgs: [guid],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<void> replaceServerPage(
     String chatGuid,
     Iterable<MessageModel> messages,
@@ -173,6 +191,42 @@ CREATE TABLE metadata (
     final batch = db.batch();
     _batchUpsertMessages(batch, chatGuid, [message]);
     await batch.commit(noResult: true);
+  }
+
+  Future<bool> bumpChatWithMessage(MessageModel message) async {
+    final chatGuid = message.chatGuid;
+    if (chatGuid == null || chatGuid.isEmpty) return false;
+    final db = await _ready();
+    final rows = await db.query(
+      'chats',
+      where: 'guid = ?',
+      whereArgs: [chatGuid],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final chat = _chatFromRow(rows.first);
+    final at = message.dateCreated;
+    if (at == null) return true;
+    final current = chat.lastMessageAt ?? 0;
+    if (at < current) return true;
+    final bumped = chat.copyWith(
+      lastMessageAt: at,
+      lastMessagePreview: _previewForMessage(message),
+      hasRenderableMessages: true,
+      unsupportedOnly: false,
+      hiddenReason: '',
+    );
+    await db.update(
+      'chats',
+      {
+        'json': jsonEncode(bumped.toJson()),
+        'latest_renderable_at': at,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'guid = ?',
+      whereArgs: [chatGuid],
+    );
+    return true;
   }
 
   Future<void> addPending(String chatGuid, MessageModel message) async {
@@ -237,6 +291,41 @@ CREATE TABLE metadata (
     await upsertMessage(chatGuid, msg);
   }
 
+  Future<bool> applyReactionEvent(String chatGuid, MessageModel event) async {
+    final targetGuid = _reactionTargetGuid(event);
+    if (targetGuid == null) return false;
+    final db = await _ready();
+    final rows = await db.query(
+      'messages',
+      where: 'guid = ?',
+      whereArgs: [targetGuid],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final target = _messageFromRow(rows.first);
+    final reaction = ReactionModel(
+      type: _reactionType(event),
+      fromHandle: event.handleId,
+      isFromMe: event.isFromMe,
+      eventGuid: event.guid,
+      createdAt: event.dateCreated,
+    );
+    final filtered = target.reactions
+        .where(
+          (r) =>
+              !(r.type == reaction.type &&
+                  r.fromHandle == reaction.fromHandle &&
+                  r.isFromMe == reaction.isFromMe),
+        )
+        .toList(growable: true);
+    final next = target.copyWith(
+      reactions: _isReactionAdd(event) ? [...filtered, reaction] : filtered,
+      localState: LocalSendState.confirmed,
+    );
+    await upsertMessage(chatGuid, next);
+    return true;
+  }
+
   Future<void> writeMetadata(String key, String value) async {
     final db = await _ready();
     await db.insert('metadata', {
@@ -255,6 +344,57 @@ CREATE TABLE metadata (
       limit: 1,
     );
     return rows.isEmpty ? null : rows.first['value'] as String?;
+  }
+
+  Future<Map<String, Object?>> diagnostics() async {
+    final db = await _ready();
+    Future<int> count(String table) async =>
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM $table'),
+        ) ??
+        0;
+    return {
+      'path': _path,
+      'schemaVersion': _schemaVersion,
+      'chatCount': await count('chats'),
+      'messageCount': await count('messages'),
+      'attachmentMetadataCount':
+          int.tryParse(
+            await readMetadata('last_attachment_metadata_count') ?? '',
+          ) ??
+          0,
+      'pendingSendCount':
+          Sqflite.firstIntValue(
+            await db.rawQuery(
+              "SELECT COUNT(*) FROM messages WHERE local_state != 'confirmed'",
+            ),
+          ) ??
+          0,
+      'lastBootstrapTime': await readMetadata('last_bootstrap_time'),
+      'lastCatchUpTime': await readMetadata('last_catch_up_time'),
+      'lastWriteCount': await readMetadata('last_write_count'),
+      'lastError': await readMetadata('last_error'),
+      'lastAppliedEventCursor': await readMetadata('last_applied_event_cursor'),
+      'lastEventAt': await readMetadata('last_event_at'),
+      'lastReconnectAt': await readMetadata('last_reconnect_at'),
+      'lastCatchUpCursor': await readMetadata('last_catch_up_cursor'),
+      'lastCatchUpResultCount': await readMetadata(
+        'last_catch_up_result_count',
+      ),
+      'eventsPatchedDirectly':
+          await readMetadata('events_patched_directly') ?? '0',
+      'eventsForcedReload': await readMetadata('events_forced_reload') ?? '0',
+      'chatListEventReloads':
+          await readMetadata('chat_list_event_reloads') ?? '0',
+      'droppedMissingChatGuid':
+          await readMetadata('dropped_missing_chat_guid') ?? '0',
+      'droppedMalformedEvents':
+          await readMetadata('dropped_malformed_events') ?? '0',
+      'realtimeLocalDbWrites':
+          await readMetadata('realtime_local_db_writes') ?? '0',
+      'reconnectCount': await readMetadata('reconnect_count') ?? '0',
+      'lastReconnectReason': await readMetadata('last_reconnect_reason'),
+    };
   }
 
   Future<Database> _ready() async {
@@ -320,5 +460,43 @@ CREATE TABLE metadata (
         orElse: () => LocalSendState.confirmed,
       ),
     );
+  }
+
+  String _previewForMessage(MessageModel message) {
+    final text = message.text?.trim() ?? '';
+    if (text.isNotEmpty) return text;
+    if (message.attachments.isNotEmpty) {
+      return message.attachments.first.displayName;
+    }
+    if (message.isRetracted) return 'Message unsent';
+    return 'Message';
+  }
+
+  String? _reactionTargetGuid(MessageModel message) {
+    final raw = message.associatedMessageGuid?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    return raw
+        .replaceFirst(RegExp(r'^(?:p|bp):'), '')
+        .replaceFirst(RegExp(r'^\+'), '');
+  }
+
+  bool _isReactionAdd(MessageModel message) {
+    final t = message.associatedMessageType;
+    if (t == null) return true;
+    return t < 3000;
+  }
+
+  String _reactionType(MessageModel message) {
+    final t = message.associatedMessageType ?? 2000;
+    final normalized = t >= 3000 ? t - 1000 : t;
+    return switch (normalized) {
+      2000 => 'love',
+      2001 => 'like',
+      2002 => 'dislike',
+      2003 => 'laugh',
+      2004 => 'emphasis',
+      2005 => 'question',
+      _ => 'custom',
+    };
   }
 }

@@ -17,6 +17,10 @@ type syncSource interface {
 	ListSyncAttachmentsForMessages(ctx context.Context, messageGUIDs []string) ([]store.SyncAttachmentRow, error)
 }
 
+type perChatSource interface {
+	ListSyncRecentMessagesForChat(ctx context.Context, chatGUID string, limit int) ([]store.SyncMessageRow, error)
+}
+
 // byDateSource is an optional capability: a sync source that can scan a bounded
 // date window (C11). The live chat.db source implements it; lightweight test
 // fakes need not.
@@ -45,6 +49,10 @@ func unionByGUID(a, b []store.SyncMessageRow) []store.SyncMessageRow {
 }
 
 func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int, lookback time.Duration) (SyncResult, error) {
+	settings, err := relay.GetSyncSettings(ctx)
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("get sync settings: %w", err)
+	}
 	lastRowIDValue, hasLastRowID, err := relay.GetSyncState("last_message_rowid")
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("get last_message_rowid: %w", err)
@@ -70,6 +78,18 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int, look
 		messages, err = source.ListSyncRecentMessages(ctx, limit)
 		if err != nil {
 			return SyncResult{}, fmt.Errorf("list initial sync messages: %w", err)
+		}
+		if settings.BackfillMode == "per_chat_recent" || settings.BackfillMode == "hybrid" {
+			if pc, ok := source.(perChatSource); ok {
+				mode = settings.BackfillMode
+				for _, chat := range chats {
+					perChat, perErr := pc.ListSyncRecentMessagesForChat(ctx, chat.GUID, settings.RecentMessagesPerChat)
+					if perErr != nil {
+						return SyncResult{}, fmt.Errorf("list per-chat sync messages: %w", perErr)
+					}
+					messages = unionByGUID(messages, perChat)
+				}
+			}
 		}
 	} else {
 		messages, err = source.ListSyncRecentMessagesSince(ctx, previousLastRowID, limit)
@@ -98,8 +118,15 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int, look
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("load sync rules: %w", err)
 	}
+	chatService := make(map[string]*string, len(chats))
+	for _, chat := range chats {
+		chatService[chat.GUID] = chat.ServiceName
+	}
 	syncedMessages := make([]store.SyncMessageRow, 0, len(messages))
 	for _, message := range messages {
+		if message.Service == nil {
+			message.Service = chatService[message.ChatGUID]
+		}
 		if snapshot.SyncAllowed(message.ChatGUID, message.HandleID) {
 			syncedMessages = append(syncedMessages, message)
 		}
@@ -139,7 +166,16 @@ func SyncOnce(ctx context.Context, source syncSource, relay *DB, limit int, look
 		NewLastMessageRowID:      previousLastRowID,
 		ChatsSynced:              len(chats),
 		MessagesSynced:           len(messages),
+		RowsScanned:              len(messages),
+		PerChatLimit:             settings.RecentMessagesPerChat,
 		AttachmentsSynced:        len(attachments),
+	}
+	for _, message := range syncedMessages {
+		if store.DebugOnlyForSyncRow(message) {
+			result.DebugOnlyRowsHidden++
+		} else {
+			result.RenderableRowsInserted++
+		}
 	}
 	for _, message := range messages {
 		if message.SourceRowID > result.NewLastMessageRowID {
@@ -260,18 +296,19 @@ ON CONFLICT(guid) DO UPDATE SET
 func upsertMessagesTx(tx *sql.Tx, messages []store.SyncMessageRow, createdAt int64) ([]string, error) {
 	stmt, err := tx.Prepare(`
 INSERT INTO messages (
-	guid, chat_guid, source_rowid, text, subject, service, date_created, date_read, date_delivered,
+	guid, chat_guid, source_rowid, text, subject, service, account, date_created, date_read, date_delivered,
 	is_from_me, is_read, is_delivered, handle_id, handle_service, cache_has_attachments, created_at,
 	has_attributed_body, associated_message_type, associated_message_guid, thread_originator_guid, item_type,
 	group_action_type, group_title, balloon_bundle_id, expressive_send_style_id, payload_data_present,
 	is_debug_only, is_reaction
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(guid) DO UPDATE SET
 	chat_guid = excluded.chat_guid,
 	source_rowid = excluded.source_rowid,
 	text = excluded.text,
 	subject = excluded.subject,
 	service = excluded.service,
+	account = excluded.account,
 	date_created = excluded.date_created,
 	date_read = excluded.date_read,
 	date_delivered = excluded.date_delivered,
@@ -314,6 +351,7 @@ ON CONFLICT(guid) DO UPDATE SET
 			message.Text,
 			message.Subject,
 			message.Service,
+			message.Account,
 			message.DateCreated,
 			message.DateRead,
 			message.DateDelivered,

@@ -82,13 +82,16 @@ class ThemeController extends ChangeNotifier {
     await store.writeValue(_kLang, lang.name);
   }
 
-  ThemeMode _parseMode(String? v) =>
-      ThemeMode.values.firstWhere((m) => m.name == v,
-          orElse: () => ThemeMode.system);
-  ThemeColorChoice _parseColor(String? v) =>
-      ThemeColorChoice.values.firstWhere((c) => c.name == v,
-          orElse: () => ThemeColorChoice.system);
-  LanguageChoice _parseLang(String? v) =>
-      LanguageChoice.values.firstWhere((l) => l.name == v,
-          orElse: () => LanguageChoice.system);
+  ThemeMode _parseMode(String? v) => ThemeMode.values.firstWhere(
+    (m) => m.name == v,
+    orElse: () => ThemeMode.system,
+  );
+  ThemeColorChoice _parseColor(String? v) => ThemeColorChoice.values.firstWhere(
+    (c) => c.name == v,
+    orElse: () => ThemeColorChoice.system,
+  );
+  LanguageChoice _parseLang(String? v) => LanguageChoice.values.firstWhere(
+    (l) => l.name == v,
+    orElse: () => LanguageChoice.system,
+  );
 }

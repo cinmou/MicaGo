@@ -25,6 +25,7 @@ enum ConfigReader {
         var addr = "127.0.0.1:3000"
         var token = ""
         var publicURL: String?
+        var publicBaseURL: String?
         var section = ""
 
         for rawLine in text.components(separatedBy: "\n") {
@@ -43,12 +44,14 @@ enum ConfigReader {
             switch (section, key) {
             case ("server", "addr"): addr = value
             case ("server", "public_url"): if !value.isEmpty { publicURL = value }
+            case ("network", "public_base_url"): if !value.isEmpty { publicBaseURL = value }
             case ("auth", "token"): token = value
             default: break
             }
         }
 
-        return MicaConfig(addr: addr, token: token, publicURL: publicURL, configPath: path)
+        guard !token.isEmpty else { return nil }
+        return MicaConfig(addr: addr, token: token, publicURL: publicBaseURL ?? publicURL, configPath: path)
     }
 
     static func baseURL(for config: MicaConfig) -> URL? {

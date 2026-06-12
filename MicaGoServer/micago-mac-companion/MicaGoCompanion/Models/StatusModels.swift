@@ -19,6 +19,35 @@ struct ServerStatus: Codable {
     var permissions: PermissionStatus
     // Added by v0.11.x schema probing. Optional so older servers still decode.
     var capabilities: ServerCapabilities?
+    // C17 backend identity: which binary is actually running. Optional so
+    // pre-v0.15 servers still decode — its absence itself means "stale backend".
+    var backend: BackendStatus?
+}
+
+/// C17: identity of the running backend binary, from /api/server/status.
+struct BackendStatus: Codable {
+    var version: String
+    var commit: String
+    var buildTime: String
+    var goVersion: String
+    var osArch: String
+    var executablePath: String
+    var configPath: String
+    var relayDbPath: String
+    var chatDbPath: String
+    var chatDbOpenOptions: String
+    var chatDbImmutable: Bool
+}
+
+/// C17: live sync settings echoed by the server (backfill mode, service scope).
+struct SyncSettingsStatus: Codable {
+    var backfillMode: String
+    var recentMessagesPerChat: Int
+    var includeIMessage: Bool
+    var includeSMS: Bool
+    var includeRCS: Bool
+    var includeUnknown: Bool
+    var includeDebugInNormal: Bool
 }
 
 struct ServerCapabilities: Codable {
@@ -53,6 +82,8 @@ struct SyncStatus: Codable {
     var lastMessageRowId: Int64?
     // C11 live sync monitor. Optional so older servers still decode.
     var diagnostics: SyncDiagnostics?
+    // C17: settings the running backend actually loaded.
+    var settings: SyncSettingsStatus?
 }
 
 /// Envelope for POST /api/sync/now (`{ok, diagnostics}`).
@@ -70,6 +101,11 @@ struct SyncDiagnostics: Codable {
     var lastTriggerReason: String?
     var lastInsertedMessages: Int?
     var lastSyncedMessages: Int?
+    var lastRowsScanned: Int?
+    var lastRenderableRows: Int?
+    var lastHiddenDebugRows: Int?
+    var lastPerChatLimit: Int?
+    var lastBackfillMode: String?
     var lastUpdatePassCount: Int?
     var lastUnsentCount: Int?
     var lastScannedMessageRowId: Int64?

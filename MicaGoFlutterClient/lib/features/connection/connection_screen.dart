@@ -105,8 +105,10 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                         const Expanded(child: Divider()),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Text('or enter manually',
-                              style: Theme.of(context).textTheme.bodySmall),
+                          child: Text(
+                            'or enter manually',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                         ),
                         const Expanded(child: Divider()),
                       ],
@@ -136,16 +138,17 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                         prefixIcon: const Icon(Icons.key_outlined),
                         suffixIcon: IconButton(
                           tooltip: _obscureToken ? 'Show' : 'Hide',
-                          icon: Icon(_obscureToken
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined),
+                          icon: Icon(
+                            _obscureToken
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                          ),
                           onPressed: () =>
                               setState(() => _obscureToken = !_obscureToken),
                         ),
                       ),
-                      validator: (v) => (v ?? '').trim().isEmpty
-                          ? 'Token is required'
-                          : null,
+                      validator: (v) =>
+                          (v ?? '').trim().isEmpty ? 'Token is required' : null,
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
@@ -157,8 +160,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                         helperMaxLines: 2,
                         helperText: _wsCtrl.text.trim().isEmpty
                             ? (_derivedWs.isEmpty
-                                ? 'Auto-derived from the server URL.'
-                                : 'Auto: $_derivedWs')
+                                  ? 'Auto-derived from the server URL.'
+                                  : 'Auto: $_derivedWs')
                             : null,
                         prefixIcon: const Icon(Icons.cable_outlined),
                       ),
@@ -172,8 +175,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                           ? const SizedBox(
                               width: 18,
                               height: 18,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.wifi_tethering),
                       label: const Text('Test connection'),
@@ -221,9 +223,9 @@ class _BrandHeader extends StatelessWidget {
             Text('MicaGo', style: Theme.of(context).textTheme.headlineSmall),
             Text(
               'Connect to your relay server',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -246,15 +248,18 @@ class _TestResult extends StatelessWidget {
     final ok = controller.state == TestState.success;
     final color = ok ? scheme.primary : scheme.error;
     return Card(
-      color: (ok ? scheme.primaryContainer : scheme.errorContainer)
-          .withValues(alpha: 0.4),
+      color: (ok ? scheme.primaryContainer : scheme.errorContainer).withValues(
+        alpha: 0.4,
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(ok ? Icons.check_circle_outline : Icons.error_outline,
-                color: color),
+            Icon(
+              ok ? Icons.check_circle_outline : Icons.error_outline,
+              color: color,
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(

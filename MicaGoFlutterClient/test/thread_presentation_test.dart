@@ -17,21 +17,20 @@ MessageModel _m({
   String? expressiveSendStyleId,
   bool isRetracted = false,
   int itemType = 0,
-}) =>
-    MessageModel(
-      guid: guid,
-      text: text,
-      isFromMe: isFromMe,
-      handleId: handleId,
-      dateCreated: dateCreated,
-      associatedMessageType: associatedMessageType,
-      associatedMessageGuid: associatedMessageGuid,
-      threadOriginatorGuid: threadOriginatorGuid,
-      expressiveSendStyleId: expressiveSendStyleId,
-      isRetracted: isRetracted,
-      itemType: itemType,
-      localState: LocalSendState.confirmed,
-    );
+}) => MessageModel(
+  guid: guid,
+  text: text,
+  isFromMe: isFromMe,
+  handleId: handleId,
+  dateCreated: dateCreated,
+  associatedMessageType: associatedMessageType,
+  associatedMessageGuid: associatedMessageGuid,
+  threadOriginatorGuid: threadOriginatorGuid,
+  expressiveSendStyleId: expressiveSendStyleId,
+  isRetracted: isRetracted,
+  itemType: itemType,
+  localState: LocalSendState.confirmed,
+);
 
 List<ThreadViewItem> _build(
   List<MessageModel> msgs, {
@@ -39,14 +38,13 @@ List<ThreadViewItem> _build(
   bool isGroup = false,
   ContactNameResolver? resolve,
   bool loadingOlder = false,
-}) =>
-    ThreadPresentationBuilder.build(
-      messages: msgs,
-      prefs: prefs,
-      isGroup: isGroup,
-      resolveName: resolve ?? (_) => null,
-      loadingOlder: loadingOlder,
-    );
+}) => ThreadPresentationBuilder.build(
+  messages: msgs,
+  prefs: prefs,
+  isGroup: isGroup,
+  resolveName: resolve ?? (_) => null,
+  loadingOlder: loadingOlder,
+);
 
 void main() {
   test('inserts a date separator before each new day', () {
@@ -74,16 +72,29 @@ void main() {
   });
 
   test('outgoing / 1:1 rows have no sender label', () {
-    final items = _build([_m(guid: 'a', text: 'hi', isFromMe: true, dateCreated: 1000)]);
+    final items = _build([
+      _m(guid: 'a', text: 'hi', isFromMe: true, dateCreated: 1000),
+    ]);
     expect(items.whereType<MessageViewItem>().single.senderLabel, isNull);
   });
 
   test('reply preview resolved from loaded target', () {
-    final items = _build([
-      _m(guid: 'target', text: 'original', handleId: '+1', dateCreated: 1000),
-      _m(guid: 'reply', text: 'replying', threadOriginatorGuid: 'target', dateCreated: 2000),
-    ], isGroup: true, resolve: (_) => 'Bob');
-    final reply = items.whereType<MessageViewItem>().firstWhere((i) => i.message.guid == 'reply');
+    final items = _build(
+      [
+        _m(guid: 'target', text: 'original', handleId: '+1', dateCreated: 1000),
+        _m(
+          guid: 'reply',
+          text: 'replying',
+          threadOriginatorGuid: 'target',
+          dateCreated: 2000,
+        ),
+      ],
+      isGroup: true,
+      resolve: (_) => 'Bob',
+    );
+    final reply = items.whereType<MessageViewItem>().firstWhere(
+      (i) => i.message.guid == 'reply',
+    );
     expect(reply.reply, isNotNull);
     expect(reply.reply!.targetLoaded, isTrue);
     expect(reply.reply!.text, 'original');
@@ -92,7 +103,12 @@ void main() {
   test('reaction merged into target as a precomputed system-free row', () {
     final items = _build([
       _m(guid: 'target', text: 'nice', dateCreated: 1000),
-      _m(guid: 'r', associatedMessageType: 2000, associatedMessageGuid: 'p:0/target', dateCreated: 1100),
+      _m(
+        guid: 'r',
+        associatedMessageType: 2000,
+        associatedMessageGuid: 'p:0/target',
+        dateCreated: 1100,
+      ),
     ], prefs: const MessageDisplayPrefs(mergeTapbacks: true));
     final msgs = items.whereType<MessageViewItem>().toList();
     expect(msgs.length, 1); // reaction merged, not a separate row
@@ -102,7 +118,13 @@ void main() {
   test('retracted + service rows are system with precomputed labels', () {
     final items = _build([
       _m(guid: 's', itemType: 2, dateCreated: 1000),
-      _m(guid: 'r', text: 'gone', isRetracted: true, isFromMe: true, dateCreated: 2000),
+      _m(
+        guid: 'r',
+        text: 'gone',
+        isRetracted: true,
+        isFromMe: true,
+        dateCreated: 2000,
+      ),
     ], prefs: const MessageDisplayPrefs(mergeConsecutiveSystem: false));
     final msgs = items.whereType<MessageViewItem>().toList();
     expect(msgs.every((m) => m.isSystem), isTrue);
@@ -112,28 +134,51 @@ void main() {
 
   test('effect hint precomputed only when prefs enable it', () {
     final on = _build([
-      _m(guid: 'a', text: 'boom', expressiveSendStyleId: 'com.apple.MobileSMS.expressivesend.impact', dateCreated: 1),
+      _m(
+        guid: 'a',
+        text: 'boom',
+        expressiveSendStyleId: 'com.apple.MobileSMS.expressivesend.impact',
+        dateCreated: 1,
+      ),
     ], prefs: const MessageDisplayPrefs(showEffectHints: true));
     expect(on.whereType<MessageViewItem>().single.effectHint, 'Sent with Slam');
 
     final off = _build([
-      _m(guid: 'a', text: 'boom', expressiveSendStyleId: 'com.apple.MobileSMS.expressivesend.impact', dateCreated: 1),
+      _m(
+        guid: 'a',
+        text: 'boom',
+        expressiveSendStyleId: 'com.apple.MobileSMS.expressivesend.impact',
+        dateCreated: 1,
+      ),
     ], prefs: const MessageDisplayPrefs(showEffectHints: false));
     expect(off.whereType<MessageViewItem>().single.effectHint, isNull);
   });
 
-  test('compact delivery visibility: only the latest outgoing shows status', () {
-    final items = _build([
-      _m(guid: 'o1', text: 'one', isFromMe: true, dateCreated: 1000),
-      _m(guid: 'o2', text: 'two', isFromMe: true, dateCreated: 2000),
-    ], prefs: const MessageDisplayPrefs(deliveryLabels: DeliveryLabelMode.compact));
-    final msgs = items.whereType<MessageViewItem>().toList();
-    expect(msgs.firstWhere((m) => m.message.guid == 'o1').showStatus, isFalse);
-    expect(msgs.firstWhere((m) => m.message.guid == 'o2').showStatus, isTrue);
-  });
+  test(
+    'compact delivery visibility: only the latest outgoing shows status',
+    () {
+      final items = _build(
+        [
+          _m(guid: 'o1', text: 'one', isFromMe: true, dateCreated: 1000),
+          _m(guid: 'o2', text: 'two', isFromMe: true, dateCreated: 2000),
+        ],
+        prefs: const MessageDisplayPrefs(
+          deliveryLabels: DeliveryLabelMode.compact,
+        ),
+      );
+      final msgs = items.whereType<MessageViewItem>().toList();
+      expect(
+        msgs.firstWhere((m) => m.message.guid == 'o1').showStatus,
+        isFalse,
+      );
+      expect(msgs.firstWhere((m) => m.message.guid == 'o2').showStatus, isTrue);
+    },
+  );
 
   test('loadingOlder appends a spinner item at the chronological end', () {
-    final items = _build([_m(guid: 'a', text: 'hi', dateCreated: 1)], loadingOlder: true);
+    final items = _build([
+      _m(guid: 'a', text: 'hi', dateCreated: 1),
+    ], loadingOlder: true);
     expect(items.last, isA<LoadingOlderItem>());
   });
 

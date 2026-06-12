@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_go/features/chats/avatar.dart';
 
-Widget _wrap(Widget child) => MaterialApp(home: Scaffold(body: Center(child: child)));
+Widget _wrap(Widget child) => MaterialApp(
+  home: Scaffold(body: Center(child: child)),
+);
 
 void main() {
   group('ContactAvatar fallback', () {
@@ -13,14 +15,18 @@ void main() {
 
     testWidgets('shows a group icon for group chats', (tester) async {
       await tester.pumpWidget(
-          _wrap(const ContactAvatar(title: 'Family', isGroup: true)));
+        _wrap(const ContactAvatar(title: 'Family', isGroup: true)),
+      );
       expect(find.byIcon(Icons.group), findsOneWidget);
       expect(find.text('F'), findsNothing);
     });
 
-    testWidgets('shows a generic glyph for a phone-like handle', (tester) async {
+    testWidgets('shows a generic glyph for a phone-like handle', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-          _wrap(const ContactAvatar(title: '+1 (555) 123-4567')));
+        _wrap(const ContactAvatar(title: '+1 (555) 123-4567')),
+      );
       expect(find.text('#'), findsOneWidget);
     });
 

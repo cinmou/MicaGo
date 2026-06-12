@@ -18,10 +18,12 @@ class MessageDisplayPage extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('These settings only change how messages are displayed on this '
-            'device. They never delete messages or change server data, and '
-            'failed messages are always shown.',
-            style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          'These settings only change how messages are displayed on this '
+          'device. They never delete messages or change server data, and '
+          'failed messages are always shown.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 12),
         Card(
           child: Column(
@@ -41,7 +43,9 @@ class MessageDisplayPage extends StatelessWidget {
               const Divider(height: 1),
               SwitchListTile(
                 title: const Text('Merge tapbacks into the target message'),
-                subtitle: const Text('Show reactions as chips, not separate rows'),
+                subtitle: const Text(
+                  'Show reactions as chips, not separate rows',
+                ),
                 value: p.mergeTapbacks,
                 onChanged: (v) => set(p.copyWith(mergeTapbacks: v)),
               ),
@@ -56,7 +60,8 @@ class MessageDisplayPage extends StatelessWidget {
               SwitchListTile(
                 title: const Text('Show debug-only chats'),
                 subtitle: const Text(
-                    'Reveal chats whose only content is system/noise rows'),
+                  'Reveal chats whose only content is system/noise rows',
+                ),
                 value: p.showDebugChats,
                 onChanged: (v) => set(p.copyWith(showDebugChats: v)),
               ),
@@ -64,11 +69,15 @@ class MessageDisplayPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        Text('Recent messages per chat',
-            style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          'Recent messages per chat',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: 4),
-        Text('How many recent messages to fetch per chat during initial sync.',
-            style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          'How many recent messages to fetch per chat during initial sync.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 8),
         Card(
           child: Column(
@@ -83,8 +92,10 @@ class MessageDisplayPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        Text('Delivery & read labels',
-            style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          'Delivery & read labels',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: 8),
         Card(
           child: Column(
@@ -99,8 +110,10 @@ class MessageDisplayPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        Text('Debug details for unsupported messages',
-            style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          'Debug details for unsupported messages',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: 8),
         Card(
           child: Column(

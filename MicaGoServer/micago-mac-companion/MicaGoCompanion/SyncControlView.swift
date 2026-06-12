@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// A target the rule editor can act on (a chat GUID or a normalized handle).
 struct RuleTarget: Identifiable {
@@ -29,6 +30,7 @@ struct SyncControlPage: View {
 
             ContactsCard()
             DefaultPolicyCard()
+            BackfillSettingsCard()
             ContactSearchCard(editorTarget: $editorTarget)
             RecentMessagesCard(editorTarget: $editorTarget)
             ChatsCard(editorTarget: $editorTarget)
@@ -43,6 +45,83 @@ struct SyncControlPage: View {
                 .environmentObject(model)
                 .environmentObject(contacts)
         }
+    }
+}
+
+// MARK: - Backfill / service scope
+
+private struct BackfillSettingsCard: View {
+    @EnvironmentObject var model: AppModel
+
+    private let limits = [50, 100, 200, 500]
+
+    var body: some View {
+        SectionCard(title: "Backfill & Services") {
+            Picker("Backfill mode", selection: binding(\.backfillMode)) {
+                Text("Global recent").tag("global_recent")
+                Text("Per chat recent").tag("per_chat_recent")
+                Text("Hybrid").tag("hybrid")
+            }
+            .pickerStyle(.segmented)
+
+            HStack {
+                Text("Recent messages per chat").foregroundStyle(.secondary)
+                Picker("", selection: binding(\.recentMessagesPerChat)) {
+                    ForEach(limits, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 260)
+                Spacer()
+            }
+
+            Toggle("Show iMessage conversations", isOn: binding(\.includeIMessage))
+            Toggle("Show SMS conversations", isOn: binding(\.includeSMS))
+            Toggle("Show RCS conversations", isOn: binding(\.includeRCS))
+            Toggle("Show unknown-service conversations in debug mode", isOn: binding(\.includeUnknown))
+            Toggle("Include debug-only/noise in normal client", isOn: binding(\.includeDebugInNormal))
+
+            HStack {
+                if model.syncBusy || model.syncNowBusy { ProgressView().controlSize(.small) }
+                Button {
+                    Task { await model.saveSyncSettings(model.syncSettings) }
+                } label: {
+                    Label("Save and run backfill", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(model.syncBusy || !model.reachable)
+                Button {
+                    Task { await model.runSyncNow() }
+                } label: {
+                    Label("Run backfill now", systemImage: "arrow.clockwise")
+                }
+                .disabled(model.syncNowBusy || !model.reachable)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(model.syncDiagnosticsText, forType: .string)
+                } label: {
+                    Label("Copy diagnostics", systemImage: "doc.on.doc")
+                }
+                Spacer()
+            }
+
+            if let d = model.syncDiagnostics {
+                Text("Mode \(d.lastBackfillMode ?? "—") · limit \(d.lastPerChatLimit ?? 0) · chats \(model.chatsList.count) · rows \(d.lastRowsScanned ?? 0) · renderable \(d.lastRenderableRows ?? 0) · hidden \(d.lastHiddenDebugRows ?? 0)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let err = d.lastSyncError, !err.isEmpty {
+                    Text("Last error: \(err)").font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func binding<T>(_ keyPath: WritableKeyPath<SyncSettings, T>) -> Binding<T> {
+        Binding(
+            get: { model.syncSettings[keyPath: keyPath] },
+            set: { model.syncSettings[keyPath: keyPath] = $0 }
+        )
     }
 }
 

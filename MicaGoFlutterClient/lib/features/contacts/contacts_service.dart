@@ -50,7 +50,9 @@ class ContactsService extends ChangeNotifier {
 
     fc.PermissionStatus result;
     try {
-      result = await fc.FlutterContacts.permissions.request(fc.PermissionType.read);
+      result = await fc.FlutterContacts.permissions.request(
+        fc.PermissionType.read,
+      );
     } catch (_) {
       status = ContactsStatus.denied;
       error = 'Could not request contacts permission.';
@@ -58,7 +60,8 @@ class ContactsService extends ChangeNotifier {
       return;
     }
 
-    final granted = result == fc.PermissionStatus.granted ||
+    final granted =
+        result == fc.PermissionStatus.granted ||
         result == fc.PermissionStatus.limited;
     if (!granted) {
       status = ContactsStatus.denied;
@@ -131,12 +134,14 @@ class ContactsService extends ChangeNotifier {
         },
       );
       final identities = raw
-          .map((c) => ContactIdentity(
-                id: c.id ?? '',
-                displayName: c.displayName ?? '',
-                phones: c.phones.map((p) => p.number).toList(growable: false),
-                emails: c.emails.map((e) => e.address).toList(growable: false),
-              ))
+          .map(
+            (c) => ContactIdentity(
+              id: c.id ?? '',
+              displayName: c.displayName ?? '',
+              phones: c.phones.map((p) => p.number).toList(growable: false),
+              emails: c.emails.map((e) => e.address).toList(growable: false),
+            ),
+          )
           .where((c) => c.displayName.trim().isNotEmpty)
           .toList(growable: false);
       contacts = identities;

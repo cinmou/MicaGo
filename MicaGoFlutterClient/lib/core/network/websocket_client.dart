@@ -39,7 +39,8 @@ class WebSocketClient extends ChangeNotifier {
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
-  final StreamController<WsEvent> _events = StreamController<WsEvent>.broadcast();
+  final StreamController<WsEvent> _events =
+      StreamController<WsEvent>.broadcast();
 
   WsStatus get status => _status;
   String? get lastError => _lastError;
@@ -64,10 +65,12 @@ class WebSocketClient extends ChangeNotifier {
       _fail('Invalid WebSocket URL: $wsUrl');
       return;
     }
-    final uri = base.replace(queryParameters: {
-      ...base.queryParameters,
-      if (token.isNotEmpty) 'token': token,
-    });
+    final uri = base.replace(
+      queryParameters: {
+        ...base.queryParameters,
+        if (token.isNotEmpty) 'token': token,
+      },
+    );
 
     _setStatus(WsStatus.connecting);
     _append('connecting…');
@@ -84,14 +87,16 @@ class WebSocketClient extends ChangeNotifier {
       // We're optimistic: connect() does not await the handshake. The first
       // frame (or onDone/onError) confirms the real state. Mark connected once
       // ready completes where supported.
-      channel.ready.then((_) {
-        if (_channel == channel) {
-          _setStatus(WsStatus.connected);
-          _append('connected');
-        }
-      }).catchError((Object error) {
-        if (_channel == channel) _fail('handshake failed: $error');
-      });
+      channel.ready
+          .then((_) {
+            if (_channel == channel) {
+              _setStatus(WsStatus.connected);
+              _append('connected');
+            }
+          })
+          .catchError((Object error) {
+            if (_channel == channel) _fail('handshake failed: $error');
+          });
     } catch (e) {
       _fail('connect failed: $e');
     }
@@ -135,10 +140,12 @@ class WebSocketClient extends ChangeNotifier {
         if (type is String && type.isNotEmpty && !_events.isClosed) {
           _lastEventAt = DateTime.now();
           final data = decoded['data'];
-          _events.add(WsEvent(
-            type,
-            data is Map<String, dynamic> ? data : const <String, dynamic>{},
-          ));
+          _events.add(
+            WsEvent(
+              type,
+              data is Map<String, dynamic> ? data : const <String, dynamic>{},
+            ),
+          );
         }
       } else {
         label = '(non-object frame)';

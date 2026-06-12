@@ -114,3 +114,76 @@ func TestListMessageUpdatesSinceNoRows(t *testing.T) {
 		t.Fatalf("expected 0 rows, got %d", len(updates))
 	}
 }
+
+func TestListSyncRecentMessagesByDateScansEmailHandleWithAccountColumn(t *testing.T) {
+	db := newSchemaDB(t,
+		`CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, service_name TEXT, display_name TEXT, is_archived INTEGER)`,
+		`CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER)`,
+		`CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, service TEXT)`,
+		`CREATE TABLE message (
+			ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB,
+			subject TEXT, service TEXT, account TEXT, date INTEGER, date_read INTEGER,
+			date_delivered INTEGER, is_from_me INTEGER, is_read INTEGER, is_delivered INTEGER,
+			cache_has_attachments INTEGER, handle_id INTEGER
+		)`,
+		`INSERT INTO chat (ROWID, guid, service_name) VALUES (1, 'chat-1', 'iMessage')`,
+		`INSERT INTO handle (ROWID, id, service) VALUES (1, 'wppe_a@icloud.com', 'iMessage')`,
+		`INSERT INTO message (
+			ROWID, guid, text, service, account, date, is_from_me, is_read,
+			is_delivered, cache_has_attachments, handle_id
+		) VALUES (1, 'm1', 'hello', 'iMessage', 'user@example.com', 1000, 0, 1, 1, 0, 1)`,
+		`INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, 1)`,
+	)
+
+	q := NewQueries(db)
+	q.SetMessageColumns(map[string]bool{"account": true})
+	rows, err := q.ListSyncRecentMessagesByDate(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("ListSyncRecentMessagesByDate: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].HandleID == nil || *rows[0].HandleID != "wppe_a@icloud.com" {
+		t.Fatalf("handle = %v", rows[0].HandleID)
+	}
+	if rows[0].Account == nil || *rows[0].Account != "user@example.com" {
+		t.Fatalf("account = %v", rows[0].Account)
+	}
+}
+
+func TestListSyncRecentMessagesByDateScansEmailHandleWithoutAccountColumn(t *testing.T) {
+	db := newSchemaDB(t,
+		`CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, service_name TEXT, display_name TEXT, is_archived INTEGER)`,
+		`CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER)`,
+		`CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, service TEXT)`,
+		`CREATE TABLE message (
+			ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB,
+			subject TEXT, service TEXT, date INTEGER, date_read INTEGER,
+			date_delivered INTEGER, is_from_me INTEGER, is_read INTEGER, is_delivered INTEGER,
+			cache_has_attachments INTEGER, handle_id INTEGER
+		)`,
+		`INSERT INTO chat (ROWID, guid, service_name) VALUES (1, 'chat-1', 'iMessage')`,
+		`INSERT INTO handle (ROWID, id, service) VALUES (1, 'wppe_a@icloud.com', 'iMessage')`,
+		`INSERT INTO message (
+			ROWID, guid, text, service, date, is_from_me, is_read,
+			is_delivered, cache_has_attachments, handle_id
+		) VALUES (1, 'm1', 'hello', 'iMessage', 1000, 0, 1, 1, 0, 1)`,
+		`INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, 1)`,
+	)
+
+	q := NewQueries(db)
+	rows, err := q.ListSyncRecentMessagesByDate(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("ListSyncRecentMessagesByDate: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].HandleID == nil || *rows[0].HandleID != "wppe_a@icloud.com" {
+		t.Fatalf("handle = %v", rows[0].HandleID)
+	}
+	if rows[0].Account != nil {
+		t.Fatalf("account = %v", rows[0].Account)
+	}
+}

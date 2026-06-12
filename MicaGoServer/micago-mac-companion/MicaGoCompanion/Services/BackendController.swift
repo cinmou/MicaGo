@@ -1,5 +1,7 @@
 import Foundation
+import AppKit
 import Combine
+import Security
 
 /// Lifecycle state of the *companion-launched* backend process. This is purely
 /// about the child process; reachability/auth come from the API poll and are
@@ -83,25 +85,121 @@ final class BackendController: ObservableObject {
         refreshInstalledState()
     }
 
-    // MARK: - Binary resolution (bundled → user override → default path)
+    // MARK: - Binary resolution (override → NEWEST of cached/bundled)
 
     struct ResolvedBinary { let path: String; let source: String }
 
+    /// C17 freshness policy. The old order (override → cached ~/.micago/bin →
+    /// bundled) let a stale cached binary silently shadow newer builds — fixes
+    /// like the chat.db immutable removal then never actually ran. Now:
+    ///   1. An explicit user override always wins (deliberate choice).
+    ///   2. Otherwise the NEWEST (by modification time) of the cached dev build
+    ///      and the bundled binary wins. A fresh `scripts/build-backend.sh`
+    ///      output beats an older bundle; a newer app bundle beats a stale cache.
+    /// A skipped-stale candidate raises `staleBinaryWarning` — never silent.
     func resolveBinary() -> ResolvedBinary? {
         let fm = FileManager.default
         let override = userBinaryPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !override.isEmpty, fm.isExecutableFile(atPath: override) {
             return ResolvedBinary(path: override, source: "override")
         }
-        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("micago").path,
-           fm.isExecutableFile(atPath: bundled) {
-            return ResolvedBinary(path: bundled, source: "bundled")
-        }
+
+        var candidates: [(ResolvedBinary, Date)] = []
         let def = (NSHomeDirectory() as NSString).appendingPathComponent(".micago/bin/micago")
         if fm.isExecutableFile(atPath: def) {
-            return ResolvedBinary(path: def, source: "default")
+            candidates.append((ResolvedBinary(path: def, source: "default"), Self.modificationDate(def)))
         }
-        return nil
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("micago").path,
+           fm.isExecutableFile(atPath: bundled) {
+            candidates.append((ResolvedBinary(path: bundled, source: "bundled"), Self.modificationDate(bundled)))
+        }
+        // Newest build wins; tie goes to the bundled binary (ships with the app).
+        return candidates.sorted { a, b in
+            if a.1 != b.1 { return a.1 > b.1 }
+            return a.0.source == "bundled"
+        }.first?.0
+    }
+
+    private static func modificationDate(_ path: String) -> Date {
+        (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)
+            .flatMap { $0 } ?? .distantPast
+    }
+
+    // MARK: - Version probing + stale detection (C17)
+
+    /// One probed `--version` line, e.g.
+    /// "MicaGoServer v0.15.0 commit=abc1234 buildTime=2026-06-12T11:00:00Z go=go1.26 darwin/arm64".
+    /// nil line = the binary predates --version (pre-v0.15) and is stale by definition.
+    @Published private(set) var launchedVersionLine: String?
+    @Published private(set) var staleBinaryWarning: String?
+
+    /// Runs `path --version` with a watchdog. Safe on old binaries: the unknown
+    /// flag makes them print usage and exit instead of starting the server.
+    nonisolated static func probeVersionLine(at path: String) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = ["--version"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do { try proc.run() } catch { return nil }
+        let deadline = DispatchTime.now() + 3
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { proc.waitUntilExit(); done.signal() }
+        if done.wait(timeout: deadline) == .timedOut {
+            proc.terminate()
+            return nil
+        }
+        guard proc.terminationStatus == 0 else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let line = String(data: data, encoding: .utf8)?
+            .split(separator: "\n").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        return line.hasPrefix("MicaGoServer") ? line : nil
+    }
+
+    /// Probes the resolved binary and updates `launchedVersionLine` /
+    /// `staleBinaryWarning`. Called on start and from the UI's refresh action.
+    func refreshBinaryFreshness() {
+        guard let resolved = resolveBinary() else {
+            launchedVersionLine = nil
+            staleBinaryWarning = nil
+            return
+        }
+        let line = Self.probeVersionLine(at: resolved.path)
+        launchedVersionLine = line
+        if line == nil {
+            staleBinaryWarning = "The selected backend (\(resolved.source)) does not report a version — it predates v0.15 and is missing recent sync fixes. Rebuild it: MicaGoServer/micago-server/scripts/build-backend.sh"
+        } else if resolved.source == "override" {
+            // An override pins an exact binary; warn if a newer build exists elsewhere.
+            let overrideDate = Self.modificationDate(resolved.path)
+            let def = (NSHomeDirectory() as NSString).appendingPathComponent(".micago/bin/micago")
+            let newerCached = FileManager.default.isExecutableFile(atPath: def) && Self.modificationDate(def) > overrideDate
+            let bundled = Bundle.main.resourceURL?.appendingPathComponent("micago").path
+            let newerBundled = bundled.map { FileManager.default.isExecutableFile(atPath: $0) && Self.modificationDate($0) > overrideDate } ?? false
+            staleBinaryWarning = (newerCached || newerBundled)
+                ? "A newer backend build exists, but the override path pins an older one. Clear the override or update it."
+                : nil
+        } else {
+            staleBinaryWarning = nil
+        }
+        if let line { appendLog("backend freshness: \(line) [\(resolved.source)] \(resolved.path)") }
+        else { appendLog("backend freshness: --version probe failed for \(resolved.path) (stale pre-v0.15 binary)") }
+    }
+
+    /// C17 Part D: stop, re-resolve (newest build wins), start, and let the
+    /// status poll re-confirm the running version. Resolution happens per
+    /// start(), so this simply forces the cycle and re-probes.
+    func restartWithLatestBackend() {
+        appendLog("restart with latest backend requested")
+        refreshBinaryFreshness()
+        restart()
+    }
+
+    /// Reveal the resolved backend binary in Finder ("Open backend location").
+    func revealBinaryInFinder() {
+        guard let path = resolvedBinaryPath else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
     var binaryExists: Bool { resolveBinary() != nil }
@@ -143,6 +241,17 @@ final class BackendController: ObservableObject {
         failureKind = nil
         nextRestartInfo = nil
         processState = .starting
+        // C17: record exactly which build we are about to launch, and warn if
+        // it is a stale pre-version binary — never silently.
+        refreshBinaryFreshness()
+
+        do {
+            try Self.ensureConfigFile()
+        } catch {
+            processState = .failed("could not create config: \(error.localizedDescription)")
+            appendLog("error: failed to prepare ~/.micago/config.yaml: \(error.localizedDescription)")
+            return
+        }
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: resolved.path)
@@ -180,6 +289,81 @@ final class BackendController: ObservableObject {
             processState = .failed("could not launch: \(error.localizedDescription)")
             appendLog("error: failed to start backend: \(error.localizedDescription)")
         }
+    }
+
+    private static func ensureConfigFile() throws {
+        let fm = FileManager.default
+        let home = NSHomeDirectory()
+        let dir = (home as NSString).appendingPathComponent(".micago")
+        let path = (dir as NSString).appendingPathComponent("config.yaml")
+        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        if fm.fileExists(atPath: path) {
+            if ConfigReader.read() == nil {
+                throw NSError(domain: "MicaGoConfig", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "existing ~/.micago/config.yaml could not be read or has an empty auth.token"
+                ])
+            }
+            return
+        }
+        let token = try randomHex(byteCount: 32)
+        // C17: default to all interfaces so a phone on the same LAN can pair
+        // out of the box. Safe because the generated bearer token is required
+        // for every API/WS call, and the server logs a loud warning for
+        // non-local binds. Users can restrict to "This Mac only" in Settings.
+        let body = """
+        server:
+          addr: "0.0.0.0:3000"
+          public_url: ""
+
+        network:
+          public_base_url: ""
+          verify_tls: true
+          preferred_pairing_endpoint: "auto"
+
+        auth:
+          token: "\(token)"
+
+        sync:
+          interval: "5s"
+          update_lookback: "168h0m0s"
+
+        notifications:
+          enabled: false
+          provider: "none"
+          preview: "sender"
+
+        webhook:
+          url: ""
+
+        fcm:
+          enabled: false
+          project_id: ""
+          service_account_path: ""
+
+        hms:
+          enabled: false
+          app_id: ""
+          app_secret: ""
+          token_cache_path: "~/.micago/hms-token.json"
+
+        firebase:
+          public_url_sync: false
+          url_collection: "server"
+          url_document: "config"
+
+        """
+        try body.write(toFile: path, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+    }
+
+    private static func randomHex(byteCount: Int) throws -> String {
+        var bytes = [UInt8](repeating: 0, count: byteCount)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status != errSecSuccess {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     func stop() {
@@ -289,7 +473,16 @@ final class BackendController: ObservableObject {
         if recent.contains("address already in use") || recent.contains("bind:") || recent.contains("eaddrinuse") {
             return .addressInUse
         }
-        if recent.contains("auth token is empty") || recent.contains("invalid ") || recent.contains("parse ") {
+        if recent.contains("auth token is empty") ||
+            recent.contains("read config file") ||
+            recent.contains("write config file") ||
+            recent.contains("stat config file") ||
+            recent.contains("parse sync.") ||
+            recent.contains("parse --sync-interval") ||
+            recent.contains("invalid notifications.") ||
+            recent.contains("invalid network.preferred_pairing_endpoint") ||
+            recent.contains("invalid public_base_url") ||
+            recent.contains("public_base_url must") {
             return .configInvalid
         }
         if recent.contains("messages") && recent.contains("not running") {
@@ -302,7 +495,11 @@ final class BackendController: ObservableObject {
         switch kind {
         case .fullDiskAccess: return "Full Disk Access is required to read the Messages database."
         case .addressInUse: return "The listen address is already in use (another server may be running)."
-        case .configInvalid: return "The server configuration is missing or invalid (~/.micago/config.yaml)."
+        case .configInvalid:
+            if let last = lastStderrLine, !last.isEmpty {
+                return "Server config error: \(last)"
+            }
+            return "The server configuration is missing or invalid (~/.micago/config.yaml)."
         case .messagesNotRunning: return "Messages.app is required for sending."
         case .unknown: return lastStderrLine ?? "Backend exited with code \(code)."
         }

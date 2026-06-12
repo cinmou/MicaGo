@@ -48,13 +48,17 @@ class ContactIndex {
   final Map<String, String> _idByPhone;
 
   const ContactIndex._(
-      this._byEmail, this._byPhone, this._idByEmail, this._idByPhone);
+    this._byEmail,
+    this._byPhone,
+    this._idByEmail,
+    this._idByPhone,
+  );
 
   const ContactIndex.empty()
-      : _byEmail = const {},
-        _byPhone = const {},
-        _idByEmail = const {},
-        _idByPhone = const {};
+    : _byEmail = const {},
+      _byPhone = const {},
+      _idByEmail = const {},
+      _idByPhone = const {};
 
   int get contactCount => _byEmail.length + _byPhone.length;
   bool get isEmpty => _byEmail.isEmpty && _byPhone.isEmpty;

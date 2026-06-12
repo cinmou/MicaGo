@@ -19,6 +19,7 @@ func (db *DB) Migrate() error {
 			text TEXT,
 			subject TEXT,
 			service TEXT,
+			account TEXT,
 			date_created INTEGER,
 			date_read INTEGER,
 			date_delivered INTEGER,
@@ -91,6 +92,9 @@ func (db *DB) Migrate() error {
 	}
 
 	if err := db.ensureColumn("messages", "source_rowid", "INTEGER"); err != nil {
+		return err
+	}
+	if err := db.ensureColumn("messages", "account", "TEXT"); err != nil {
 		return err
 	}
 

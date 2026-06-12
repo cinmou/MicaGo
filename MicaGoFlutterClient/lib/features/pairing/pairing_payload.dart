@@ -121,11 +121,13 @@ PairingPayload parsePairingPayload(String raw) {
     decoded = jsonDecode(trimmed);
   } catch (_) {
     throw const PairingParseException(
-        "This QR code isn't a MicaGo pairing code.");
+      "This QR code isn't a MicaGo pairing code.",
+    );
   }
   if (decoded is! Map<String, dynamic>) {
     throw const PairingParseException(
-        "This QR code isn't a MicaGo pairing code.");
+      "This QR code isn't a MicaGo pairing code.",
+    );
   }
 
   final token = (decoded['token'] as String?)?.trim() ?? '';
@@ -145,7 +147,8 @@ PairingPayload _parseV1(Map<String, dynamic> decoded, String token) {
   final wsRaw = (decoded['websocketUrl'] as String?)?.trim();
   if (baseUrl.isEmpty) {
     throw const PairingParseException(
-        'The pairing code is missing the server URL.');
+      'The pairing code is missing the server URL.',
+    );
   }
   if (!isValidHttpUrl(baseUrl)) {
     throw const PairingParseException('The server URL must be http or https.');
@@ -178,12 +181,14 @@ PairingPayload _parseV2(Map<String, dynamic> decoded, String token) {
     if (baseUrl.isEmpty || !isValidHttpUrl(baseUrl)) continue;
     final ws = (e['wsUrl'] as String?)?.trim();
     _validateWs(ws);
-    parsed.add(PairingEndpoint(
-      kind: endpointKindFromWire(e['kind'] as String?),
-      baseUrl: baseUrl,
-      wsUrl: (ws?.isNotEmpty ?? false) ? ws : null,
-      priority: (e['priority'] as num?)?.toInt() ?? 1,
-    ));
+    parsed.add(
+      PairingEndpoint(
+        kind: endpointKindFromWire(e['kind'] as String?),
+        baseUrl: baseUrl,
+        wsUrl: (ws?.isNotEmpty ?? false) ? ws : null,
+        priority: (e['priority'] as num?)?.toInt() ?? 1,
+      ),
+    );
   }
 
   // Drop loopback/local from the user-facing candidate set; sort by priority.
@@ -191,7 +196,8 @@ PairingPayload _parseV2(Map<String, dynamic> decoded, String token) {
     ..sort((a, b) => a.priority.compareTo(b.priority));
   if (usable.isEmpty) {
     throw const PairingParseException(
-        'The pairing code has no usable LAN or public endpoint.');
+      'The pairing code has no usable LAN or public endpoint.',
+    );
   }
 
   // LAN-only must never carry a public endpoint.
@@ -200,7 +206,8 @@ PairingPayload _parseV2(Map<String, dynamic> decoded, String token) {
       : usable;
   if (endpoints.isEmpty) {
     throw const PairingParseException(
-        'The pairing code is LAN-only but has no LAN endpoint.');
+      'The pairing code is LAN-only but has no LAN endpoint.',
+    );
   }
 
   return PairingPayload(

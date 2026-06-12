@@ -21,10 +21,12 @@ Future<void> main() async {
   await theme.bootstrap();
   await messageDisplay.bootstrap();
 
-  runApp(MicaGoApp(
-    controller: controller,
-    contacts: contacts,
-    theme: theme,
-    messageDisplay: messageDisplay,
-  ));
+  runApp(
+    MicaGoApp(
+      controller: controller,
+      contacts: contacts,
+      theme: theme,
+      messageDisplay: messageDisplay,
+    ),
+  );
 }

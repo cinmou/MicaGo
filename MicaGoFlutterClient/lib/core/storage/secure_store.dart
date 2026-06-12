@@ -16,7 +16,7 @@ class SecureStore {
   // On Android, flutter_secure_storage (v10+) encrypts with custom ciphers by
   // default — no extra options needed. iOS/macOS use the Keychain.
   SecureStore({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   /// Loads the saved profile, or null if none / unreadable.
   Future<ConnectionProfile?> loadProfile() async {
@@ -35,10 +35,7 @@ class SecureStore {
   }
 
   Future<void> saveProfile(ConnectionProfile profile) async {
-    await _storage.write(
-      key: _profileKey,
-      value: jsonEncode(profile.toJson()),
-    );
+    await _storage.write(key: _profileKey, value: jsonEncode(profile.toJson()));
   }
 
   Future<void> clearProfile() async {

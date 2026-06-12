@@ -130,7 +130,35 @@ class AttachmentModel {
 class ReactionModel {
   final String type;
   final String? fromHandle;
-  const ReactionModel({required this.type, this.fromHandle});
+  final bool isFromMe;
+  final String? eventGuid;
+  final int? createdAt;
+
+  const ReactionModel({
+    required this.type,
+    this.fromHandle,
+    this.isFromMe = false,
+    this.eventGuid,
+    this.createdAt,
+  });
+
+  factory ReactionModel.fromJson(Map<String, dynamic> json) => ReactionModel(
+    type: (json['type'] as String?) ?? 'custom',
+    fromHandle: json['fromHandle'] as String? ?? json['sender'] as String?,
+    isFromMe: (json['isFromMe'] as bool?) ?? false,
+    eventGuid: json['eventGuid'] as String? ?? json['guid'] as String?,
+    createdAt: json['createdAt'] is num
+        ? (json['createdAt'] as num).toInt()
+        : null,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'type': type,
+    'fromHandle': fromHandle,
+    'isFromMe': isFromMe,
+    'eventGuid': eventGuid,
+    'createdAt': createdAt,
+  };
 }
 
 class MessageModel {
@@ -138,6 +166,7 @@ class MessageModel {
   final String? text;
   final String? subject;
   final String? service;
+  final String? serviceCategory; // server-normalized: imessage|sms|rcs|unknown
   final int? dateCreated; // Unix ms
   final int? dateRead;
   final int? dateDelivered;
@@ -190,6 +219,7 @@ class MessageModel {
     this.text,
     this.subject,
     this.service,
+    this.serviceCategory,
     this.dateCreated,
     this.dateRead,
     this.dateDelivered,
@@ -249,12 +279,14 @@ class MessageModel {
     int? dateEdited,
     bool? isRetracted,
     bool? isEdited,
+    List<ReactionModel>? reactions,
   }) {
     return MessageModel(
       guid: guid ?? this.guid,
       text: text ?? this.text,
       subject: subject,
       service: service,
+      serviceCategory: serviceCategory,
       dateCreated: dateCreated ?? this.dateCreated,
       dateRead: dateRead ?? this.dateRead,
       dateDelivered: dateDelivered ?? this.dateDelivered,
@@ -270,7 +302,7 @@ class MessageModel {
       renderRecommendation: renderRecommendation,
       isDebugOnly: isDebugOnly,
       unsupportedReason: unsupportedReason,
-      reactions: reactions,
+      reactions: reactions ?? this.reactions,
       replyToGuid: replyToGuid,
       chatGuid: chatGuid,
       associatedMessageType: associatedMessageType,
@@ -302,11 +334,18 @@ class MessageModel {
             .map(AttachmentModel.fromJson)
             .toList(growable: false) ??
         const <AttachmentModel>[];
+    final reactions =
+        (json['reactions'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(ReactionModel.fromJson)
+            .toList(growable: false) ??
+        const <ReactionModel>[];
     return MessageModel(
       guid: (json['guid'] as String?) ?? '',
       text: json['text'] as String?,
       subject: json['subject'] as String?,
       service: json['service'] as String?,
+      serviceCategory: json['serviceCategory'] as String?,
       dateCreated: asInt(json['dateCreated']),
       dateRead: asInt(json['dateRead']),
       dateDelivered: asInt(json['dateDelivered']),
@@ -324,6 +363,8 @@ class MessageModel {
       renderRecommendation: json['renderRecommendation'] as String?,
       isDebugOnly: (json['isDebugOnly'] as bool?) ?? false,
       unsupportedReason: json['unsupportedReason'] as String?,
+      reactions: reactions,
+      replyToGuid: json['replyToGuid'] as String?,
       chatGuid: json['chatGuid'] as String?,
       associatedMessageType: asInt(json['associatedMessageType']),
       associatedMessageGuid: json['associatedMessageGuid'] as String?,
@@ -353,6 +394,7 @@ class MessageModel {
     'text': text,
     'subject': subject,
     'service': service,
+    'serviceCategory': serviceCategory,
     'dateCreated': dateCreated,
     'dateRead': dateRead,
     'dateDelivered': dateDelivered,
@@ -369,6 +411,8 @@ class MessageModel {
     'renderRecommendation': renderRecommendation,
     'isDebugOnly': isDebugOnly,
     'unsupportedReason': unsupportedReason,
+    'reactions': reactions.map((r) => r.toJson()).toList(),
+    'replyToGuid': replyToGuid,
     'chatGuid': chatGuid ?? chatGuidFallback,
     'associatedMessageType': associatedMessageType,
     'associatedMessageGuid': associatedMessageGuid,

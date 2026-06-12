@@ -6,6 +6,7 @@ import '../../core/network/api_client.dart';
 import '../contacts/contacts_service.dart';
 import 'attachment_views.dart';
 import 'avatar.dart';
+import 'chat_service.dart';
 import '../settings/message_display_controller.dart';
 import 'diagnostics_store.dart';
 import 'message_debug_sheet.dart';
@@ -82,6 +83,8 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   }
 
   void _send() {
+    // Server-authoritative gate: only iMessage conversations are sendable.
+    if (!_effectiveService.canSend) return;
     final text = _composer.text.trim();
     if (text.isEmpty) return;
     _controller.send(text);
@@ -94,6 +97,22 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
       if (name != null && name.isNotEmpty) return name;
     }
     return widget.chat.title;
+  }
+
+  /// Server-authoritative service for this thread. The newest server message's
+  /// service wins (chat.db chat rows can carry a stale service_name); the chat
+  /// row is only the fallback when no message states one. Never guessed from
+  /// the GUID/handle/phone shape.
+  ChatService get _effectiveService {
+    final fromMessages = _controller.serviceFromMessages;
+    if (fromMessages != ChatService.unknown) return fromMessages;
+    return widget.chat.service;
+  }
+
+  /// Header badge text, e.g. "iMessage", "SMS · Read only", "Unknown · Read only".
+  String get _serviceBadge {
+    final s = _effectiveService;
+    return s.canSend ? s.label : '${s.label} · Read only';
   }
 
   @override
@@ -112,10 +131,14 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
             builder: (context, _) => _buildBody(context, api, contacts, prefs),
           ),
         ),
-        _Composer(
-          controller: _composer,
-          canSend: _composer.text.trim().isNotEmpty,
-          onSend: _send,
+        ListenableBuilder(
+          listenable: _controller,
+          builder: (context, _) => _Composer(
+            controller: _composer,
+            service: _effectiveService,
+            canSend: _composer.text.trim().isNotEmpty,
+            onSend: _send,
+          ),
         ),
       ],
     );
@@ -135,11 +158,13 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-              if (widget.chat.serviceName != null)
-                Text(
-                  widget.chat.serviceName!,
+              ListenableBuilder(
+                listenable: _controller,
+                builder: (context, _) => Text(
+                  _serviceBadge,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+              ),
             ],
           ),
         ),
@@ -281,11 +306,8 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
       },
       onDebug: () => showMessageDebugSheet(context, m.message),
     );
-    return m.message.hasAttachments
-        ? RepaintBoundary(child: bubble)
-        : bubble;
+    return m.message.hasAttachments ? RepaintBoundary(child: bubble) : bubble;
   }
-
 }
 
 class _DateSeparator extends StatelessWidget {
@@ -407,7 +429,8 @@ class _MessageBubble extends StatelessWidget {
                   imageIndex: a.canRenderInlineImage ? images.indexOf(a) : 0,
                 ),
               ),
-          if (bodyText != null) Text(bodyText, style: TextStyle(color: textColor)),
+          if (bodyText != null)
+            Text(bodyText, style: TextStyle(color: textColor)),
           if (effect != null)
             Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -572,8 +595,9 @@ class _SystemRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     // When consecutive system rows were merged, show a compact count.
-    final label =
-        mergedCount > 1 ? '$baseLabel · +${mergedCount - 1} more' : baseLabel;
+    final label = mergedCount > 1
+        ? '$baseLabel · +${mergedCount - 1} more'
+        : baseLabel;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 24),
       child: Center(
@@ -699,11 +723,13 @@ class _Footer extends StatelessWidget {
 
 class _Composer extends StatelessWidget {
   final TextEditingController controller;
+  final ChatService service;
   final bool canSend;
   final VoidCallback onSend;
 
   const _Composer({
     required this.controller,
+    required this.service,
     required this.canSend,
     required this.onSend,
   });
@@ -711,6 +737,37 @@ class _Composer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+
+    // Sending is only supported on iMessage (server AppleScript pipeline).
+    // SMS/RCS/unknown conversations are readable but read-only: show a label
+    // instead of an enabled composer, per the server-authoritative service.
+    if (!service.canSend) {
+      return SafeArea(
+        top: false,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: scheme.surface,
+            border: Border(top: BorderSide(color: scheme.outlineVariant)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.lock_outline, size: 14, color: scheme.outline),
+              const SizedBox(width: 6),
+              Text(
+                '${service.label} · Read only',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.outline),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return SafeArea(
       top: false,
       child: Container(

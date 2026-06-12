@@ -76,11 +76,12 @@ class _NoSelection extends StatelessWidget {
         children: [
           Icon(Icons.forum_outlined, size: 56, color: scheme.outline),
           const SizedBox(height: 12),
-          Text('Select a chat',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant)),
+          Text(
+            'Select a chat',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: scheme.onSurfaceVariant),
+          ),
         ],
       ),
     );

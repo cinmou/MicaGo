@@ -20,6 +20,7 @@ import (
 	"micagoserver/internal/relaydb"
 	micasend "micagoserver/internal/send"
 	"micagoserver/internal/store"
+	"micagoserver/internal/version"
 )
 
 type Options struct {
@@ -71,6 +72,11 @@ func (d *syncDiagnostics) recordRun(start time.Time, result relaydb.SyncResult) 
 	d.data.LastDurationMillis = completed - started
 	d.data.LastInsertedMessages = len(result.NewMessages)
 	d.data.LastSyncedMessages = result.MessagesSynced
+	d.data.LastRowsScanned = result.RowsScanned
+	d.data.LastRenderableRows = result.RenderableRowsInserted
+	d.data.LastHiddenDebugRows = result.DebugOnlyRowsHidden
+	d.data.LastPerChatLimit = result.PerChatLimit
+	d.data.LastBackfillMode = result.Mode
 	d.data.LastUpdatePassCount = len(result.Updates)
 	d.data.LastUpdatePassSeeded = result.UpdateSeeded
 	d.data.LastUnsentCount = len(result.Unsent)
@@ -118,6 +124,13 @@ func (d *syncDiagnostics) recordError(err error) {
 }
 
 func Run(options Options) error {
+	// C17: log the exact build identity first, so any log capture (including the
+	// companion's) proves which binary is actually running.
+	log.Printf("%s", version.String())
+	if exe, err := os.Executable(); err == nil {
+		log.Printf("executable: %s", exe)
+	}
+
 	cfg, err := config.Load(config.Options{
 		Addr:            options.Addr,
 		Token:           options.Token,
@@ -316,6 +329,28 @@ func Run(options Options) error {
 		dispatcher.SyncPublicURL(ctx, publicURL)
 	})
 
+	// C17: backend identity for /api/server/status — lets the companion (and
+	// curl) verify the launched binary is the intended build and that chat.db is
+	// opened without immutable=1.
+	executablePath := "unknown"
+	if exe, exeErr := os.Executable(); exeErr == nil {
+		executablePath = exe
+	}
+	chatDBOpenOptions := store.ChatDBOpenOptions()
+	backendStatus := &store.ServerBackendStatus{
+		Version:           version.Version,
+		Commit:            version.ResolvedCommit(),
+		BuildTime:         version.ResolvedBuildTime(),
+		GoVersion:         version.GoVersion(),
+		OSArch:            version.OSArch(),
+		ExecutablePath:    executablePath,
+		ConfigPath:        cfg.ConfigPath,
+		RelayDBPath:       cfg.RelayDBPath,
+		ChatDBPath:        cfg.DBPath,
+		ChatDBOpenOptions: chatDBOpenOptions,
+		ChatDBImmutable:   strings.Contains(chatDBOpenOptions, "immutable"),
+	}
+
 	statusDeps := httpapi.StatusDeps{
 		APIStore:     "relaydb",
 		ClientCount:  hub.ClientCount,
@@ -325,10 +360,27 @@ func Run(options Options) error {
 		SyncDiagnostics: func() store.ServerSyncDiagnostics {
 			return diagnostics.snapshot(pendingSends.PendingCount(), engine.PendingCount())
 		},
+		Backend: backendStatus,
+		SyncSettings: func(ctx context.Context) *store.ServerSyncSettings {
+			s, err := relay.GetSyncSettings(ctx)
+			if err != nil {
+				return nil
+			}
+			return &store.ServerSyncSettings{
+				BackfillMode:          s.BackfillMode,
+				RecentMessagesPerChat: s.RecentMessagesPerChat,
+				IncludeIMessage:       s.IncludeIMessage,
+				IncludeSMS:            s.IncludeSMS,
+				IncludeRCS:            s.IncludeRCS,
+				IncludeUnknown:        s.IncludeUnknown,
+				IncludeDebugInNormal:  s.IncludeDebugInNormal,
+			}
+		},
 	}
 
 	handlers := httpapi.NewHandlers(apiQueries, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
 	handlers.SetRuleService(relay)                   // v0.11.3 sync rules backed by relay.db
+	handlers.SetSyncSettingsService(relay)           // C13 service scope + backfill strategy
 	handlers.SetNotificationConfigurator(dispatcher) // v0.12 live FCM/Firebase config
 	handlers.SetSyncNow(func(ctx context.Context) (store.ServerSyncDiagnostics, error) {
 		if _, err := syncAndBroadcast(ctx, "client_request"); err != nil {

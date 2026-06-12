@@ -113,15 +113,15 @@ class ConnectionProfile {
   }
 
   Map<String, dynamic> toJson() => {
-        'baseUrl': baseUrl,
-        'token': token,
-        'wsUrlOverride': wsUrlOverride,
-        'lanBaseUrl': lanBaseUrl,
-        'lanWsUrl': lanWsUrl,
-        'publicBaseUrl': publicBaseUrl,
-        'publicWsUrl': publicWsUrl,
-        'mode': connectionModeToWire(mode),
-      };
+    'baseUrl': baseUrl,
+    'token': token,
+    'wsUrlOverride': wsUrlOverride,
+    'lanBaseUrl': lanBaseUrl,
+    'lanWsUrl': lanWsUrl,
+    'publicBaseUrl': publicBaseUrl,
+    'publicWsUrl': publicWsUrl,
+    'mode': connectionModeToWire(mode),
+  };
 
   factory ConnectionProfile.fromJson(Map<String, dynamic> json) {
     return ConnectionProfile(

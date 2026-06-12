@@ -60,24 +60,26 @@ class MessageDisplayPrefs {
   }
 
   Map<String, String> toMap() => {
-        'hideUnsupportedRows': hideUnsupportedRows ? '1' : '0',
-        'mergeConsecutiveSystem': mergeConsecutiveSystem ? '1' : '0',
-        'mergeTapbacks': mergeTapbacks ? '1' : '0',
-        'showEffectHints': showEffectHints ? '1' : '0',
-        'deliveryLabels': deliveryLabels.name,
-        'unsupportedDetails': unsupportedDetails.name,
-        'showDebugChats': showDebugChats ? '1' : '0',
-        'messagesPerChat': '$messagesPerChat',
-      };
+    'hideUnsupportedRows': hideUnsupportedRows ? '1' : '0',
+    'mergeConsecutiveSystem': mergeConsecutiveSystem ? '1' : '0',
+    'mergeTapbacks': mergeTapbacks ? '1' : '0',
+    'showEffectHints': showEffectHints ? '1' : '0',
+    'deliveryLabels': deliveryLabels.name,
+    'unsupportedDetails': unsupportedDetails.name,
+    'showDebugChats': showDebugChats ? '1' : '0',
+    'messagesPerChat': '$messagesPerChat',
+  };
 
   factory MessageDisplayPrefs.fromMap(Map<String, String?> m) {
     bool b(String k, bool d) => m[k] == null ? d : m[k] == '1';
     DeliveryLabelMode dl = DeliveryLabelMode.values.firstWhere(
-        (e) => e.name == m['deliveryLabels'],
-        orElse: () => DeliveryLabelMode.compact);
+      (e) => e.name == m['deliveryLabels'],
+      orElse: () => DeliveryLabelMode.compact,
+    );
     UnsupportedDetailMode ud = UnsupportedDetailMode.values.firstWhere(
-        (e) => e.name == m['unsupportedDetails'],
-        orElse: () => UnsupportedDetailMode.debugOnly);
+      (e) => e.name == m['unsupportedDetails'],
+      orElse: () => UnsupportedDetailMode.debugOnly,
+    );
     return MessageDisplayPrefs(
       hideUnsupportedRows: b('hideUnsupportedRows', false),
       mergeConsecutiveSystem: b('mergeConsecutiveSystem', true),
@@ -163,23 +165,27 @@ List<DisplayRow> buildDisplayRows(
           rows.isNotEmpty &&
           _isSystemKind(rows.last.kind)) {
         final prev = rows.removeLast();
-        rows.add(DisplayRow(
-          message: m, // most-recent system message is the row's anchor
-          kind: kind,
-          mergedSystemCount: prev.mergedSystemCount + 1,
-          mergedMessages: [...prev.mergedMessages, prev.message, m],
-        ));
+        rows.add(
+          DisplayRow(
+            message: m, // most-recent system message is the row's anchor
+            kind: kind,
+            mergedSystemCount: prev.mergedSystemCount + 1,
+            mergedMessages: [...prev.mergedMessages, prev.message, m],
+          ),
+        );
         continue;
       }
       rows.add(DisplayRow(message: m, kind: kind));
       continue;
     }
 
-    rows.add(DisplayRow(
-      message: m,
-      kind: kind,
-      reactions: reactionsByTarget[m.guid] ?? const [],
-    ));
+    rows.add(
+      DisplayRow(
+        message: m,
+        kind: kind,
+        reactions: reactionsByTarget[m.guid] ?? const [],
+      ),
+    );
   }
   return rows;
 }

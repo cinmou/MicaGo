@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_go/core/network/websocket_client.dart';
 import 'package:mica_go/features/chats/models/message_model.dart';
+import 'package:mica_go/features/chats/realtime_event_helpers.dart' as rt;
 import 'package:mica_go/features/chats/thread_controller.dart';
 
 MessageModel _local({
@@ -95,6 +96,47 @@ void main() {
       });
       expect(chatGuidFromWsEvent(event), 'chat-a');
       expect(messageFromWsEvent(event)?.guid, 'm1');
+    });
+
+    test(
+      'cursor prefers numeric source row id and falls back to date/guid',
+      () {
+        expect(
+          rt.realtimeCursorForEvent(
+            WsEvent('message:new', {
+              'sourceRowID': 42,
+              'guid': 'm1',
+              'dateCreated': 1000,
+            }),
+          ),
+          'n:42',
+        );
+        expect(
+          rt.realtimeCursorForEvent(
+            WsEvent('message:new', {'guid': 'm1', 'dateCreated': 1000}),
+          ),
+          'f:1000:m1',
+        );
+      },
+    );
+
+    test('reaction helper identifies target and add/remove semantics', () {
+      final add = MessageModel.fromJson({
+        'guid': 'r1',
+        'associatedMessageType': 2001,
+        'associatedMessageGuid': 'p:target',
+      });
+      final remove = MessageModel.fromJson({
+        'guid': 'r2',
+        'associatedMessageType': 3001,
+        'associatedMessageGuid': 'bp:target',
+      });
+      expect(rt.isReactionMessage(add), isTrue);
+      expect(rt.reactionTargetGuid(add), 'target');
+      expect(rt.reactionType(add), 'like');
+      expect(rt.isReactionAdd(add), isTrue);
+      expect(rt.isReactionAdd(remove), isFalse);
+      expect(rt.reactionTargetGuid(remove), 'target');
     });
   });
 }

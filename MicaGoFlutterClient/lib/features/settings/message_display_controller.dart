@@ -22,7 +22,8 @@ class MessageDisplayController extends ChangeNotifier {
         final decoded = jsonDecode(raw);
         if (decoded is Map) {
           prefs = MessageDisplayPrefs.fromMap(
-              decoded.map((k, v) => MapEntry('$k', v?.toString())));
+            decoded.map((k, v) => MapEntry('$k', v?.toString())),
+          );
         }
       } catch (_) {
         // Corrupt value → keep defaults.

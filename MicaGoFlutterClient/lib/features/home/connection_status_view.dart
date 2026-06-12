@@ -50,7 +50,7 @@ class _ConnectionStatusViewState extends State<ConnectionStatusView> {
             onRefresh: _refreshUrls,
           ),
           const SizedBox(height: 12),
-          DebugLogPanel(ws: app.ws),
+          DebugLogPanel(ws: app.ws, app: app),
         ],
       ),
     );
@@ -138,8 +138,10 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Connection diagnostics',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Connection diagnostics',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 12),
             _kv(context, 'Server', profile?.baseUrl ?? '—'),
             const SizedBox(height: 6),
@@ -158,9 +160,9 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
                 return Row(
                   children: [
                     const SizedBox(
-                        width: 88,
-                        child: Text('WebSocket',
-                            style: TextStyle(fontSize: 13))),
+                      width: 88,
+                      child: Text('WebSocket', style: TextStyle(fontSize: 13)),
+                    ),
                     _WsStatusChip(status: ws.status),
                   ],
                 );
@@ -172,10 +174,9 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .errorContainer
-                      .withValues(alpha: 0.4),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.errorContainer.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -186,22 +187,23 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
                       '${_failStep != null ? ' at ${_failStep == 'auth' ? 'auth check' : 'health check'}' : ''}'
                       '${_failStatus != null ? ' · HTTP $_failStatus' : ''}',
                       style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 12),
+                        color: Theme.of(context).colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                      ),
                     ),
                     const SizedBox(height: 4),
-                    Text(_lastError!,
-                        style: const TextStyle(fontSize: 12)),
+                    Text(_lastError!, style: const TextStyle(fontSize: 12)),
                     if (_failUrl != null) ...[
                       const SizedBox(height: 4),
-                      Text('Requested: $_failUrl',
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontFamily: 'monospace',
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant)),
+                      Text(
+                        'Requested: $_failUrl',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -216,7 +218,8 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
                       ? const SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.health_and_safety_outlined, size: 18),
                   label: const Text('Check now'),
                 ),
@@ -241,15 +244,17 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
     final (IconData icon, Color color, String text) = ok == null
         ? (Icons.help_outline, scheme.outline, 'Checking…')
         : ok
-            ? (Icons.check_circle, Colors.green, 'OK')
-            : (Icons.cancel, scheme.error, 'Failed');
+        ? (Icons.check_circle, Colors.green, 'OK')
+        : (Icons.cancel, scheme.error, 'Failed');
     return Row(
       children: [
         SizedBox(
-            width: 88,
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 13, color: scheme.onSurfaceVariant))),
+          width: 88,
+          child: Text(
+            label,
+            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+          ),
+        ),
         Icon(icon, size: 16, color: color),
         const SizedBox(width: 6),
         Text(text, style: TextStyle(color: color, fontSize: 13)),
@@ -262,28 +267,36 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
     final shown = token.isEmpty
         ? '—'
         : _revealToken
-            ? token
-            : '${token.length <= 4 ? token : token.substring(0, 4)}••••••••';
+        ? token
+        : '${token.length <= 4 ? token : token.substring(0, 4)}••••••••';
     return Row(
       children: [
         SizedBox(
-            width: 88,
-            child: Text('Token',
-                style: TextStyle(
-                    fontSize: 13, color: scheme.onSurfaceVariant))),
+          width: 88,
+          child: Text(
+            'Token',
+            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+          ),
+        ),
         Expanded(
-          child: Text(shown,
-              style: const TextStyle(fontFamily: 'monospace'),
-              maxLines: 1, overflow: TextOverflow.ellipsis),
+          child: Text(
+            shown,
+            style: const TextStyle(fontFamily: 'monospace'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         IconButton(
           tooltip: _revealToken ? 'Hide' : 'Reveal',
           visualDensity: VisualDensity.compact,
-          icon: Icon(_revealToken
-              ? Icons.visibility_off_outlined
-              : Icons.visibility_outlined),
-          onPressed:
-              token.isEmpty ? null : () => setState(() => _revealToken = !_revealToken),
+          icon: Icon(
+            _revealToken
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
+          ),
+          onPressed: token.isEmpty
+              ? null
+              : () => setState(() => _revealToken = !_revealToken),
         ),
       ],
     );
@@ -296,11 +309,12 @@ class _DiagnosticsCardState extends State<_DiagnosticsCard> {
       children: [
         SizedBox(
           width: 88,
-          child: Text(k,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant)),
+          child: Text(
+            k,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+          ),
         ),
         Expanded(child: SelectableText(v)),
       ],
@@ -319,7 +333,11 @@ class _WsStatusChip extends StatelessWidget {
       WsStatus.connected => (Colors.green, 'Connected', Icons.bolt),
       WsStatus.connecting => (scheme.tertiary, 'Connecting…', Icons.sync),
       WsStatus.failed => (scheme.error, 'Failed', Icons.error_outline),
-      WsStatus.disconnected => (scheme.outline, 'Disconnected', Icons.power_off),
+      WsStatus.disconnected => (
+        scheme.outline,
+        'Disconnected',
+        Icons.power_off,
+      ),
       WsStatus.idle => (scheme.outline, 'Idle', Icons.circle_outlined),
     };
     return Chip(
@@ -352,8 +370,10 @@ class _EndpointSummaryCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Text('Server endpoints',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Server endpoints',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const Spacer(),
                 if (loading)
                   const SizedBox(
@@ -371,8 +391,10 @@ class _EndpointSummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             if (urlsError != null)
-              Text(urlsError!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error))
+              Text(
+                urlsError!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              )
             else if (urls == null && !loading)
               const Text('Pull to refresh to load /api/server/urls.')
             else if (urls != null) ...[
@@ -381,11 +403,17 @@ class _EndpointSummaryCard extends StatelessWidget {
               for (final e in urls.lan)
                 _row(context, e.label, e.baseUrl, e.reachableLabel),
               if (urls.public?.enabled == true)
-                _row(context, 'Public', urls.public!.baseUrl,
-                    urls.public!.reachableLabel)
+                _row(
+                  context,
+                  'Public',
+                  urls.public!.baseUrl,
+                  urls.public!.reachableLabel,
+                )
               else
-                Text('Public endpoint: not configured',
-                    style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  'Public endpoint: not configured',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
             ],
           ],
         ),
@@ -400,9 +428,9 @@ class _EndpointSummaryCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-              width: 64,
-              child:
-                  Text(label, style: Theme.of(context).textTheme.labelLarge)),
+            width: 64,
+            child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+          ),
           Expanded(child: SelectableText(url)),
           const SizedBox(width: 8),
           Text(badge, style: Theme.of(context).textTheme.bodySmall),

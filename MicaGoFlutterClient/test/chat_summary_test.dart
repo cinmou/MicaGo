@@ -20,8 +20,11 @@ void main() {
     });
 
     test('treats a display name as a group', () {
-      final c = ChatSummary.fromJson(
-          {'guid': 'g', 'displayName': 'Family', 'serviceName': 'iMessage'});
+      final c = ChatSummary.fromJson({
+        'guid': 'g',
+        'displayName': 'Family',
+        'serviceName': 'iMessage',
+      });
       expect(c.isGroup, isTrue);
       expect(c.title, 'Family');
       expect(c.initials, 'F');
@@ -60,8 +63,10 @@ void main() {
     });
 
     test('initials for a phone-like identifier is a generic glyph', () {
-      final c = ChatSummary.fromJson(
-          {'guid': 'g', 'chatIdentifier': '+1 (555) 123-4567'});
+      final c = ChatSummary.fromJson({
+        'guid': 'g',
+        'chatIdentifier': '+1 (555) 123-4567',
+      });
       expect(c.initials, '#');
     });
   });

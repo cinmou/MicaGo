@@ -6,6 +6,7 @@ import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/websocket_client.dart';
 import 'models/chat_summary.dart';
+import 'realtime_event_helpers.dart' as rt;
 
 enum ChatListState { idle, loading, loaded, empty, error }
 
@@ -112,16 +113,93 @@ class ChatListController extends ChangeNotifier {
     switch (e.type) {
       case 'message:new':
       case 'message:update':
+        unawaited(_patchMessageEvent(e));
+        break;
       case 'message:unsend':
-        _reloadDebounce?.cancel();
-        _reloadDebounce = Timer(const Duration(milliseconds: 150), () {
-          load(showSpinner: false);
-        });
+        unawaited(_patchUnsendEvent(e));
         break;
       default:
         break;
     }
   }
+
+  Future<void> _patchMessageEvent(WsEvent e) async {
+    final msg = rt.messageFromWsEvent(e);
+    final chatGuid = msg?.chatGuid;
+    if (msg == null || chatGuid == null || chatGuid.isEmpty) {
+      await app.recordRealtimeFallback(
+        missingChatGuid: msg != null,
+        malformed: msg == null,
+        chatListReload: true,
+      );
+      _scheduleServerReload();
+      return;
+    }
+    try {
+      if (rt.isReactionMessage(msg)) {
+        final ok = await app.cache.applyReactionEvent(chatGuid, msg);
+        if (!ok) {
+          await app.recordRealtimeFallback(chatListReload: true);
+          _scheduleServerReload();
+          return;
+        }
+        await app.markRealtimeEventApplied(e);
+        return;
+      }
+
+      await app.cache.upsertMessage(chatGuid, msg);
+      final known = await app.cache.bumpChatWithMessage(msg);
+      if (!known) {
+        await app.recordRealtimeFallback(chatListReload: true);
+        _scheduleServerReload();
+        return;
+      }
+      chats = await app.cache.listChats(includeDebug: includeDebug);
+      state = chats.isEmpty ? ChatListState.empty : ChatListState.loaded;
+      error = null;
+      await app.markRealtimeEventApplied(e, localDbWrites: 2);
+      notifyListeners();
+    } catch (_) {
+      await app.recordRealtimeFallback(chatListReload: true);
+      _scheduleServerReload();
+    }
+  }
+
+  Future<void> _patchUnsendEvent(WsEvent e) async {
+    final chatGuid = rt.chatGuidFromWsEvent(e);
+    final guid = e.data['guid'] as String?;
+    if (chatGuid == null || guid == null) {
+      await app.recordRealtimeFallback(
+        missingChatGuid: chatGuid == null,
+        malformed: guid == null,
+        chatListReload: true,
+      );
+      _scheduleServerReload();
+      return;
+    }
+    try {
+      await app.cache.applyUnsend(
+        chatGuid,
+        guid,
+        _asInt(e.data['dateRetracted']),
+      );
+      chats = await app.cache.listChats(includeDebug: includeDebug);
+      await app.markRealtimeEventApplied(e);
+      notifyListeners();
+    } catch (_) {
+      await app.recordRealtimeFallback(chatListReload: true);
+      _scheduleServerReload();
+    }
+  }
+
+  void _scheduleServerReload() {
+    _reloadDebounce?.cancel();
+    _reloadDebounce = Timer(const Duration(milliseconds: 150), () {
+      load(showSpinner: false);
+    });
+  }
+
+  int? _asInt(Object? value) => value is num ? value.toInt() : null;
 
   @override
   void dispose() {

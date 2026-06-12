@@ -814,6 +814,11 @@ private struct BinaryPathRow: View {
             Text(resolvedDescription)
                 .font(.caption2).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
+            if let warning = backend.staleBinaryWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.top, 4)
     }
@@ -1069,6 +1074,70 @@ private struct AdvancedPage: View {
             Text("Notification provider configuration and Firebase self-host (FCM) are planned for v0.12.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+
+        BackendIdentityCard()
+    }
+}
+
+/// C17: proves WHICH backend binary is running — version/commit/build time,
+/// executable + DB paths, and the chat.db open options (immutable must be
+/// absent). Warns loudly when the launched or selected binary is stale.
+private struct BackendIdentityCard: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+
+    var body: some View {
+        SectionCard(title: "Backend Build") {
+            if let warning = backend.staleBinaryWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let b = model.status?.backend {
+                LabeledRow(label: "Running version", value: "\(b.version) (\(b.commit))")
+                LabeledRow(label: "Built", value: b.buildTime)
+                LabeledRow(label: "Toolchain", value: "\(b.goVersion) \(b.osArch)")
+                LabeledRow(label: "Executable", value: b.executablePath)
+                LabeledRow(label: "Relay DB", value: b.relayDbPath)
+                LabeledRow(label: "chat.db", value: b.chatDbPath)
+                LabeledRow(label: "chat.db open", value: b.chatDbOpenOptions)
+                if b.chatDbImmutable {
+                    Label("Running backend opens chat.db with immutable=1 — this build predates the malformed-DB fix. Restart with the latest backend.",
+                          systemImage: "exclamationmark.octagon.fill")
+                        .font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let s = model.status?.sync.settings {
+                    LabeledRow(label: "Backfill", value: "\(s.backfillMode) (\(s.recentMessagesPerChat)/chat)")
+                }
+            } else if model.status != nil {
+                Label("The running server does not report its build identity — it predates v0.15 and is missing recent sync fixes. Restart with the latest backend.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Server not reachable — start it to see the running build.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if let line = backend.launchedVersionLine {
+                LabeledRow(label: "Selected binary", value: line)
+            }
+            HStack(spacing: 8) {
+                Button("Restart with Latest Backend") {
+                    backend.restartWithLatestBackend()
+                }
+                .controlSize(.small)
+                Button("Open Backend Location") {
+                    backend.revealBinaryInFinder()
+                }
+                .controlSize(.small)
+                Button("Check Freshness") {
+                    backend.refreshBinaryFreshness()
+                }
+                .controlSize(.small)
+            }
+            .padding(.top, 2)
         }
     }
 }

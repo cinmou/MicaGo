@@ -9,7 +9,43 @@ import (
 	"micagoserver/internal/store"
 )
 
+func serviceNamesForSettings(settings SyncSettings) []string {
+	var out []string
+	if settings.IncludeIMessage {
+		out = append(out, "iMessage", "iMessageLite")
+	}
+	if settings.IncludeSMS {
+		out = append(out, "SMS", "Text", "Plain")
+	}
+	if settings.IncludeRCS {
+		out = append(out, "RCS")
+	}
+	if len(out) == 0 {
+		return []string{"iMessage"}
+	}
+	return out
+}
+
+func servicePlaceholders(settings SyncSettings) string {
+	names := serviceNamesForSettings(settings)
+	return strings.TrimRight(strings.Repeat("?,", len(names)), ",")
+}
+
+func serviceArgs(settings SyncSettings) []any {
+	names := serviceNamesForSettings(settings)
+	args := make([]any, len(names))
+	for i, name := range names {
+		args[i] = name
+	}
+	return args
+}
+
 func (db *DB) ListChats(ctx context.Context, limit, offset int, withArchived bool, service string, includeDebug bool) ([]store.ChatJSON, error) {
+	settings, err := db.GetSyncSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	effectiveDebug := includeDebug || settings.IncludeDebugInNormal
 	// Per-chat renderable summary via correlated subqueries over the persisted
 	// is_debug_only flag. Chats whose only content is debug-only/noise are
 	// flagged and (by default) hidden from the normal client list.
@@ -24,7 +60,13 @@ WHERE (? = 1 OR c.is_archived = 0)
   AND (? = 'all' OR c.service_name = ?)
 ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 `
-	rows, err := db.sqlDB.QueryContext(ctx, query, boolToInt(withArchived), service, service)
+	var rows *sql.Rows
+	if service == "unknown" {
+		query = strings.Replace(query, "AND (? = 'all' OR c.service_name = ?)", "AND c.service_name NOT IN ('iMessage','iMessageLite','SMS','Text','Plain','RCS')", 1)
+		rows, err = db.sqlDB.QueryContext(ctx, query, boolToInt(withArchived))
+	} else {
+		rows, err = db.sqlDB.QueryContext(ctx, query, boolToInt(withArchived), service, service)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +92,7 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 			return nil, err
 		}
 		chat.HasRenderableMessages = renderable > 0
+		chat.ServiceCategory = ServiceCategory(chat.ServiceName)
 		chat.LatestRenderableAt = latestAt
 		if latestText != nil {
 			if t := strings.TrimSpace(*latestText); t != "" {
@@ -74,7 +117,10 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 	if !includeDebug {
 		filtered = filtered[:0]
 		for _, c := range all {
-			if c.HasRenderableMessages {
+			if !settings.IncludesCategory(c.ServiceCategory) {
+				continue
+			}
+			if effectiveDebug || c.HasRenderableMessages {
 				filtered = append(filtered, c)
 			}
 		}
@@ -95,7 +141,7 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 // the BlueBubbles-compatible semantic columns and LEFT JOINs message_state so
 // retracted/edited/error (maintained by the lookback update pass) are surfaced.
 const relayMessageSelect = `
-SELECT m.guid, m.text, m.subject, m.service, m.date_created, m.date_read, m.date_delivered,
+SELECT m.guid, m.text, m.subject, m.service, m.account, m.date_created, m.date_read, m.date_delivered,
        m.is_from_me, m.is_read, m.is_delivered, m.handle_id, m.handle_service, m.cache_has_attachments,
        m.chat_guid, COALESCE(m.has_attributed_body, 0),
        m.associated_message_type, m.associated_message_guid, m.thread_originator_guid,
@@ -110,13 +156,28 @@ LEFT JOIN message_state AS ms ON ms.guid = m.guid
 // noise rows are excluded in SQL (before LIMIT/OFFSET, so pagination is stable).
 // includeDebug=true returns the raw timeline for the Message Inspector.
 func (db *DB) ListRecentMessages(ctx context.Context, limit, offset int, service string, includeDebug bool) ([]store.MessageJSON, error) {
+	settings, err := db.GetSyncSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	effectiveDebug := includeDebug || settings.IncludeDebugInNormal
 	query := relayMessageSelect + `
 WHERE (? = 'all' OR m.service = ?)
+  AND (? = 1 OR m.service IN (` + servicePlaceholders(settings) + `))
   AND (? = 1 OR COALESCE(m.is_debug_only, 0) = 0)
 ORDER BY m.source_rowid DESC, m.date_created DESC
 LIMIT ? OFFSET ?;
 `
-	rows, err := db.sqlDB.QueryContext(ctx, query, service, service, boolToInt(includeDebug), limit, offset)
+	args := []any{service, service, boolToInt(includeDebug)}
+	args = append(args, serviceArgs(settings)...)
+	args = append(args, boolToInt(effectiveDebug), limit, offset)
+	if service == "unknown" {
+		query = strings.Replace(query, "(? = 'all' OR m.service = ?)", "m.service NOT IN ('iMessage','iMessageLite','SMS','Text','Plain','RCS')", 1)
+		args = []any{boolToInt(includeDebug)}
+		args = append(args, serviceArgs(settings)...)
+		args = append(args, boolToInt(effectiveDebug), limit, offset)
+	}
+	rows, err := db.sqlDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -155,13 +216,22 @@ func (db *DB) GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, er
 // renderRecommendation=merge so the client folds tapbacks onto their target.
 // includeDebug=true returns the raw thread for the Message Inspector.
 func (db *DB) ListChatMessages(ctx context.Context, guid string, limit, offset int, includeDebug bool) ([]store.MessageJSON, error) {
+	settings, err := db.GetSyncSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	effectiveDebug := includeDebug || settings.IncludeDebugInNormal
 	query := relayMessageSelect + `
 WHERE m.chat_guid = ?
+  AND (? = 1 OR m.service IN (` + servicePlaceholders(settings) + `))
   AND (? = 1 OR COALESCE(m.is_debug_only, 0) = 0)
 ORDER BY m.source_rowid DESC, m.date_created DESC
 LIMIT ? OFFSET ?;
 `
-	rows, err := db.sqlDB.QueryContext(ctx, query, guid, boolToInt(includeDebug), limit, offset)
+	args := []any{guid, boolToInt(includeDebug)}
+	args = append(args, serviceArgs(settings)...)
+	args = append(args, boolToInt(effectiveDebug), limit, offset)
+	rows, err := db.sqlDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -278,6 +348,7 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 			&message.Text,
 			&message.Subject,
 			&message.Service,
+			&message.Account,
 			&message.DateCreated,
 			&message.DateRead,
 			&message.DateDelivered,
@@ -309,6 +380,7 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 		message.IsRead = isRead != 0
 		message.IsDelivered = isDelivered != 0
 		message.CacheHasAttachments = hasAttachments != 0
+		message.ServiceCategory = ServiceCategory(message.Service)
 		message.HasAttributedBody = hasAttributedBody != 0
 		message.PayloadDataPresent = payloadPresent.Valid && payloadPresent.Int64 != 0
 		message.IsRetracted = message.DateRetracted != nil

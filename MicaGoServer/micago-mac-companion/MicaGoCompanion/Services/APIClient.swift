@@ -112,6 +112,23 @@ struct APIClient {
         return try JSONDecoder().decode(SyncNowResponse.self, from: data).diagnostics
     }
 
+    func syncSettings() async throws -> SyncSettings {
+        let (data, response) = try await Self.session().data(for: request("api/sync/settings"))
+        try Self.validate(response)
+        return try JSONDecoder().decode(SyncSettings.self, from: data)
+    }
+
+    @discardableResult
+    func putSyncSettings(_ settings: SyncSettings) async throws -> SyncSettingsResponse {
+        let data = try JSONEncoder().encode(settings)
+        var req = request("api/sync/settings", method: "PUT")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        let (body, response) = try await Self.session().data(for: req)
+        try Self.validate(response)
+        return try JSONDecoder().decode(SyncSettingsResponse.self, from: body)
+    }
+
     // MARK: - Sync control (v0.11.3)
 
     func syncRules() async throws -> SyncRulesResponse {

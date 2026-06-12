@@ -40,14 +40,18 @@ class _MessageDebugSheet extends StatelessWidget {
               children: [
                 const Icon(Icons.bug_report_outlined),
                 const SizedBox(width: 8),
-                Text('Message Debug',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Message Debug',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const Spacer(),
                 FilledButton.tonalIcon(
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: json));
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Debug JSON copied (token redacted)')),
+                      const SnackBar(
+                        content: Text('Debug JSON copied (token redacted)'),
+                      ),
                     );
                   },
                   icon: const Icon(Icons.copy, size: 18),
@@ -58,17 +62,21 @@ class _MessageDebugSheet extends StatelessWidget {
             const SizedBox(height: 8),
             Chip(
               label: Text(
-                  '${cls.kind.name} · ${unsupportedReasonLabel(cls.reason)}'),
+                '${cls.kind.name} · ${unsupportedReasonLabel(cls.reason)}',
+              ),
               side: BorderSide(
-                  color: cls.isUnsupported ? scheme.error : scheme.outline),
+                color: cls.isUnsupported ? scheme.error : scheme.outline,
+              ),
               visualDensity: VisualDensity.compact,
             ),
             const SizedBox(height: 8),
             for (final entry in map.entries)
               if (entry.key != 'raw') _kv(context, entry.key, entry.value),
             const Divider(height: 24),
-            Text('Raw payload (redacted)',
-                style: Theme.of(context).textTheme.labelLarge),
+            Text(
+              'Raw payload (redacted)',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
             const SizedBox(height: 6),
             Container(
               width: double.infinity,
@@ -98,15 +106,18 @@ class _MessageDebugSheet extends StatelessWidget {
         children: [
           SizedBox(
             width: 140,
-            child: Text(k,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant)),
+            child: Text(
+              k,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
           ),
           Expanded(
-            child: SelectableText('${v ?? '—'}',
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            child: SelectableText(
+              '${v ?? '—'}',
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
           ),
         ],
       ),

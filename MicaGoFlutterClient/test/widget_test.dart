@@ -52,8 +52,9 @@ class _MemoryStore implements SecureStore {
 }
 
 void main() {
-  testWidgets('connection screen shows server, token, and ws fields',
-      (tester) async {
+  testWidgets('connection screen shows server, token, and ws fields', (
+    tester,
+  ) async {
     final controller = AppController(store: _MemoryStore());
 
     await tester.pumpWidget(

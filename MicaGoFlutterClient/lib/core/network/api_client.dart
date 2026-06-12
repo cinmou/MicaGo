@@ -141,7 +141,7 @@ class ApiClient {
   /// `POST /api/sync/now` — asks the server to run a lightweight foreground
   /// catch-up sync. The response is intentionally ignored by most callers; WS
   /// events and subsequent list/thread fetches carry the user-facing data.
-  Future<void> syncNow() async {
+  Future<int> syncNow() async {
     final res = await _send(
       () => _http
           .post(_uri('/api/sync/now'), headers: _authHeaders)
@@ -150,6 +150,16 @@ class ApiClient {
     if (res.statusCode != 200) {
       throw _errorFrom(res);
     }
+    final body = _decodeObject(res);
+    final diagnostics = body['diagnostics'];
+    if (diagnostics is Map<String, dynamic>) {
+      int asInt(String key) =>
+          diagnostics[key] is num ? (diagnostics[key] as num).toInt() : 0;
+      return asInt('lastInsertedMessages') +
+          asInt('lastUpdatePassCount') +
+          asInt('lastUnsentCount');
+    }
+    return 0;
   }
 
   /// `GET /api/chats` — the chat list. Returns the `data` array decoded into

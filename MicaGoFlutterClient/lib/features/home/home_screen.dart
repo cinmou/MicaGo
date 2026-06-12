@@ -122,7 +122,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                 appBar: AppBar(title: Text(_destinations[_index].label)),
                 body: IndexedStack(
                   index: _index,
-                  children: [for (var i = 0; i < _destinations.length; i++) _body(i)],
+                  children: [
+                    for (var i = 0; i < _destinations.length; i++) _body(i),
+                  ],
                 ),
               ),
             ),

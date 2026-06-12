@@ -24,8 +24,10 @@ class DiagnosticsPage extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text('Latest open thread',
-                style: Theme.of(context).textTheme.titleSmall),
+            Text(
+              'Latest open thread',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
             const SizedBox(height: 8),
             Card(
               child: Column(
@@ -39,37 +41,51 @@ class DiagnosticsPage extends StatelessWidget {
                   _row(context, 'Service events', '${d.service}'),
                   _row(context, 'Reactions', '${d.reaction}'),
                   const Divider(height: 1),
-                  _row(context, 'Unsupported', '${d.unsupported}',
-                      emphasize: d.unsupported > 0),
+                  _row(
+                    context,
+                    'Unsupported',
+                    '${d.unsupported}',
+                    emphasize: d.unsupported > 0,
+                  ),
                 ],
               ),
             ),
             if (d.reasons.isNotEmpty) ...[
               const SizedBox(height: 20),
-              Text('Why unsupported',
-                  style: Theme.of(context).textTheme.titleSmall),
+              Text(
+                'Why unsupported',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
               const SizedBox(height: 8),
               Card(
                 child: Column(
                   children: [
                     for (final e in d.reasons.entries)
-                      _row(context, unsupportedReasonLabel(e.key), '${e.value}'),
+                      _row(
+                        context,
+                        unsupportedReasonLabel(e.key),
+                        '${e.value}',
+                      ),
                   ],
                 ),
               ),
             ],
             if (d.lastUnsupported != null) ...[
               const SizedBox(height: 20),
-              Text('Last unsupported (redacted)',
-                  style: Theme.of(context).textTheme.titleSmall),
+              Text(
+                'Last unsupported (redacted)',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
               const SizedBox(height: 8),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: SelectableText(
                     messageDebugJson(d.lastUnsupported!),
-                    style:
-                        const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    ),
                   ),
                 ),
               ),
@@ -78,10 +94,12 @@ class DiagnosticsPage extends StatelessWidget {
             FilledButton.tonalIcon(
               onPressed: () {
                 Clipboard.setData(
-                    ClipboardData(text: threadDiagnosticsReport(d)));
+                  ClipboardData(text: threadDiagnosticsReport(d)),
+                );
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                      content: Text('Debug report copied (token redacted)')),
+                    content: Text('Debug report copied (token redacted)'),
+                  ),
                 );
               },
               icon: const Icon(Icons.copy),
@@ -101,8 +119,12 @@ class DiagnosticsPage extends StatelessWidget {
     );
   }
 
-  Widget _row(BuildContext context, String label, String value,
-      {bool emphasize = false}) {
+  Widget _row(
+    BuildContext context,
+    String label,
+    String value, {
+    bool emphasize = false,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       dense: true,
@@ -110,9 +132,9 @@ class DiagnosticsPage extends StatelessWidget {
       trailing: Text(
         value,
         style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: emphasize ? scheme.error : null,
-              fontWeight: FontWeight.w600,
-            ),
+          color: emphasize ? scheme.error : null,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -129,8 +151,11 @@ class _Empty extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.insights_outlined,
-                size: 48, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            Icon(
+              Icons.insights_outlined,
+              size: 48,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
             const SizedBox(height: 12),
             const Text(
               'No diagnostics yet.\nOpen a chat thread to analyze its messages.',

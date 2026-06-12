@@ -84,8 +84,11 @@ class PairingController extends ChangeNotifier {
           probe.close();
         }
       },
-      runInitialSync: (profile, onProgress) =>
-          app.backfill(profile, perChat: messagesPerChat, onProgress: onProgress),
+      runInitialSync: (profile, onProgress) => app.backfill(
+        profile,
+        perChat: messagesPerChat,
+        onProgress: onProgress,
+      ),
     );
 
     onboarding.addListener(() {

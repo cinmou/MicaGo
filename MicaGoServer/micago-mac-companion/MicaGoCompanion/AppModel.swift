@@ -67,6 +67,7 @@ final class AppModel: ObservableObject {
     @Published var chatsList: [ChatSummary] = []
     @Published var recentCount: Int = 50
     @Published var syncBusy = false
+    @Published var syncSettings: SyncSettings = .defaults
 
     // C11 live sync monitor
     @Published var syncNowBusy = false
@@ -98,7 +99,9 @@ final class AppModel: ObservableObject {
         lastTrigger: \(d.lastTriggerReason ?? "—")
         lastStartedAt: \(ms(d.lastStartedAt))  lastCompletedAt: \(ms(d.lastCompletedAt))
         lastDurationMs: \(ms(d.lastDurationMillis))
-        inserted: \(d.lastInsertedMessages ?? 0)  synced: \(d.lastSyncedMessages ?? 0)  updates: \(d.lastUpdatePassCount ?? 0)  unsent: \(d.lastUnsentCount ?? 0)
+        mode: \(d.lastBackfillMode ?? "—")  perChatLimit: \(d.lastPerChatLimit ?? 0)
+        inserted: \(d.lastInsertedMessages ?? 0)  synced: \(d.lastSyncedMessages ?? 0)  rowsScanned: \(d.lastRowsScanned ?? 0)
+        renderable: \(d.lastRenderableRows ?? 0)  hiddenDebug: \(d.lastHiddenDebugRows ?? 0)  updates: \(d.lastUpdatePassCount ?? 0)  unsent: \(d.lastUnsentCount ?? 0)
         scannedRowId: \(ms(d.lastScannedMessageRowId))
         chatDbMtime: \(ms(d.lastChatDbMtime))  walMtime: \(ms(d.lastWalMtime))  shmMtime: \(ms(d.lastShmMtime))
         pendingTriggers: \(d.pendingTriggerCount ?? 0)  lockRetries: \(d.lockRetryCount ?? 0)
@@ -350,9 +353,11 @@ final class AppModel: ObservableObject {
         let client = APIClient(baseURL: baseURL, token: token)
         do {
             async let rules = client.syncRules()
+            async let settings = client.syncSettings()
             async let chats = client.chats()
             async let recent = client.recentMessages(limit: recentCount)
             syncRules = try await rules
+            syncSettings = try await settings
             chatsList = try await chats
             recentMessages = try await recent
             lastError = nil
@@ -406,6 +411,22 @@ final class AppModel: ObservableObject {
             lastError = nil
         } catch {
             lastError = "Save policy: \(error.localizedDescription)"
+        }
+    }
+
+    func saveSyncSettings(_ settings: SyncSettings) async {
+        guard let baseURL else { return }
+        syncBusy = true
+        defer { syncBusy = false }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            let resp = try await client.putSyncSettings(settings)
+            syncSettings = resp.settings
+            if let d = resp.diagnostics { lastSyncDiagnostics = d }
+            lastError = nil
+            await loadSyncControl()
+        } catch {
+            lastError = "Save sync settings: \(error.localizedDescription)"
         }
     }
 

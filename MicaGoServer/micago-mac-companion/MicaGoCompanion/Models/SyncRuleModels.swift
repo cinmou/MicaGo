@@ -20,6 +20,29 @@ struct SyncRulesResponse: Codable {
     var rules: [SyncRule]
 }
 
+struct SyncSettings: Codable, Equatable {
+    var backfillMode: String
+    var recentMessagesPerChat: Int
+    var includeIMessage: Bool
+    var includeSMS: Bool
+    var includeRCS: Bool
+    var includeUnknown: Bool
+    var includeDebugInNormal: Bool
+
+    static let defaults = SyncSettings(backfillMode: "hybrid",
+                                       recentMessagesPerChat: 100,
+                                       includeIMessage: true,
+                                       includeSMS: true,
+                                       includeRCS: true,
+                                       includeUnknown: false,
+                                       includeDebugInNormal: false)
+}
+
+struct SyncSettingsResponse: Codable {
+    var settings: SyncSettings
+    var diagnostics: SyncDiagnostics?
+}
+
 // GET /api/messages/recent -> { data: [RecentMessage], meta: {...} }
 struct RecentMessagesResponse: Codable {
     var data: [RecentMessage]

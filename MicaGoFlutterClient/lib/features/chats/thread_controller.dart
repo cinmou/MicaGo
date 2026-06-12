@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/websocket_client.dart';
+import 'chat_service.dart';
 import 'models/message_model.dart';
+import 'realtime_event_helpers.dart' as rt;
 import 'store/message_collection.dart';
 // Re-export the reconciliation predicate so existing callers/tests that import
 // it from thread_controller continue to work after the store extraction.
@@ -39,6 +41,26 @@ class ThreadController extends ChangeNotifier {
 
   /// Chronological (oldest → newest); the thread view renders it reversed.
   List<MessageModel> get messages => _col.ordered;
+
+  /// Server-authoritative service for this thread, taken from the NEWEST server
+  /// message that carries a usable service field. Message-level data wins over
+  /// the chat row (whose service_name can be stale in chat.db — e.g. a chat
+  /// labeled SMS whose recent messages are iMessage). Returns
+  /// [ChatService.unknown] when no server message states a service; the caller
+  /// may then fall back to the chat row. Never inferred from GUID/handle shape.
+  ChatService get serviceFromMessages {
+    final ordered = _col.ordered;
+    for (var i = ordered.length - 1; i >= 0; i--) {
+      final m = ordered[i];
+      if (m.guid.isEmpty) continue; // skip optimistic pending rows
+      final s = chatServiceFromServer(
+        category: m.serviceCategory,
+        rawService: m.service,
+      );
+      if (s != ChatService.unknown) return s;
+    }
+    return ChatService.unknown;
+  }
 
   void start() {
     _wsSub = app.ws.events.listen(_onWsEvent);
@@ -181,14 +203,10 @@ class ThreadController extends ChangeNotifier {
         if (tempId != null &&
             msg is Map<String, dynamic> &&
             _col.pendingByTempId(tempId) != null) {
-          _col.confirmPending(tempId, MessageModel.fromJson(msg));
-          unawaited(
-            app.cache.confirmPending(
-              chatGuid,
-              tempId,
-              MessageModel.fromJson(msg),
-            ),
-          );
+          final confirmed = MessageModel.fromJson(msg);
+          _col.confirmPending(tempId, confirmed);
+          unawaited(app.cache.confirmPending(chatGuid, tempId, confirmed));
+          unawaited(app.markRealtimeEventApplied(e));
           notifyListeners();
         }
         break;
@@ -219,21 +237,59 @@ class ThreadController extends ChangeNotifier {
         break;
       case 'message:new':
       case 'message:update':
-        final msg = messageFromWsEvent(e);
+        final msg = rt.messageFromWsEvent(e);
         if (msg == null || msg.chatGuid == null) {
+          unawaited(
+            app.recordRealtimeFallback(
+              missingChatGuid: msg != null && msg.chatGuid == null,
+              malformed: msg == null,
+            ),
+          );
           _scheduleReload();
           break;
         }
         if (msg.chatGuid == chatGuid) {
-          _col.upsertServer(msg);
-          unawaited(app.cache.upsertMessage(chatGuid, msg));
+          if (rt.isReactionMessage(msg)) {
+            final target = rt.reactionTargetGuid(msg);
+            final applied =
+                target != null &&
+                _col.applyReactionEvent(
+                  targetGuid: target,
+                  reaction: ReactionModel(
+                    type: rt.reactionType(msg),
+                    fromHandle: msg.handleId,
+                    isFromMe: msg.isFromMe,
+                    eventGuid: msg.guid,
+                    createdAt: msg.dateCreated,
+                  ),
+                  add: rt.isReactionAdd(msg),
+                );
+            unawaited(
+              app.cache.applyReactionEvent(chatGuid, msg).then((ok) {
+                if (ok) return app.markRealtimeEventApplied(e);
+                return app.recordRealtimeFallback();
+              }),
+            );
+            if (!applied) _scheduleReload();
+          } else {
+            _col.upsertServer(msg);
+            unawaited(
+              app.cache
+                  .upsertMessage(chatGuid, msg)
+                  .then(
+                    (_) => app.markRealtimeEventApplied(e),
+                    onError: (_) => app.recordRealtimeFallback(),
+                  ),
+            );
+          }
           state = ThreadState.loaded;
           notifyListeners();
         }
         break;
       case 'message:unsend':
-        final eventChat = chatGuidFromWsEvent(e);
+        final eventChat = rt.chatGuidFromWsEvent(e);
         if (eventChat == null) {
+          unawaited(app.recordRealtimeFallback(missingChatGuid: true));
           _scheduleReload();
           break;
         }
@@ -241,9 +297,14 @@ class ThreadController extends ChangeNotifier {
           final guid = e.data['guid'] as String?;
           final dateRetracted = _asInt(e.data['dateRetracted']);
           if (guid == null || !_col.applyUnsend(guid, dateRetracted)) {
+            unawaited(app.recordRealtimeFallback(malformed: guid == null));
             _scheduleReload();
           } else {
-            unawaited(app.cache.applyUnsend(chatGuid, guid, dateRetracted));
+            unawaited(
+              app.cache
+                  .applyUnsend(chatGuid, guid, dateRetracted)
+                  .then((_) => app.markRealtimeEventApplied(e)),
+            );
             notifyListeners();
           }
         }
@@ -283,19 +344,8 @@ class ThreadController extends ChangeNotifier {
   }
 }
 
-MessageModel? messageFromWsEvent(WsEvent e) {
-  final raw = e.type == 'message:update' ? e.data['message'] : e.data;
-  if (raw is Map<String, dynamic>) return MessageModel.fromJson(raw);
-  return null;
-}
+MessageModel? messageFromWsEvent(WsEvent e) => rt.messageFromWsEvent(e);
 
-String? chatGuidFromWsEvent(WsEvent e) {
-  if (e.data['chatGuid'] is String) return e.data['chatGuid'] as String;
-  final msg = e.data['message'];
-  if (msg is Map<String, dynamic> && msg['chatGuid'] is String) {
-    return msg['chatGuid'] as String;
-  }
-  return null;
-}
+String? chatGuidFromWsEvent(WsEvent e) => rt.chatGuidFromWsEvent(e);
 
 int? _asInt(Object? v) => v is num ? v.toInt() : null;

@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_controller.dart';
 import '../../core/network/websocket_client.dart';
 
 /// A collapsible debug panel showing the WebSocket connection state and a
 /// rolling log of received event names. Read-only; for C0 diagnostics.
 class DebugLogPanel extends StatelessWidget {
   final WebSocketClient ws;
+  final AppController? app;
 
-  const DebugLogPanel({super.key, required this.ws});
+  const DebugLogPanel({super.key, required this.ws, this.app});
 
   @override
   Widget build(BuildContext context) {
@@ -22,9 +24,9 @@ class DebugLogPanel extends StatelessWidget {
             leading: const Icon(Icons.terminal),
             title: const Text('Debug — WebSocket events'),
             subtitle: Text('${ws.status.name} · ${ws.log.length} logged'),
-            childrenPadding:
-                const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             children: [
+              if (app != null) _RealtimeDiagnostics(app: app!),
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(
@@ -50,9 +52,7 @@ class DebugLogPanel extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(vertical: 2),
                         child: Text(
                           '${_ts(e.at)}  ${e.text}',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
+                          style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(fontFamily: 'monospace'),
                         ),
                       );
@@ -69,5 +69,54 @@ class DebugLogPanel extends StatelessWidget {
   String _ts(DateTime t) {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
+  }
+}
+
+class _RealtimeDiagnostics extends StatelessWidget {
+  final AppController app;
+  const _RealtimeDiagnostics({required this.app});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = app.realtimeDiagnostics;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: DefaultTextStyle(
+        style:
+            Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(fontFamily: 'monospace') ??
+            const TextStyle(fontFamily: 'monospace', fontSize: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('cursor: ${d.lastAppliedEventCursor ?? '—'}'),
+            Text('last event: ${_fmt(d.lastEventAt)}'),
+            Text('last reconnect: ${_fmt(d.lastReconnectAt)}'),
+            Text('catch-up cursor: ${d.lastCatchUpCursor ?? '—'}'),
+            Text('catch-up count: ${d.lastCatchUpResultCount}'),
+            Text(
+              'patched/reload: ${d.eventsPatchedDirectly}/${d.eventsForcedReload}',
+            ),
+            Text('chat reloads: ${d.chatListEventReloads}'),
+            Text(
+              'dropped missing chat/malformed: '
+              '${d.droppedMissingChatGuid}/${d.droppedMalformedEvents}',
+            ),
+            Text('DB writes from realtime: ${d.localDbWrites}'),
+            Text(
+              'reconnects: ${d.reconnectCount}'
+              '${app.realtimeCatchingUp ? ' (catching up)' : ''}',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _fmt(DateTime? dt) {
+    if (dt == null) return '—';
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
   }
 }

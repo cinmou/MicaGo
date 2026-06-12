@@ -24,8 +24,10 @@ class PeopleScreen extends StatelessWidget {
                   children: [
                     const Icon(Icons.contacts_outlined),
                     const SizedBox(width: 8),
-                    Text('Contacts matching',
-                        style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      'Contacts matching',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const Spacer(),
                     _StatusChip(status: contacts.status),
                   ],
@@ -45,13 +47,17 @@ class PeopleScreen extends StatelessWidget {
         ),
         if (contacts.status == ContactsStatus.ready) ...[
           const SizedBox(height: 12),
-          Text('${contacts.contacts.length} contacts available for matching',
-              style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            '${contacts.contacts.length} contacts available for matching',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ],
         if (contacts.error != null) ...[
           const SizedBox(height: 12),
-          Text(contacts.error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          Text(
+            contacts.error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
         ],
       ],
     );
@@ -106,7 +112,10 @@ class _StatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final (String label, Color color) = switch (status) {
       ContactsStatus.ready => ('On', Colors.green),
-      ContactsStatus.requesting => ('Requesting…', Theme.of(context).colorScheme.tertiary),
+      ContactsStatus.requesting => (
+        'Requesting…',
+        Theme.of(context).colorScheme.tertiary,
+      ),
       ContactsStatus.denied => ('Denied', Theme.of(context).colorScheme.error),
       ContactsStatus.disabled => ('Off', Theme.of(context).colorScheme.outline),
     };

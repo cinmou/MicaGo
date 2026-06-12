@@ -30,11 +30,12 @@ type AttachmentJSON struct {
 }
 
 type ChatJSON struct {
-	GUID           string  `json:"guid"`
-	ChatIdentifier *string `json:"chatIdentifier"`
-	ServiceName    *string `json:"serviceName"`
-	DisplayName    *string `json:"displayName"`
-	IsArchived     bool    `json:"isArchived"`
+	GUID            string  `json:"guid"`
+	ChatIdentifier  *string `json:"chatIdentifier"`
+	ServiceName     *string `json:"serviceName"`
+	ServiceCategory string  `json:"serviceCategory,omitempty"`
+	DisplayName     *string `json:"displayName"`
+	IsArchived      bool    `json:"isArchived"`
 
 	// C7 renderable-timeline summary (additive). Populated by the relay store so
 	// the client can hide noisy chats and show a real last-message preview.
@@ -50,6 +51,8 @@ type MessageJSON struct {
 	Text                 *string          `json:"text"`
 	Subject              *string          `json:"subject"`
 	Service              *string          `json:"service"`
+	Account              *string          `json:"account,omitempty"`
+	ServiceCategory      string           `json:"serviceCategory,omitempty"`
 	DateCreated          *int64           `json:"dateCreated"`
 	DateRead             *int64           `json:"dateRead"`
 	DateDelivered        *int64           `json:"dateDelivered"`
@@ -109,6 +112,7 @@ type MessageRow struct {
 	AttributedBody      []byte
 	Subject             *string
 	Service             *string
+	Account             *string
 	DateRaw             int64
 	DateReadRaw         *int64
 	DateDeliveredRaw    *int64
@@ -135,6 +139,7 @@ type SyncMessageRow struct {
 	Text                *string
 	Subject             *string
 	Service             *string
+	Account             *string
 	DateCreated         *int64
 	DateRead            *int64
 	DateDelivered       *int64
@@ -321,6 +326,7 @@ type ServerStatusResponse struct {
 	WebSocket     ServerWebSocketStatus    `json:"websocket"`
 	Permissions   ServerPermissionStatus   `json:"permissions"`
 	Capabilities  ServerCapabilities       `json:"capabilities"`
+	Backend       *ServerBackendStatus     `json:"backend,omitempty"`
 }
 
 // ServerCapabilities reports what the running chat.db schema supports, so
@@ -347,6 +353,41 @@ type ServerSyncStatus struct {
 	LastSyncAt       *int64                 `json:"lastSyncAt"`
 	LastMessageRowID *int64                 `json:"lastMessageRowId"`
 	Diagnostics      *ServerSyncDiagnostics `json:"diagnostics,omitempty"`
+	// Settings echoes the live relay sync settings (backfill mode, per-chat
+	// recent count, service scope) so the companion can prove what the running
+	// backend actually loaded (C17). Mirrors relaydb.SyncSettings.
+	Settings *ServerSyncSettings `json:"settings,omitempty"`
+}
+
+// ServerSyncSettings is the status-surface mirror of relaydb.SyncSettings
+// (store cannot import relaydb — relaydb imports store).
+type ServerSyncSettings struct {
+	BackfillMode          string `json:"backfillMode"`
+	RecentMessagesPerChat int    `json:"recentMessagesPerChat"`
+	IncludeIMessage       bool   `json:"includeIMessage"`
+	IncludeSMS            bool   `json:"includeSMS"`
+	IncludeRCS            bool   `json:"includeRCS"`
+	IncludeUnknown        bool   `json:"includeUnknown"`
+	IncludeDebugInNormal  bool   `json:"includeDebugInNormal"`
+}
+
+// ServerBackendStatus identifies the exact running backend binary (C17). Its
+// purpose is to make a stale launch detectable: the companion compares this
+// against the newest local build and warns on mismatch. ChatDBOpenOptions
+// exposes the SQLite URI options so the absence of immutable=1 (the C15
+// malformed-DB fix) is externally verifiable.
+type ServerBackendStatus struct {
+	Version           string `json:"version"`
+	Commit            string `json:"commit"`
+	BuildTime         string `json:"buildTime"`
+	GoVersion         string `json:"goVersion"`
+	OSArch            string `json:"osArch"`
+	ExecutablePath    string `json:"executablePath"`
+	ConfigPath        string `json:"configPath"`
+	RelayDBPath       string `json:"relayDbPath"`
+	ChatDBPath        string `json:"chatDbPath"`
+	ChatDBOpenOptions string `json:"chatDbOpenOptions"`
+	ChatDBImmutable   bool   `json:"chatDbImmutable"`
 }
 
 type ServerSyncDiagnostics struct {
@@ -356,6 +397,11 @@ type ServerSyncDiagnostics struct {
 	LastTriggerReason       string  `json:"lastTriggerReason,omitempty"`
 	LastInsertedMessages    int     `json:"lastInsertedMessages"`
 	LastSyncedMessages      int     `json:"lastSyncedMessages"`
+	LastRowsScanned         int     `json:"lastRowsScanned"`
+	LastRenderableRows      int     `json:"lastRenderableRows"`
+	LastHiddenDebugRows     int     `json:"lastHiddenDebugRows"`
+	LastPerChatLimit        int     `json:"lastPerChatLimit"`
+	LastBackfillMode        string  `json:"lastBackfillMode,omitempty"`
 	LastUpdatePassCount     int     `json:"lastUpdatePassCount"`
 	LastUpdatePassSeeded    int     `json:"lastUpdatePassSeeded"`
 	LastUnsentCount         int     `json:"lastUnsentCount"`

@@ -1,3 +1,5 @@
+import '../chat_service.dart';
+
 /// A chat row for the chat list.
 ///
 /// The MicaGo server's `Chat` object (v0.9 contract) currently exposes only
@@ -9,7 +11,8 @@
 class ChatSummary {
   final String guid;
   final String? chatIdentifier;
-  final String? serviceName; // iMessage | SMS | RCS | null
+  final String? serviceName; // raw chat.db value, e.g. iMessage | SMS | null
+  final String? serviceCategory; // server-normalized: imessage|sms|rcs|unknown
   final String? displayName; // group name; null for 1:1 (per server contract)
   final bool isArchived;
 
@@ -31,6 +34,7 @@ class ChatSummary {
     required this.guid,
     this.chatIdentifier,
     this.serviceName,
+    this.serviceCategory,
     this.displayName,
     this.isArchived = false,
     this.lastMessagePreview,
@@ -48,6 +52,12 @@ class ChatSummary {
   /// True when this chat has no normal content (only debug/noise or empty) and
   /// should be hidden from the default list.
   bool get isNoiseOnly => !hasRenderableMessages;
+
+  /// Server-authoritative service for this chat row. Falls back from the
+  /// normalized category to the raw service string; never inferred from the
+  /// GUID, handle, or phone-number shape.
+  ChatService get service =>
+      chatServiceFromServer(category: serviceCategory, rawService: serviceName);
 
   /// Best display title: group/display name, else the handle/identifier, else
   /// the opaque GUID as a last resort.
@@ -90,12 +100,52 @@ class ChatSummary {
 
   bool get hasUnread => (unreadCount ?? 0) > 0;
 
+  ChatSummary copyWith({
+    String? guid,
+    String? chatIdentifier,
+    String? serviceName,
+    String? serviceCategory,
+    String? displayName,
+    bool? isArchived,
+    String? lastMessagePreview,
+    int? lastMessageAt,
+    int? unreadCount,
+    List<String>? participants,
+    bool? isGroupRaw,
+    bool? isPinned,
+    bool? isMuted,
+    bool? hasRenderableMessages,
+    bool? unsupportedOnly,
+    String? hiddenReason,
+  }) {
+    return ChatSummary(
+      guid: guid ?? this.guid,
+      chatIdentifier: chatIdentifier ?? this.chatIdentifier,
+      serviceName: serviceName ?? this.serviceName,
+      serviceCategory: serviceCategory ?? this.serviceCategory,
+      displayName: displayName ?? this.displayName,
+      isArchived: isArchived ?? this.isArchived,
+      lastMessagePreview: lastMessagePreview ?? this.lastMessagePreview,
+      lastMessageAt: lastMessageAt ?? this.lastMessageAt,
+      unreadCount: unreadCount ?? this.unreadCount,
+      participants: participants ?? this.participants,
+      isGroupRaw: isGroupRaw ?? this.isGroupRaw,
+      isPinned: isPinned ?? this.isPinned,
+      isMuted: isMuted ?? this.isMuted,
+      hasRenderableMessages:
+          hasRenderableMessages ?? this.hasRenderableMessages,
+      unsupportedOnly: unsupportedOnly ?? this.unsupportedOnly,
+      hiddenReason: hiddenReason ?? this.hiddenReason,
+    );
+  }
+
   factory ChatSummary.fromJson(Map<String, dynamic> json) {
     int? asInt(Object? v) => v is num ? v.toInt() : null;
     return ChatSummary(
       guid: (json['guid'] as String?) ?? '',
       chatIdentifier: json['chatIdentifier'] as String?,
       serviceName: json['serviceName'] as String?,
+      serviceCategory: json['serviceCategory'] as String?,
       displayName: json['displayName'] as String?,
       isArchived: (json['isArchived'] as bool?) ?? false,
       // Prefer the C7 server-computed renderable preview/timestamp (real data).
@@ -126,6 +176,7 @@ class ChatSummary {
     'guid': guid,
     'chatIdentifier': chatIdentifier,
     'serviceName': serviceName,
+    'serviceCategory': serviceCategory,
     'displayName': displayName,
     'isArchived': isArchived,
     'latestRenderablePreview': lastMessagePreview,

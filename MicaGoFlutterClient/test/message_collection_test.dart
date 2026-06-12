@@ -12,18 +12,17 @@ MessageModel _server({
   int? dateRead,
   bool isDelivered = false,
   bool isRead = false,
-}) =>
-    MessageModel(
-      guid: guid,
-      text: text,
-      isFromMe: isFromMe,
-      dateCreated: dateCreated,
-      dateDelivered: dateDelivered,
-      dateRead: dateRead,
-      isDelivered: isDelivered,
-      isRead: isRead,
-      localState: LocalSendState.confirmed,
-    );
+}) => MessageModel(
+  guid: guid,
+  text: text,
+  isFromMe: isFromMe,
+  dateCreated: dateCreated,
+  dateDelivered: dateDelivered,
+  dateRead: dateRead,
+  isDelivered: isDelivered,
+  isRead: isRead,
+  localState: LocalSendState.confirmed,
+);
 
 MessageModel _optimistic(String tempId, String text, int at) =>
     MessageModel.optimistic(tempId: tempId, text: text, dateCreated: at);
@@ -46,18 +45,47 @@ void main() {
 
     test('message:update patches delivered/read by guid in place', () {
       final c = MessageCollection();
-      c.upsertServer(_server(guid: 'a', text: 'hi', isFromMe: true, dateCreated: 100));
-      c.applyUpdate(_server(
-          guid: 'a', text: 'hi', isFromMe: true, dateCreated: 100, isDelivered: true, dateDelivered: 150));
+      c.upsertServer(
+        _server(guid: 'a', text: 'hi', isFromMe: true, dateCreated: 100),
+      );
+      c.applyUpdate(
+        _server(
+          guid: 'a',
+          text: 'hi',
+          isFromMe: true,
+          dateCreated: 100,
+          isDelivered: true,
+          dateDelivered: 150,
+        ),
+      );
       expect(c.length, 1);
       expect(c.serverByGuid('a')!.isDelivered, isTrue);
-      expect(deliveryStateFor(c.serverByGuid('a')!), MessageDeliveryState.delivered);
+      expect(
+        deliveryStateFor(c.serverByGuid('a')!),
+        MessageDeliveryState.delivered,
+      );
     });
 
     test('read update after delivered upgrades the same row', () {
       final c = MessageCollection();
-      c.upsertServer(_server(guid: 'a', isFromMe: true, dateCreated: 100, isDelivered: true, dateDelivered: 150));
-      c.applyUpdate(_server(guid: 'a', isFromMe: true, dateCreated: 100, isRead: true, dateRead: 200));
+      c.upsertServer(
+        _server(
+          guid: 'a',
+          isFromMe: true,
+          dateCreated: 100,
+          isDelivered: true,
+          dateDelivered: 150,
+        ),
+      );
+      c.applyUpdate(
+        _server(
+          guid: 'a',
+          isFromMe: true,
+          dateCreated: 100,
+          isRead: true,
+          dateRead: 200,
+        ),
+      );
       expect(c.length, 1);
       expect(deliveryStateFor(c.serverByGuid('a')!), MessageDeliveryState.read);
     });
@@ -72,6 +100,40 @@ void main() {
       expect(m.attachments, isEmpty);
       expect(c.applyUnsend('missing', 300), isFalse);
     });
+
+    test('reaction event updates target instead of adding standalone row', () {
+      final c = MessageCollection();
+      c.upsertServer(_server(guid: 'target', text: 'hi', dateCreated: 100));
+      expect(
+        c.applyReactionEvent(
+          targetGuid: 'target',
+          reaction: const ReactionModel(
+            type: 'like',
+            fromHandle: '+15550001',
+            isFromMe: false,
+            eventGuid: 'reaction-1',
+          ),
+          add: true,
+        ),
+        isTrue,
+      );
+      expect(c.length, 1);
+      expect(c.serverByGuid('target')!.reactions.single.type, 'like');
+
+      expect(
+        c.applyReactionEvent(
+          targetGuid: 'target',
+          reaction: const ReactionModel(
+            type: 'like',
+            fromHandle: '+15550001',
+            isFromMe: false,
+          ),
+          add: false,
+        ),
+        isTrue,
+      );
+      expect(c.serverByGuid('target')!.reactions, isEmpty);
+    });
   });
 
   group('optimistic send lifecycle + reconciliation', () {
@@ -80,10 +142,20 @@ void main() {
       c.addPending(_optimistic('t1', 'hello world', 1000));
       expect(c.pendingByTempId('t1')!.localState, LocalSendState.sending);
       c.setPendingState('t1', LocalSendState.sentUnconfirmed);
-      expect(c.pendingByTempId('t1')!.localState, LocalSendState.sentUnconfirmed);
+      expect(
+        c.pendingByTempId('t1')!.localState,
+        LocalSendState.sentUnconfirmed,
+      );
 
       // Later outgoing server row with matching text/time.
-      c.upsertServer(_server(guid: 'srv', text: 'hello world', isFromMe: true, dateCreated: 1500));
+      c.upsertServer(
+        _server(
+          guid: 'srv',
+          text: 'hello world',
+          isFromMe: true,
+          dateCreated: 1500,
+        ),
+      );
       expect(c.pendingByTempId('t1'), isNull); // reconciled away
       expect(c.length, 1); // no duplicate
       expect(c.serverByGuid('srv'), isNotNull);
@@ -93,17 +165,33 @@ void main() {
       final c = MessageCollection();
       c.addPending(_optimistic('t1', 'yo', 1000));
       c.setPendingState('t1', LocalSendState.sentUnconfirmed);
-      c.upsertServer(_server(guid: 'srv', text: 'yo', isFromMe: true, dateCreated: 1200));
-      c.applyUpdate(_server(
-          guid: 'srv', text: 'yo', isFromMe: true, dateCreated: 1200, isDelivered: true, dateDelivered: 1300));
+      c.upsertServer(
+        _server(guid: 'srv', text: 'yo', isFromMe: true, dateCreated: 1200),
+      );
+      c.applyUpdate(
+        _server(
+          guid: 'srv',
+          text: 'yo',
+          isFromMe: true,
+          dateCreated: 1200,
+          isDelivered: true,
+          dateDelivered: 1300,
+        ),
+      );
       expect(c.length, 1);
-      expect(deliveryStateFor(c.serverByGuid('srv')!), MessageDeliveryState.delivered);
+      expect(
+        deliveryStateFor(c.serverByGuid('srv')!),
+        MessageDeliveryState.delivered,
+      );
     });
 
     test('confirmPending replaces temp with server, no dup', () {
       final c = MessageCollection();
       c.addPending(_optimistic('t1', 'hi', 1000));
-      c.confirmPending('t1', _server(guid: 'srv', text: 'hi', isFromMe: true, dateCreated: 1000));
+      c.confirmPending(
+        't1',
+        _server(guid: 'srv', text: 'hi', isFromMe: true, dateCreated: 1000),
+      );
       expect(c.pendingByTempId('t1'), isNull);
       expect(c.length, 1);
     });
@@ -114,7 +202,14 @@ void main() {
       c.setPendingState('t1', LocalSendState.failed);
       expect(c.pendingByTempId('t1')!.localState, LocalSendState.failed);
       // Unrelated server message must NOT reconcile the failed row away.
-      c.upsertServer(_server(guid: 'other', text: 'different', isFromMe: true, dateCreated: 1100));
+      c.upsertServer(
+        _server(
+          guid: 'other',
+          text: 'different',
+          isFromMe: true,
+          dateCreated: 1100,
+        ),
+      );
       expect(c.pendingByTempId('t1'), isNotNull);
       // Retry removes it and returns the text to resend.
       expect(c.removePending('t1'), 'oops');
@@ -124,7 +219,14 @@ void main() {
     test('unrelated outgoing message does not match a pending send', () {
       final c = MessageCollection();
       c.addPending(_optimistic('t1', 'apples', 1000));
-      c.upsertServer(_server(guid: 'srv', text: 'oranges', isFromMe: true, dateCreated: 1000));
+      c.upsertServer(
+        _server(
+          guid: 'srv',
+          text: 'oranges',
+          isFromMe: true,
+          dateCreated: 1000,
+        ),
+      );
       expect(c.pendingByTempId('t1'), isNotNull);
       expect(c.length, 2);
     });
@@ -132,7 +234,9 @@ void main() {
     test('incoming message never reconciles an outgoing pending', () {
       final c = MessageCollection();
       c.addPending(_optimistic('t1', 'hi', 1000));
-      c.upsertServer(_server(guid: 'in', text: 'hi', isFromMe: false, dateCreated: 1000));
+      c.upsertServer(
+        _server(guid: 'in', text: 'hi', isFromMe: false, dateCreated: 1000),
+      );
       expect(c.pendingByTempId('t1'), isNotNull);
     });
   });

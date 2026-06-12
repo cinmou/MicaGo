@@ -18,7 +18,6 @@ SELECT
   c.display_name,
   c.is_archived
 FROM chat AS c
-WHERE c.service_name = 'iMessage'
 ORDER BY c.ROWID DESC;
 `
 
@@ -51,14 +50,24 @@ JOIN chat AS c
   ON c.ROWID = cmj.chat_id
 LEFT JOIN handle AS h
   ON h.ROWID = m.handle_id
-WHERE c.service_name = 'iMessage'
-  AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)
+WHERE (m.text IS NOT NULL OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)
 `
 
 // buildSyncMessagesSQL assembles a new-message sync query with capability-gated
 // semantic columns appended, plus the caller's extra WHERE and ORDER/LIMIT tail.
-func buildSyncMessagesSQL(present []string, extraWhere, tail string) string {
-	return "SELECT DISTINCT\n  " + strings.Join(syncMessagesBaseCols, ",\n  ") +
+func buildSyncMessagesSQL(present []string, hasAccount bool, extraWhere, tail string) string {
+	cols := make([]string, 0, len(syncMessagesBaseCols)+1)
+	accountExpr := "NULL AS account"
+	if hasAccount {
+		accountExpr = "m.account"
+	}
+	for _, col := range syncMessagesBaseCols {
+		cols = append(cols, col)
+		if col == "m.service" {
+			cols = append(cols, accountExpr)
+		}
+	}
+	return "SELECT DISTINCT\n  " + strings.Join(cols, ",\n  ") +
 		semanticSelectFragment(present) + syncMessagesFromWhere + extraWhere + tail
 }
 
@@ -69,7 +78,7 @@ func scanSyncRowSemantic(rows *sql.Rows, present []string) (MessageRow, semantic
 	var isFromMe, isRead, isDelivered, hasAttachments int64
 	base := []any{
 		&row.ChatGUID, &row.SourceRowID, &row.GUID, &row.Text, &row.AttributedBody,
-		&row.Subject, &row.Service, &row.DateRaw, &row.DateReadRaw, &row.DateDeliveredRaw,
+		&row.Subject, &row.Service, &row.Account, &row.DateRaw, &row.DateReadRaw, &row.DateDeliveredRaw,
 		&isFromMe, &isRead, &isDelivered, &hasAttachments, &row.HandleValue, &row.HandleService,
 	}
 	semTargets, finalize := semanticScanTargets(present)
@@ -94,6 +103,37 @@ func applySemantic(m *SyncMessageRow, s semanticValues) {
 	m.BalloonBundleID = s.BalloonBundleID
 	m.ExpressiveSendStyleID = s.ExpressiveSendStyleID
 	m.PayloadDataPresent = s.PayloadDataPresent
+}
+
+func syncMessageFromRow(row MessageRow, sem semanticValues) (SyncMessageRow, bool) {
+	if row.ChatGUID == nil {
+		return SyncMessageRow{}, false
+	}
+	text := ExtractMessageText(row.Text, row.AttributedBody)
+	if !MessageHasRenderableContent(text, row.CacheHasAttachments) {
+		return SyncMessageRow{}, false
+	}
+	msg := SyncMessageRow{
+		ChatGUID:            *row.ChatGUID,
+		SourceRowID:         derefInt64(row.SourceRowID),
+		GUID:                row.GUID,
+		Text:                text,
+		Subject:             row.Subject,
+		Service:             row.Service,
+		Account:             row.Account,
+		DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
+		DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
+		DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
+		IsFromMe:            row.IsFromMe,
+		IsRead:              row.IsRead,
+		IsDelivered:         row.IsDelivered,
+		HandleID:            row.HandleValue,
+		HandleService:       row.HandleService,
+		CacheHasAttachments: row.CacheHasAttachments,
+		HasAttributedBody:   len(row.AttributedBody) > 0,
+	}
+	applySemantic(&msg, sem)
+	return msg, true
 }
 
 type Queries struct {
@@ -304,7 +344,7 @@ func (q *Queries) ListSyncChats(ctx context.Context) ([]SyncChatRow, error) {
 
 func (q *Queries) ListSyncRecentMessages(ctx context.Context, limit int) ([]SyncMessageRow, error) {
 	present := presentSemanticColumns(q.messageColumns)
-	sqlText := buildSyncMessagesSQL(present, "", "ORDER BY m.date DESC\nLIMIT ?;\n")
+	sqlText := buildSyncMessagesSQL(present, q.messageColumns["account"], "", "ORDER BY m.date DESC\nLIMIT ?;\n")
 	rows, err := q.db.QueryContext(ctx, sqlText, limit)
 	if err != nil {
 		return nil, err
@@ -317,40 +357,43 @@ func (q *Queries) ListSyncRecentMessages(ctx context.Context, limit int) ([]Sync
 		if err != nil {
 			return nil, err
 		}
-		if row.ChatGUID == nil {
-			continue
+		if msg, ok := syncMessageFromRow(row, sem); ok {
+			messages = append(messages, msg)
 		}
-		text := ExtractMessageText(row.Text, row.AttributedBody)
-		if !MessageHasRenderableContent(text, row.CacheHasAttachments) {
-			continue
-		}
-
-		msg := SyncMessageRow{
-			ChatGUID:            *row.ChatGUID,
-			SourceRowID:         derefInt64(row.SourceRowID),
-			GUID:                row.GUID,
-			Text:                text,
-			Subject:             row.Subject,
-			Service:             row.Service,
-			DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
-			DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
-			DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
-			IsFromMe:            row.IsFromMe,
-			IsRead:              row.IsRead,
-			IsDelivered:         row.IsDelivered,
-			HandleID:            row.HandleValue,
-			HandleService:       row.HandleService,
-			CacheHasAttachments: row.CacheHasAttachments,
-			HasAttributedBody:   len(row.AttributedBody) > 0,
-		}
-		applySemantic(&msg, sem)
-		messages = append(messages, msg)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
+	return messages, nil
+}
+
+// ListSyncRecentMessagesForChat mirrors IMSG history: read the latest N rows for
+// one independent chat through chat_message_join, newest first. It intentionally
+// does not filter by service; service visibility is a relay policy decision.
+func (q *Queries) ListSyncRecentMessagesForChat(ctx context.Context, chatGUID string, limit int) ([]SyncMessageRow, error) {
+	present := presentSemanticColumns(q.messageColumns)
+	sqlText := buildSyncMessagesSQL(present, q.messageColumns["account"], "  AND c.guid = ?\n", "ORDER BY m.date DESC\nLIMIT ?;\n")
+	rows, err := q.db.QueryContext(ctx, sqlText, chatGUID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []SyncMessageRow
+	for rows.Next() {
+		row, sem, err := scanSyncRowSemantic(rows, present)
+		if err != nil {
+			return nil, err
+		}
+		if msg, ok := syncMessageFromRow(row, sem); ok {
+			messages = append(messages, msg)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return messages, nil
 }
 
@@ -361,7 +404,7 @@ func (q *Queries) ListSyncRecentMessages(ctx context.Context, limit int) ([]Sync
 // `message.date` is indexed, so the scan is cheap.
 func (q *Queries) ListSyncRecentMessagesByDate(ctx context.Context, afterUnixMilli int64, limit int) ([]SyncMessageRow, error) {
 	present := presentSemanticColumns(q.messageColumns)
-	sqlText := buildSyncMessagesSQL(present, "  AND m.date >= ?\n", "ORDER BY m.date DESC\nLIMIT ?;\n")
+	sqlText := buildSyncMessagesSQL(present, q.messageColumns["account"], "  AND m.date >= ?\n", "ORDER BY m.date DESC\nLIMIT ?;\n")
 	afterApple := timeutil.UnixMilliToAppleNanos(afterUnixMilli)
 	rows, err := q.db.QueryContext(ctx, sqlText, afterApple, limit)
 	if err != nil {
@@ -375,33 +418,12 @@ func (q *Queries) ListSyncRecentMessagesByDate(ctx context.Context, afterUnixMil
 		if err != nil {
 			return nil, err
 		}
-		if row.ChatGUID == nil || row.SourceRowID == nil {
+		if row.SourceRowID == nil {
 			continue
 		}
-		text := ExtractMessageText(row.Text, row.AttributedBody)
-		if !MessageHasRenderableContent(text, row.CacheHasAttachments) {
-			continue
+		if msg, ok := syncMessageFromRow(row, sem); ok {
+			messages = append(messages, msg)
 		}
-		msg := SyncMessageRow{
-			ChatGUID:            *row.ChatGUID,
-			SourceRowID:         *row.SourceRowID,
-			GUID:                row.GUID,
-			Text:                text,
-			Subject:             row.Subject,
-			Service:             row.Service,
-			DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
-			DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
-			DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
-			IsFromMe:            row.IsFromMe,
-			IsRead:              row.IsRead,
-			IsDelivered:         row.IsDelivered,
-			HandleID:            row.HandleValue,
-			HandleService:       row.HandleService,
-			CacheHasAttachments: row.CacheHasAttachments,
-			HasAttributedBody:   len(row.AttributedBody) > 0,
-		}
-		applySemantic(&msg, sem)
-		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -411,7 +433,7 @@ func (q *Queries) ListSyncRecentMessagesByDate(ctx context.Context, afterUnixMil
 
 func (q *Queries) ListSyncRecentMessagesSince(ctx context.Context, afterRowID int64, limit int) ([]SyncMessageRow, error) {
 	present := presentSemanticColumns(q.messageColumns)
-	sqlText := buildSyncMessagesSQL(present, "  AND m.ROWID > ?\n", "ORDER BY m.ROWID ASC\nLIMIT ?;\n")
+	sqlText := buildSyncMessagesSQL(present, q.messageColumns["account"], "  AND m.ROWID > ?\n", "ORDER BY m.ROWID ASC\nLIMIT ?;\n")
 	rows, err := q.db.QueryContext(ctx, sqlText, afterRowID, limit)
 	if err != nil {
 		return nil, err
@@ -424,34 +446,12 @@ func (q *Queries) ListSyncRecentMessagesSince(ctx context.Context, afterRowID in
 		if err != nil {
 			return nil, err
 		}
-		if row.ChatGUID == nil || row.SourceRowID == nil {
+		if row.SourceRowID == nil {
 			continue
 		}
-		text := ExtractMessageText(row.Text, row.AttributedBody)
-		if !MessageHasRenderableContent(text, row.CacheHasAttachments) {
-			continue
+		if msg, ok := syncMessageFromRow(row, sem); ok {
+			messages = append(messages, msg)
 		}
-
-		msg := SyncMessageRow{
-			ChatGUID:            *row.ChatGUID,
-			SourceRowID:         *row.SourceRowID,
-			GUID:                row.GUID,
-			Text:                text,
-			Subject:             row.Subject,
-			Service:             row.Service,
-			DateCreated:         timeutil.AppleMicrosToUnixMilli(row.DateRaw),
-			DateRead:            timeutil.AppleMicrosToUnixMilliPtr(row.DateReadRaw),
-			DateDelivered:       timeutil.AppleMicrosToUnixMilliPtr(row.DateDeliveredRaw),
-			IsFromMe:            row.IsFromMe,
-			IsRead:              row.IsRead,
-			IsDelivered:         row.IsDelivered,
-			HandleID:            row.HandleValue,
-			HandleService:       row.HandleService,
-			CacheHasAttachments: row.CacheHasAttachments,
-			HasAttributedBody:   len(row.AttributedBody) > 0,
-		}
-		applySemantic(&msg, sem)
-		messages = append(messages, msg)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -505,8 +505,7 @@ JOIN chat AS c
   ON c.ROWID = cmj.chat_id
 LEFT JOIN handle AS h
   ON h.ROWID = m.handle_id
-WHERE c.service_name = 'iMessage'
-  AND m.date >= ?
+WHERE m.date >= ?
 ORDER BY m.date ASC
 LIMIT ?;`
 

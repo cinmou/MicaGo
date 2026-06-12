@@ -108,6 +108,28 @@ class MessageCollection {
     return true;
   }
 
+  bool applyReactionEvent({
+    required String targetGuid,
+    required ReactionModel reaction,
+    required bool add,
+  }) {
+    final target = _server[targetGuid];
+    if (target == null) return false;
+    final filtered = target.reactions
+        .where(
+          (r) =>
+              !(r.type == reaction.type &&
+                  r.fromHandle == reaction.fromHandle &&
+                  r.isFromMe == reaction.isFromMe),
+        )
+        .toList(growable: true);
+    _server[targetGuid] = target.copyWith(
+      reactions: add ? [...filtered, reaction] : filtered,
+    );
+    _invalidate();
+    return true;
+  }
+
   // --- Optimistic send lifecycle -------------------------------------------
 
   void addPending(MessageModel optimistic) {

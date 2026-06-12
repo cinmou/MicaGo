@@ -59,7 +59,8 @@ void main() {
 
     test('tapback detected as reaction, not unsupported', () {
       final c = classifyMessage(
-          _msg(associatedType: 2000, associatedGuid: 'p:0/abc'));
+        _msg(associatedType: 2000, associatedGuid: 'p:0/abc'),
+      );
       expect(c.kind, MessageRenderableKind.reaction);
       expect(c.isUnsupported, isFalse);
     });
@@ -122,14 +123,21 @@ void main() {
   group('attachment presentation', () {
     test('image/audio/file detection by kind and mime', () {
       const img = AttachmentModel(
-          guid: 'i',
-          downloadUrl: '/x',
-          attachmentKind: 'image',
-          isPreviewableImage: true);
+        guid: 'i',
+        downloadUrl: '/x',
+        attachmentKind: 'image',
+        isPreviewableImage: true,
+      );
       const aud = AttachmentModel(
-          guid: 'a', downloadUrl: '/x', mimeType: 'audio/mp4');
+        guid: 'a',
+        downloadUrl: '/x',
+        mimeType: 'audio/mp4',
+      );
       const file = AttachmentModel(
-          guid: 'f', downloadUrl: '/x', attachmentKind: 'file');
+        guid: 'f',
+        downloadUrl: '/x',
+        attachmentKind: 'file',
+      );
       expect(img.isImage, isTrue);
       expect(aud.isAudio, isTrue);
       expect(file.isImage, isFalse);
@@ -142,13 +150,16 @@ void main() {
       final msgs = <MessageModel>[
         _msg(text: 'hi'), // normal
         _msg(text: 'there'), // normal
-        _msg(attachments: const [
-          AttachmentModel(
+        _msg(
+          attachments: const [
+            AttachmentModel(
               guid: 'i',
               downloadUrl: '/x',
               attachmentKind: 'image',
-              isPreviewableImage: true),
-        ]), // image
+              isPreviewableImage: true,
+            ),
+          ],
+        ), // image
         _msg(itemType: 2), // service
         _msg(associatedType: 2000, associatedGuid: 'p:0/a'), // reaction
         _msg(text: '+!'), // unsupported controlText
@@ -168,10 +179,7 @@ void main() {
 
     test('report includes counts and is redacted', () {
       final d = computeThreadDiagnostics([
-        _msg(
-          text: null,
-          raw: {'token': 'xyz-secret', 'guid': 'g'},
-        ),
+        _msg(text: null, raw: {'token': 'xyz-secret', 'guid': 'g'}),
       ]);
       final report = threadDiagnosticsReport(d);
       expect(report.contains('unsupported: 1'), isTrue);

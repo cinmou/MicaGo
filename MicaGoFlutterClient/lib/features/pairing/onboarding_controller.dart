@@ -33,13 +33,16 @@ class OnboardingStatus {
 /// Probes one endpoint: returns true when it is reachable AND the token is
 /// accepted. Injected (the real impl builds an ApiClient and calls
 /// health()+authCheck()).
-typedef EndpointProber = Future<bool> Function(
-    PairingEndpoint endpoint, String token);
+typedef EndpointProber =
+    Future<bool> Function(PairingEndpoint endpoint, String token);
 
 /// Runs the initial sync/backfill after a connection is active. Injected so the
 /// controller stays testable. Reports progress via [onProgress].
-typedef InitialSyncRunner = Future<void> Function(
-    ConnectionProfile profile, void Function(String) onProgress);
+typedef InitialSyncRunner =
+    Future<void> Function(
+      ConnectionProfile profile,
+      void Function(String) onProgress,
+    );
 
 class OnboardingController extends ChangeNotifier {
   final EndpointProber prober;
@@ -47,8 +50,10 @@ class OnboardingController extends ChangeNotifier {
 
   OnboardingController({required this.prober, required this.runInitialSync});
 
-  OnboardingStatus status =
-      const OnboardingStatus(OnboardingPhase.idle, 'Ready to connect.');
+  OnboardingStatus status = const OnboardingStatus(
+    OnboardingPhase.idle,
+    'Ready to connect.',
+  );
 
   /// The active endpoint chosen during testing (null until connected).
   PairingEndpoint? activeEndpoint;
@@ -64,42 +69,55 @@ class OnboardingController extends ChangeNotifier {
   /// Tests endpoints for [payload] under [mode] and, on success, builds the
   /// profile and runs the initial sync. Returns the activated profile, or null
   /// when every endpoint failed (status becomes [OnboardingPhase.failed]).
-  Future<ConnectionProfile?> run(PairingPayload payload, ConnectionMode mode) async {
+  Future<ConnectionProfile?> run(
+    PairingPayload payload,
+    ConnectionMode mode,
+  ) async {
     activeEndpoint = null;
     resultProfile = null;
     final order = endpointTryOrder(mode, payload.endpoints);
     if (order.isEmpty) {
-      _set(const OnboardingStatus(
-          OnboardingPhase.failed, 'No endpoints to try for this mode.'));
+      _set(
+        const OnboardingStatus(
+          OnboardingPhase.failed,
+          'No endpoints to try for this mode.',
+        ),
+      );
       return null;
     }
 
     for (final endpoint in order) {
       final isLan = endpoint.kind == EndpointKind.lan;
-      _set(OnboardingStatus(
-        isLan ? OnboardingPhase.testingLan : OnboardingPhase.testingPublic,
-        isLan ? 'Testing LAN…' : 'LAN unavailable — trying Public…',
-        activeKind: endpoint.kind,
-      ));
+      _set(
+        OnboardingStatus(
+          isLan ? OnboardingPhase.testingLan : OnboardingPhase.testingPublic,
+          isLan ? 'Testing LAN…' : 'LAN unavailable — trying Public…',
+          activeKind: endpoint.kind,
+        ),
+      );
       final ok = await prober(endpoint, payload.token);
       if (ok) {
         activeEndpoint = endpoint;
-        _set(OnboardingStatus(
-          OnboardingPhase.connected,
-          isLan ? 'LAN connected.' : 'Public connected.',
-          activeKind: endpoint.kind,
-        ));
+        _set(
+          OnboardingStatus(
+            OnboardingPhase.connected,
+            isLan ? 'LAN connected.' : 'Public connected.',
+            activeKind: endpoint.kind,
+          ),
+        );
         break;
       }
     }
 
     if (activeEndpoint == null) {
-      _set(OnboardingStatus(
-        OnboardingPhase.failed,
-        mode == ConnectionMode.lanOnly
-            ? 'Could not reach the server on your LAN. Check Wi-Fi and the chosen LAN address, then retry.'
-            : 'Could not reach the server on LAN or Public.',
-      ));
+      _set(
+        OnboardingStatus(
+          OnboardingPhase.failed,
+          mode == ConnectionMode.lanOnly
+              ? 'Could not reach the server on your LAN. Check Wi-Fi and the chosen LAN address, then retry.'
+              : 'Could not reach the server on LAN or Public.',
+        ),
+      );
       return null;
     }
 
@@ -111,15 +129,31 @@ class OnboardingController extends ChangeNotifier {
     _set(const OnboardingStatus(OnboardingPhase.syncing, 'Syncing chats…'));
     try {
       await runInitialSync(profile, (msg) {
-        _set(OnboardingStatus(OnboardingPhase.syncing, msg,
-            activeKind: activeEndpoint!.kind));
+        _set(
+          OnboardingStatus(
+            OnboardingPhase.syncing,
+            msg,
+            activeKind: activeEndpoint!.kind,
+          ),
+        );
       });
     } catch (_) {
-      // Sync failures are non-fatal: the connection is good and the app can
-      // catch up later. Proceed to done.
+      _set(
+        OnboardingStatus(
+          OnboardingPhase.failed,
+          'Local database bootstrap failed. Retry, or continue later with cached data warning.',
+          activeKind: activeEndpoint!.kind,
+        ),
+      );
+      return null;
     }
-    _set(OnboardingStatus(OnboardingPhase.done, 'Sync complete.',
-        activeKind: activeEndpoint!.kind));
+    _set(
+      OnboardingStatus(
+        OnboardingPhase.done,
+        'Sync complete.',
+        activeKind: activeEndpoint!.kind,
+      ),
+    );
     return profile;
   }
 
