@@ -11,8 +11,8 @@ import (
 func (db *DB) UpsertDevice(ctx context.Context, device store.DeviceRecord) (*store.DeviceRecord, error) {
 	_, err := db.sqlDB.ExecContext(ctx, `
 INSERT INTO devices (
-	id, name, platform, client_type, app_version, mode, push_provider, push_token, push_enabled, last_seen_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	id, name, platform, client_type, app_version, mode, push_provider, push_token, push_enabled, background, last_seen_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	name = excluded.name,
 	platform = excluded.platform,
@@ -22,9 +22,10 @@ ON CONFLICT(id) DO UPDATE SET
 	push_provider = excluded.push_provider,
 	push_token = excluded.push_token,
 	push_enabled = excluded.push_enabled,
+	background = excluded.background,
 	last_seen_at = excluded.last_seen_at,
 	updated_at = excluded.updated_at;
-`, device.ID, device.Name, device.Platform, device.ClientType, device.AppVersion, device.Mode, device.PushProvider, device.PushToken, boolToInt(device.PushEnabled), device.LastSeenAt, device.CreatedAt, device.UpdatedAt)
+`, device.ID, device.Name, device.Platform, device.ClientType, device.AppVersion, device.Mode, device.PushProvider, device.PushToken, boolToInt(device.PushEnabled), boolToInt(device.Background), device.LastSeenAt, device.CreatedAt, device.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -36,9 +37,9 @@ func (db *DB) GetDeviceByID(ctx context.Context, id string) (*store.DeviceRecord
 	var pushToken *string
 	var appVersion, mode sql.NullString
 	var lastSeenAt sql.NullInt64
-	var pushEnabled int64
+	var pushEnabled, background int64
 	err := db.sqlDB.QueryRowContext(ctx, `
-SELECT id, name, platform, client_type, app_version, mode, push_provider, push_token, push_enabled, last_seen_at, created_at, updated_at
+SELECT id, name, platform, client_type, app_version, mode, push_provider, push_token, push_enabled, background, last_seen_at, created_at, updated_at
 FROM devices
 WHERE id = ?
 LIMIT 1;
@@ -52,6 +53,7 @@ LIMIT 1;
 		&device.PushProvider,
 		&pushToken,
 		&pushEnabled,
+		&background,
 		&lastSeenAt,
 		&device.CreatedAt,
 		&device.UpdatedAt,
@@ -66,6 +68,7 @@ LIMIT 1;
 	device.Mode = mode.String
 	device.PushToken = pushToken
 	device.PushEnabled = pushEnabled != 0
+	device.Background = background != 0
 	if lastSeenAt.Valid {
 		device.LastSeenAt = &lastSeenAt.Int64
 	}
@@ -74,7 +77,7 @@ LIMIT 1;
 
 func (db *DB) ListDevices(ctx context.Context) ([]store.DeviceRecord, error) {
 	rows, err := db.sqlDB.QueryContext(ctx, `
-SELECT id, name, platform, client_type, app_version, mode, push_provider, push_token, push_enabled, last_seen_at, created_at, updated_at
+SELECT id, name, platform, client_type, app_version, mode, push_provider, push_token, push_enabled, background, last_seen_at, created_at, updated_at
 FROM devices
 ORDER BY updated_at DESC, created_at DESC, id ASC;
 `)
@@ -88,7 +91,7 @@ ORDER BY updated_at DESC, created_at DESC, id ASC;
 		var device store.DeviceRecord
 		var pushToken *string
 		var appVersion, mode sql.NullString
-		var pushEnabled int64
+		var pushEnabled, background int64
 		var lastSeenAt sql.NullInt64
 		if err := rows.Scan(
 			&device.ID,
@@ -100,6 +103,7 @@ ORDER BY updated_at DESC, created_at DESC, id ASC;
 			&device.PushProvider,
 			&pushToken,
 			&pushEnabled,
+			&background,
 			&lastSeenAt,
 			&device.CreatedAt,
 			&device.UpdatedAt,
@@ -110,6 +114,7 @@ ORDER BY updated_at DESC, created_at DESC, id ASC;
 		device.Mode = mode.String
 		device.PushToken = pushToken
 		device.PushEnabled = pushEnabled != 0
+		device.Background = background != 0
 		if lastSeenAt.Valid {
 			device.LastSeenAt = &lastSeenAt.Int64
 		}

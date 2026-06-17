@@ -4,10 +4,10 @@ import AppKit
 // MARK: - Sidebar
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    // The Server page was dissolved (Live Sync Monitor → Dashboard, bind
-    // address → Connections, binary/runtime → Advanced). Sync Control and
-    // Debug stay separate: sync controls are not debug tools.
-    case dashboard, connections, syncControl, debug, notifications, tutorials, advanced
+    // C23 cleanup: Debug + Log are technical tools, so they sit at the bottom
+    // (below Advanced) instead of in the middle of the main workflow. Debug
+    // holds debugging tools (Message Inspector); Log holds the server log only.
+    case dashboard, connections, syncControl, notifications, tutorials, advanced, debug, log
 
     var id: String { rawValue }
 
@@ -17,6 +17,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .connections: return "Connections"
         case .syncControl: return "Sync Control"
         case .debug: return "Debug"
+        case .log: return "Log"
         case .notifications: return "Notifications"
         case .tutorials: return "Tutorials"
         case .advanced: return "Advanced"
@@ -29,6 +30,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .connections: return "network"
         case .syncControl: return "arrow.triangle.2.circlepath"
         case .debug: return "ladybug"
+        case .log: return "doc.plaintext"
         case .notifications: return "bell"
         case .tutorials: return "book"
         case .advanced: return "slider.horizontal.3"
@@ -90,8 +92,9 @@ struct ContentView: View {
         case .connections: ConnectionsPage()
         case .syncControl: SyncControlPage()
         case .debug:
+            // C23: debugging tools only — server logs live on the Log page.
             MessageInspectorPage()
-            LogsPage()
+        case .log: LogsPage()
         case .notifications: NotificationsPage()
         case .tutorials: TutorialsPage()
         case .advanced: AdvancedPage()
@@ -234,29 +237,51 @@ private struct DashboardPage: View {
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
-        let state = displayState(backend, model)
-
         if fdaNeeded(backend, model) {
             FullDiskAccessBanner()
         }
 
+        // 1. Status — Server (LAN, primary) + Remote (public/tunnel, optional).
+        ServerRemoteCard()
+
+        // 2. Live sync health/activity — concise technical status.
+        LiveSyncMonitorCard()
+
+        // 3. The single canonical place to set up a client.
+        CreateConnectionCard()
+
+        DashboardDevicesCard()
+    }
+}
+
+// MARK: - Dashboard: Status card (separate Server + Remote sections, C23)
+
+/// LAN/Server and Remote/Public are independent. The Server section always works
+/// on its own; the Remote section is an optional add-on and shows "Not
+/// configured" when no public endpoint exists — it never gates the Server.
+private struct ServerRemoteCard: View {
+    @EnvironmentObject var tunnel: TunnelController
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+
+    private var hasPublic: Bool { model.urls?.public.enabled == true }
+
+    var body: some View {
+        let state = displayState(backend, model)
         SectionCard(title: "Status") {
+            // ── Server (LAN / local) — the primary, always-available path ──
+            Text("Server").font(.subheadline).fontWeight(.semibold)
             HStack(spacing: 10) {
                 StatusDot(on: state.isHealthyDot)
                 Text(state.label).font(.headline)
                 Spacer()
                 if let s = model.status {
-                    Text("\(displayVersion(s.version)) · up \(uptime(s.uptimeSeconds))").foregroundStyle(.secondary)
+                    Text("\(displayVersion(s.version)) · up \(uptime(s.uptimeSeconds))")
+                        .foregroundStyle(.secondary)
                 }
             }
-            LabeledRow(label: "Control", value: managedLabel(state))
-            if let s = model.status {
-                LabeledRow(label: "Store", value: s.store)
-                LabeledRow(label: "Sync", value: s.sync.loopEnabled ? "every \(s.sync.intervalSeconds)s" : "loop off")
-                LabeledRow(label: "WebSocket clients", value: "\(s.websocket.clients)")
-            }
-            if let code = backend.lastExitCode, backend.processState != .running {
-                LabeledRow(label: "Last exit code", value: "\(code)")
+            if let lan = model.urls?.lan.first {
+                LabeledRow(label: "LAN address", value: lan.baseUrl)
             }
             if case .failed(let reason) = backend.processState {
                 Text(reason).font(.callout).foregroundStyle(.orange)
@@ -265,103 +290,58 @@ private struct DashboardPage: View {
             if let next = backend.nextRestartInfo {
                 Text(next).font(.caption).foregroundStyle(.secondary)
             }
-            Text("Use the toolbar control (top‑right) to start or stop the server.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
 
-        RemoteTunnelCard()
+            Divider()
 
-        // Pairing lives on the Dashboard now (the main place to set up a client).
-        ClientSetupSection()
-
-        DashboardDevicesCard()
-
-        // C18: the live sync monitor moved here from the dissolved Server page —
-        // it is the most-consulted runtime panel. Permissions + chat.db
-        // capabilities moved to Advanced.
-        LiveSyncMonitorCard()
-    }
-
-    private func managedLabel(_ state: ServerDisplayState) -> String {
-        switch state {
-        case .externalUnmanaged: return "external (not launched by the companion)"
-        case .running, .starting, .startingUnreachable, .stopping: return "managed by the companion"
-        default: return backend.binaryExists ? "managed by the companion" : "no backend installed"
-        }
-    }
-
-    private func uptime(_ seconds: Int64) -> String {
-        if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m" }
-        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
-    }
-}
-
-// MARK: - Dashboard: Remote Tunnel card
-
-private struct RemoteTunnelCard: View {
-    @EnvironmentObject var tunnel: TunnelController
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
-        SectionCard(title: "Remote Tunnel") {
-            HStack(spacing: 10) {
-                tunnelStatusChip
+            // ── Remote (public / tunnel) — optional ──
+            HStack {
+                Text("Remote").font(.subheadline).fontWeight(.semibold)
                 Spacer()
                 Button { tunnel.refreshDiscovery() } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }.buttonStyle(.borderless).help("Re-check cloudflared/config")
             }
 
-            LabeledRow(label: "cloudflared", value: tunnel.installed ? "installed" : "not found")
-            LabeledRow(label: "Config", value: tunnel.configFound ? "found (~/.cloudflared/config.yml)" : "not found")
-            LabeledRow(label: "Tunnel", value: tunnel.tunnelName)
-            if !tunnel.publicURL.isEmpty {
-                CopyableRow(label: "Public URL", value: tunnel.publicURL)
-            }
-            if let err = tunnel.lastError {
-                Text(err).font(.caption).foregroundStyle(.orange)
+            if hasPublic || tunnel.installed {
+                HStack(spacing: 10) {
+                    tunnelStatusChip
+                    Spacer()
+                }
+                if !tunnel.publicURL.isEmpty {
+                    CopyableRow(label: "Public URL", value: tunnel.publicURL)
+                }
+                if let err = tunnel.lastError {
+                    Text(err).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 12) {
+                    Button { tunnel.start() } label: { Label("Start", systemImage: "play.fill") }
+                        .disabled(!tunnel.installed || !tunnel.configFound || tunnel.isProcessAlive || tunnel.state == .runningExternally)
+                    Button { tunnel.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                        .disabled(!tunnel.isProcessAlive)
+                    Button { tunnel.restart() } label: { Label("Restart", systemImage: "arrow.clockwise") }
+                        .disabled(!tunnel.installed || !tunnel.configFound)
+                    Spacer()
+                    Button("Validate") { Task { await model.validatePublicURL() } }
+                        .disabled(model.publicBusy || !hasPublic)
+                    if model.publicBusy { ProgressView().controlSize(.small) }
+                }
+                if let v = validationText {
+                    Label(v.text, systemImage: v.ok ? "checkmark.circle" : "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(v.ok ? .green : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Toggle("Start tunnel with the server", isOn: $tunnel.startWithServer)
+                    .font(.caption)
+                Toggle("Stop tunnel when the server stops", isOn: $tunnel.stopWithServer)
+                    .font(.caption)
+            } else {
+                // No public endpoint and no tunnel — remote access is simply off.
+                // LAN/pairing continues to work without it.
+                Text("Not configured. LAN pairing works without it; add a tunnel under Connections to enable remote access.")
+                    .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            if !tunnel.installed {
-                Text("Install cloudflared and configure a tunnel to use remote access. MicaGo only runs an existing local tunnel — it never logs into Cloudflare or creates tunnels.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if !tunnel.configFound {
-                Text("No ~/.cloudflared/config.yml found. Create your tunnel config first (see docs/remote-access-cloudflare.md).")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(spacing: 12) {
-                Button { tunnel.start() } label: { Label("Start", systemImage: "play.fill") }
-                    .disabled(!tunnel.installed || !tunnel.configFound || tunnel.isProcessAlive || tunnel.state == .runningExternally)
-                Button { tunnel.stop() } label: { Label("Stop", systemImage: "stop.fill") }
-                    .disabled(!tunnel.isProcessAlive)
-                Button { tunnel.restart() } label: { Label("Restart", systemImage: "arrow.clockwise") }
-                    .disabled(!tunnel.installed || !tunnel.configFound)
-                Spacer()
-                Button("Validate Public URL") { Task { await model.validatePublicURL() } }
-                    .disabled(model.publicBusy || (model.urls?.public.enabled != true))
-                if model.publicBusy { ProgressView().controlSize(.small) }
-            }
-
-            if let v = validationText {
-                Label(v.text, systemImage: v.ok ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(v.ok ? .green : .orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Divider()
-
-            Toggle("Start tunnel with MicaGoServer", isOn: $tunnel.startWithServer)
-                .font(.caption)
-            Toggle("Stop tunnel when the server stops", isOn: $tunnel.stopWithServer)
-                .font(.caption)
-            Text("When enabled, starting the server also starts this tunnel once the server is healthy. If the tunnel fails, the server keeps running.")
-                .font(.caption2).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -398,6 +378,12 @@ private struct RemoteTunnelCard: View {
         default:
             return (r.message.isEmpty ? "Validation failed (HTTP \(r.status))." : r.message, false)
         }
+    }
+
+    private func uptime(_ seconds: Int64) -> String {
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
     }
 }
 
@@ -437,7 +423,7 @@ private struct DeviceCardRow: View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(device.displayTitle).fontWeight(.medium)
-                Text("mode: \(device.modeLabel), push: \(device.pushLabel)")
+                Text("mode: \(device.modeLabel), push: \(device.pushLabel), background: \(device.backgroundLabel)")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -905,14 +891,16 @@ private struct LogsPage: View {
     }
 }
 
-// MARK: - Advanced page (launch/login/silent/auto-restart settings)
+// MARK: - Advanced page (general lifecycle/login + diagnostics)
 
 private struct AdvancedPage: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var backend: BackendController
 
     var body: some View {
-        SectionCard(title: "Startup & Lifecycle") {
+        // C23 cleanup: "Startup & Lifecycle" + "Launch at Login" merged into one
+        // section. General app/server lifecycle + login behavior only.
+        SectionCard(title: "General Settings") {
             Toggle("Start server automatically when the companion launches", isOn: $backend.autoStart)
             Toggle("Restart the server automatically if it crashes", isOn: $backend.autoRestart)
             Toggle("Launch hidden (menu-bar only; no window at launch)", isOn: $backend.launchHidden)
@@ -921,15 +909,14 @@ private struct AdvancedPage: View {
                     // Apply immediately: turning it off restores the Dock icon now.
                     applyActivationPolicy()
                 }
-            Text("“Hide Dock icon” removes the Dock icon while no Dashboard window is open; the menu-bar item stays. Open Dashboard from the menu bar to show the window again. Auto-restart uses exponential backoff, stops after repeated crashes, never restarts after you Stop the server, and never restarts a Full Disk Access failure.")
+            Divider()
+            LaunchAtLoginControls()
+            Text("Auto-restart uses exponential backoff, stops after repeated crashes, never restarts after you Stop the server, and never restarts a Full Disk Access failure.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
-        LaunchAtLoginSection()
-
-        // C18: permissions + runtime + detected chat.db capabilities moved here
-        // from the Dashboard — diagnostics, not daily-driver info.
+        // Permissions + runtime + detected chat.db capabilities — diagnostics.
         if fdaNeeded(backend, model) {
             FullDiskAccessBanner()
         }
@@ -937,13 +924,12 @@ private struct AdvancedPage: View {
         RuntimeCard()
         CapabilitiesCard()
 
-        SectionCard(title: "Configuration") {
+        // C23 cleanup: backend/file paths only. Connection settings (preferred
+        // pairing, verify TLS, public URL) live on the Connections page — not
+        // duplicated here.
+        SectionCard(title: "Files & Paths") {
             LabeledRow(label: "Config file", value: "~/.micago/config.yaml")
             LabeledRow(label: "Backend source", value: backend.binarySource)
-            if let url = model.urls {
-                LabeledRow(label: "Preferred pairing", value: url.preferredPairingEndpoint)
-                LabeledRow(label: "Verify TLS (public)", value: url.public.verifyTls ? "yes" : "no")
-            }
             BinaryPathRow()
         }
 
@@ -1292,108 +1278,52 @@ private struct ReachableDot: View {
     }
 }
 
-// MARK: - Client Setup (pairing endpoint + token; QR encodes the token)
+// MARK: - Create Connection (C23 — one canonical pairing card)
 
-
-private struct ClientSetupSection: View {
+/// The single place to set up a client. Encodes ONE unified connection payload
+/// (all candidates + token + config revision) into a QR code and a copyable
+/// JSON. No LAN-only vs LAN+Public mode picker — the client auto-selects. No
+/// long explanations; per-endpoint rows live in an expandable detail only.
+private struct CreateConnectionCard: View {
     @EnvironmentObject var model: AppModel
 
-    private var lanTargets: [PairingTarget] {
-        model.pairingTargets.filter { $0.scope == .lan }
-    }
-    private var publicTarget: PairingTarget? {
-        model.pairingTargets.first { $0.scope == .public }
-    }
-    private var selectedLan: PairingTarget? {
-        lanTargets.first { $0.baseUrl == model.selectedPairingBaseURL } ?? lanTargets.first
-    }
-    private var hasEndpoint: Bool { selectedLan != nil || publicTarget != nil }
+    private var hasEndpoint: Bool { model.hasLanCandidate || model.hasPublicCandidate }
+    private var ready: Bool { !model.token.isEmpty && hasEndpoint }
 
     var body: some View {
-        SectionCard(title: "Client Setup") {
-            Text("Pick a pairing mode, choose your LAN address, then scan the QR code from the Android app.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // C10: only LAN-only and LAN + Public fallback are offered.
-            Picker("Mode", selection: Binding(
-                get: { model.pairingMode },
-                set: { model.pairingMode = $0 }
-            )) {
-                Text("LAN only").tag("lanOnly")
-                Text("LAN + Public fallback").tag("lanFirst")
-            }
-            .pickerStyle(.segmented)
-
-            Text(model.pairingMode == "lanOnly"
-                 ? "The client connects only on your local network and never uses the public address."
-                 : "The client tries your LAN first, then falls back to the public address if LAN is unreachable.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // Preferred LAN IP.
-            if lanTargets.isEmpty {
-                Text("No LAN endpoint. Choose “Local network” in Server Bind Address and restart the server.")
+        SectionCard(title: "Create Connection") {
+            if !ready {
+                Text(model.token.isEmpty
+                     ? "Start the server to generate a connection."
+                     : "No connection endpoint yet. Pick a bind address under Connections.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                HStack {
-                    Text("LAN address").font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: Binding(
-                        // No force unwrap: this getter runs lazily and the LAN
-                        // list can empty between renders (poll update / server
-                        // stop). "" is a safe no-match tag value.
-                        get: { selectedLan?.baseUrl ?? lanTargets.first?.baseUrl ?? "" },
-                        set: { model.selectedPairingBaseURL = $0 }
-                    )) {
-                        ForEach(lanTargets) { Text($0.baseUrl).tag($0.baseUrl) }
-                    }
-                    .labelsHidden()
+                // QR code.
+                if let image = QRCode.image(from: model.pairingPayload) {
+                    Image(nsImage: image)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 200, height: 200)
                 }
-                if let lan = selectedLan {
-                    EndpointURLRow(label: "Base", value: lan.baseUrl)
-                    EndpointURLRow(label: "WS", value: lan.wsUrl)
+
+                // Small status line.
+                HStack(spacing: 12) {
+                    StatusFlag(on: model.hasLanCandidate, label: "LAN")
+                    StatusFlag(on: model.hasPublicCandidate, label: "Public")
+                    StatusFlag(on: !model.token.isEmpty, label: "Token")
                 }
-            }
+                .font(.caption)
 
-            if model.pairingMode == "lanFirst" {
-                if let pub = publicTarget {
-                    EndpointURLRow(label: "Public", value: pub.baseUrl)
-                } else {
-                    Text("No public URL configured. Set one under Connections to enable the fallback.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Divider()
-
-            HStack(spacing: 8) {
-                Text("Token").font(.caption).foregroundStyle(.secondary)
-                Text(displayToken)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer()
-                Button(model.tokenRevealed ? "Hide" : "Reveal") { model.tokenRevealed.toggle() }
-                    .controlSize(.small)
-                    .disabled(model.token.isEmpty)
-                Button("Copy") { copyToPasteboard(model.token) }
-                    .controlSize(.small)
-                    .disabled(model.token.isEmpty)
-            }
-            Text("Keep your token private. Don’t paste it into screenshots, logs, or chats.")
-                .font(.caption2).foregroundStyle(.secondary)
-
-            if !model.token.isEmpty, hasEndpoint {
                 Button {
                     copyToPasteboard(model.pairingPayload)
                 } label: {
-                    Label("Copy setup JSON", systemImage: "curlybraces")
+                    Label("Copy connection JSON", systemImage: "doc.on.doc")
                 }
                 .controlSize(.small)
 
-                DisclosureGroup("Show payload (token hidden)") {
+                // Per-endpoint detail is opt-in only (kept out of the main view).
+                DisclosureGroup("Connection detail (token hidden)") {
                     Text(model.pairingPayloadRedacted)
                         .font(.system(.caption2, design: .monospaced))
                         .textSelection(.enabled)
@@ -1401,38 +1331,21 @@ private struct ClientSetupSection: View {
                         .padding(.top, 4)
                 }
                 .font(.subheadline)
-
-                DisclosureGroup("Show QR code") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let image = QRCode.image(from: model.pairingPayload) {
-                            Image(nsImage: image)
-                                .interpolation(.none)
-                                .resizable()
-                                .frame(width: 180, height: 180)
-                                .padding(.top, 6)
-                        } else {
-                            Text("Could not render QR code.").foregroundStyle(.secondary)
-                        }
-                        Text("Encodes the chosen LAN address" + (model.pairingMode == "lanFirst" ? " and the public fallback," : ",") + " the connection mode, and the token (v2 pairing).")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .font(.subheadline)
-            }
-        }
-        .onAppear {
-            // Default the preferred LAN IP to the first detected LAN endpoint.
-            if model.selectedPairingBaseURL.isEmpty, let first = lanTargets.first {
-                model.selectedPairingBaseURL = first.baseUrl
             }
         }
     }
+}
 
-    private var displayToken: String {
-        guard !model.token.isEmpty else { return "—" }
-        if model.tokenRevealed { return model.token }
-        return String(model.token.prefix(6)) + "••••••••••••"
+/// A small "Name ✓/✗" capability flag for the Create Connection status line.
+private struct StatusFlag: View {
+    let on: Bool
+    let label: String
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: on ? "checkmark.circle.fill" : "xmark.circle")
+                .foregroundStyle(on ? Color.green : Color.secondary)
+            Text(label).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -1542,30 +1455,30 @@ private struct PermissionRow: View {
 
 // MARK: - Launch at login
 
-private struct LaunchAtLoginSection: View {
+/// C23 cleanup: login-at-launch controls without their own card, so they live
+/// inside the merged "General Settings" section.
+private struct LaunchAtLoginControls: View {
     @State private var enabled = LaunchAtLogin.isEnabled
     @State private var error: String?
 
     var body: some View {
-        SectionCard(title: "Launch at Login") {
-            Toggle(isOn: $enabled) {
-                Text("Start MicaGo Companion when I log in")
+        Toggle(isOn: $enabled) {
+            Text("Start MicaGo Companion when I log in")
+        }
+        .disabled(!LaunchAtLogin.isSupported)
+        .onChange(of: enabled) { newValue in
+            do {
+                try LaunchAtLogin.set(newValue)
+                error = nil
+            } catch {
+                self.error = error.localizedDescription
+                enabled = LaunchAtLogin.isEnabled
             }
-            .disabled(!LaunchAtLogin.isSupported)
-            .onChange(of: enabled) { newValue in
-                do {
-                    try LaunchAtLogin.set(newValue)
-                    error = nil
-                } catch {
-                    self.error = error.localizedDescription
-                    enabled = LaunchAtLogin.isEnabled
-                }
-            }
-            Text("Status: \(LaunchAtLogin.statusDescription)")
-                .font(.caption).foregroundStyle(.secondary)
-            if let error {
-                Text(error).font(.caption).foregroundStyle(.orange)
-            }
+        }
+        Text("Status: \(LaunchAtLogin.statusDescription)")
+            .font(.caption).foregroundStyle(.secondary)
+        if let error {
+            Text(error).font(.caption).foregroundStyle(.orange)
         }
     }
 }

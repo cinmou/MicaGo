@@ -232,10 +232,16 @@ func buildNotification(event relaydb.NotificationEvent, previewMode string) Noti
 		body = sender
 	}
 
+	var sourceRowID int64
+	if event.Message.SourceRowID != nil {
+		sourceRowID = *event.Message.SourceRowID
+	}
+
 	return Notification{
 		Type:        "message:new",
 		MessageGUID: event.Message.GUID,
 		ChatGUID:    event.ChatGUID,
+		SourceRowID: sourceRowID,
 		Title:       title,
 		Body:        body,
 		PreviewMode: previewMode,

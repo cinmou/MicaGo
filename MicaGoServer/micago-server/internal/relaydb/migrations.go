@@ -134,6 +134,10 @@ func (db *DB) Migrate() error {
 	if err := db.ensureColumn("devices", "mode", "TEXT"); err != nil {
 		return err
 	}
+	// C22: whether the client reports a background/push capability (FCM wake).
+	if err := db.ensureColumn("devices", "background", "INTEGER"); err != nil {
+		return err
+	}
 
 	// C7: persist the renderable/debug-only classification so the chat list can
 	// hide noise and compute a real last-message preview without re-scanning.

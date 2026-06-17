@@ -89,11 +89,16 @@ class ServerUrls {
   final PublicEndpoint? public;
   final String preferredPairingEndpoint;
 
+  /// C23: changes whenever the server's LAN/Public connection settings change,
+  /// so the client can refresh candidates without rescanning.
+  final String connectionRevision;
+
   const ServerUrls({
     required this.local,
     required this.lan,
     required this.public,
     required this.preferredPairingEndpoint,
+    this.connectionRevision = '',
   });
 
   factory ServerUrls.fromJson(Map<String, dynamic> json) {
@@ -114,6 +119,7 @@ class ServerUrls {
           : null,
       preferredPairingEndpoint:
           (json['preferredPairingEndpoint'] as String?) ?? 'auto',
+      connectionRevision: (json['connectionRevision'] as String?) ?? '',
     );
   }
 }

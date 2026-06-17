@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
-import '../../core/models/connection_profile.dart';
 import '../settings/message_display_controller.dart';
-import 'endpoint_selection.dart';
 import 'pairing_controller.dart';
 import 'pairing_payload.dart';
 
@@ -153,15 +152,60 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
           bottom: 32,
           left: 24,
           right: 24,
-          child: Text(
-            'Point the camera at the MicaGo pairing QR code\n'
-            '(Mac app → Connections → Client Setup → Pairing QR code).',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Scan the MicaGo connection QR code\n'
+                '(Mac app → Dashboard → Create Connection).',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white),
+              ),
+              const SizedBox(height: 12),
+              // C23: the one alternative to scanning — paste the connection JSON
+              // copied from the Mac app. No LAN-only vs LAN+Public choice.
+              FilledButton.tonalIcon(
+                onPressed: _pasteConnectionJson,
+                icon: const Icon(Icons.content_paste),
+                label: const Text('Paste connection JSON'),
+              ),
+            ],
           ),
         ),
       ],
     );
+  }
+
+  Future<void> _pasteConnectionJson() async {
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final controller = TextEditingController(text: clip?.text?.trim() ?? '');
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Paste connection JSON'),
+        content: TextField(
+          controller: controller,
+          maxLines: 6,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Paste the connection JSON from the Mac app',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Connect'),
+          ),
+        ],
+      ),
+    );
+    if (raw != null && raw.isNotEmpty) _pairing.onScan(raw);
   }
 }
 
@@ -248,32 +292,9 @@ class _PreviewPane extends StatelessWidget {
               ),
             ),
           ),
-          if (pairing.availableModes.length > 1) ...[
-            const SizedBox(height: 16),
-            Text(
-              'Connection mode',
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final mode in pairing.availableModes)
-                  ChoiceChip(
-                    label: Text(connectionModeLabel(mode)),
-                    selected: pairing.effectiveMode == mode,
-                    onSelected: (_) => pairing.chooseMode(mode),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              pairing.effectiveMode == ConnectionMode.lanOnly
-                  ? 'Connects only on your local network. Never uses the public address.'
-                  : 'Tries your local network first, then the public address if LAN is unreachable.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
+          // C23 cleanup: no LAN-only vs LAN+Public mode picker. The unified
+          // connection always tries LAN first, then Public as an optional
+          // fallback — the client decides automatically.
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: onUse,

@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import '../../core/app_controller.dart';
 import '../../core/models/connection_profile.dart';
 import '../../core/network/api_client.dart';
-import 'endpoint_selection.dart';
 import 'onboarding_controller.dart';
 import 'pairing_payload.dart';
 
@@ -23,21 +22,14 @@ class PairingController extends ChangeNotifier {
   PairingPayload? payload;
   String? message;
 
-  /// The mode the user picked (defaults to the payload's mode). Only meaningful
-  /// once a payload is previewed.
-  ConnectionMode? selectedMode;
-
-  List<ConnectionMode> get availableModes =>
-      payload == null ? const [] : offeredModes(payload!);
-
-  ConnectionMode get effectiveMode =>
-      selectedMode ?? payload?.mode ?? ConnectionMode.lanFirst;
+  /// C23: there is no user-facing mode anymore. The unified payload always tries
+  /// LAN first, then Public as an optional fallback.
+  ConnectionMode get effectiveMode => payload?.mode ?? ConnectionMode.lanFirst;
 
   void onScan(String raw) {
     if (stage != PairingStage.scanning) return;
     try {
       payload = parsePairingPayload(raw);
-      selectedMode = payload!.mode;
       message = null;
       stage = PairingStage.preview;
     } on PairingParseException catch (e) {
@@ -47,15 +39,9 @@ class PairingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void chooseMode(ConnectionMode mode) {
-    selectedMode = mode;
-    notifyListeners();
-  }
-
   void scanAgain() {
     stage = PairingStage.scanning;
     payload = null;
-    selectedMode = null;
     message = null;
     notifyListeners();
   }

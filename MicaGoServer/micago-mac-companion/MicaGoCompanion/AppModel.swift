@@ -14,7 +14,6 @@ final class AppModel: ObservableObject {
     @Published var status: ServerStatus?
     @Published var devices: [DeviceInfo] = []
     @Published var lastError: String?
-    @Published var tokenRevealed = false
 
     // Connection endpoints (v0.11)
     @Published var urls: ServerURLs?
@@ -22,17 +21,12 @@ final class AppModel: ObservableObject {
     @Published var publicVerifyTLS: Bool = true
     @Published var publicCheckResult: PublicURLCheckResult?
     @Published var publicBusy = false
-    /// The pairing target the QR code currently encodes (a per-pairing choice,
-    /// not a global mode). Stored by baseUrl.
-    @Published var selectedPairingBaseURL: String = ""
 
-    /// C10 pairing mode for the QR payload: "lanOnly" or "lanFirst" (LAN +
-    /// Public fallback). Persisted. Public/loopback are never offered as a
-    /// standalone user-facing mode.
-    @Published var pairingMode: String =
-        UserDefaults.standard.string(forKey: "pairingMode") ?? "lanFirst" {
-        didSet { UserDefaults.standard.set(pairingMode, forKey: "pairingMode") }
-    }
+    // C23 cleanup: the per-pairing LAN selection (`selectedPairingBaseURL`),
+    // the `pairingMode` (lanOnly/lanFirst), `selectedPairingTarget`, and
+    // `tokenRevealed` were removed. The unified v3 payload includes every LAN
+    // candidate plus Public when configured — there is no manual mode or
+    // single-LAN selection anymore.
 
     /// LAN base URLs the user has hidden from pairing/QR selection. This is a
     /// UI/pairing filter only — it does not change server networking; the
@@ -136,55 +130,39 @@ final class AppModel: ObservableObject {
         return targets
     }
 
-    var selectedPairingTarget: PairingTarget? {
-        let targets = pairingTargets
-        return targets.first { $0.baseUrl == selectedPairingBaseURL } ?? targets.first
-    }
-
-    /// C10 v2 pairing payload for the QR code: endpoint candidates (selected LAN
-    /// endpoint first, optional Public fallback) + mode + token. Loopback/local
-    /// is never included. The token is redacted when [redacted] is true.
-    func pairingPayloadV2(redacted: Bool) -> String {
-        // Prefer the user-selected LAN endpoint; else the first LAN endpoint.
-        let lan = pairingTargets.first { $0.scope == .lan && $0.baseUrl == selectedPairingBaseURL }
-            ?? pairingTargets.first { $0.scope == .lan }
+    /// C23 v3 unified connection payload for the QR code / copy-JSON. It always
+    /// includes ALL available candidates (every LAN endpoint + the Public
+    /// endpoint when configured) so the client can auto-select — there is no
+    /// LAN-only vs LAN+Public mode anymore. Carries the server's connection
+    /// config revision so paired clients can detect later URL changes without
+    /// rescanning. Loopback/local is never included. Token redacted when asked.
+    func pairingPayloadV3(redacted: Bool) -> String {
+        // LAN and Public are independent: LAN candidates always go in (when the
+        // server is bound to a LAN address); Public is an optional extra.
+        let lan = pairingTargets
+            .filter { $0.scope == .lan }
+            .map { ConnectionCandidate(kind: "lan", baseUrl: $0.baseUrl, wsUrl: $0.wsUrl) }
         let pub = pairingTargets.first { $0.scope == .public }
-
-        var endpoints: [[String: Any]] = []
-        var priority = 1
-        func add(_ kind: String, _ t: PairingTarget) {
-            endpoints.append([
-                "kind": kind,
-                "baseUrl": t.baseUrl,
-                "wsUrl": t.wsUrl,
-                "priority": priority,
-            ])
-            priority += 1
-        }
-        if let lan { add("lan", lan) }
-        if pairingMode == "lanFirst", let pub { add("public", pub) }
-        // Fallback when no LAN is available: use Public as the sole endpoint.
-        if endpoints.isEmpty, let pub { add("public", pub) }
-
-        let obj: [String: Any] = [
-            "version": 2,
-            "mode": pairingMode == "lanOnly" ? "lan_only" : "lan_first",
-            "token": redacted ? "<redacted>" : token,
-            "serverName": Host.current().localizedName ?? "MicaGo Server",
-            "endpoints": endpoints,
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-              let json = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return json
+            .map { ConnectionCandidate(kind: "public", baseUrl: $0.baseUrl, wsUrl: $0.wsUrl) }
+        return unifiedConnectionPayload(
+            lan: lan,
+            publicCandidate: pub,
+            token: token,
+            serverName: Host.current().localizedName ?? "MicaGo Server",
+            configRevision: urls?.connectionRevision ?? "",
+            redacted: redacted
+        )
     }
 
-    /// Pairing payload encoded into the QR code (v2).
-    var pairingPayload: String { pairingPayloadV2(redacted: false) }
+    /// Unified connection payload encoded into the QR code (v3).
+    var pairingPayload: String { pairingPayloadV3(redacted: false) }
 
     /// Same payload with the token redacted — safe to show/copy.
-    var pairingPayloadRedacted: String { pairingPayloadV2(redacted: true) }
+    var pairingPayloadRedacted: String { pairingPayloadV3(redacted: true) }
+
+    /// Quick capability flags for the Create Connection status line.
+    var hasLanCandidate: Bool { pairingTargets.contains { $0.scope == .lan } }
+    var hasPublicCandidate: Bool { pairingTargets.contains { $0.scope == .public } }
 
     // MARK: - Hidden LAN endpoints (pairing filter only)
 
@@ -193,7 +171,6 @@ final class AppModel: ObservableObject {
     func setLANHidden(_ baseUrl: String, hidden: Bool) {
         if hidden { hiddenLANBaseURLs.insert(baseUrl) } else { hiddenLANBaseURLs.remove(baseUrl) }
         persistHiddenLAN()
-        ensureValidPairingSelection()
     }
 
     func resetHiddenLANEndpoints() {
@@ -203,14 +180,6 @@ final class AppModel: ObservableObject {
 
     private func persistHiddenLAN() {
         UserDefaults.standard.set(Array(hiddenLANBaseURLs), forKey: "hiddenLANEndpoints")
-    }
-
-    /// Keep selectedPairingBaseURL valid if the chosen endpoint was just hidden.
-    private func ensureValidPairingSelection() {
-        let targets = pairingTargets
-        if !targets.contains(where: { $0.baseUrl == selectedPairingBaseURL }) {
-            selectedPairingBaseURL = targets.first?.baseUrl ?? ""
-        }
     }
 
     func reloadConfig() {
@@ -289,26 +258,8 @@ final class AppModel: ObservableObject {
             publicVerifyTLS = fetched.public.verifyTls
             didSeedPublicInput = true
         }
-
-        // Keep a valid pairing selection, defaulting from the server's preference.
-        let targets = pairingTargets
-        if targets.first(where: { $0.baseUrl == selectedPairingBaseURL }) == nil {
-            selectedPairingBaseURL = defaultPairingBaseURL(for: fetched, targets: targets)
-        }
-    }
-
-    private func defaultPairingBaseURL(for fetched: ServerURLs, targets: [PairingTarget]) -> String {
-        switch fetched.preferredPairingEndpoint {
-        case "lan":
-            if let lan = targets.first(where: { $0.scope == .lan }) { return lan.baseUrl }
-        case "public":
-            if let pub = targets.first(where: { $0.scope == .public }) { return pub.baseUrl }
-        case "local":
-            if let local = targets.first(where: { $0.scope == .local }) { return local.baseUrl }
-        default:
-            break
-        }
-        return targets.first?.baseUrl ?? ""
+        // C23 cleanup: no per-pairing LAN selection to maintain — the unified v3
+        // payload already includes every candidate.
     }
 
     // MARK: - Public endpoint actions

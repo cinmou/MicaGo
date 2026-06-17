@@ -60,5 +60,34 @@ void main() {
       );
       expect(body['name'], 'MicaGo client');
     });
+
+    test('C22: push fields included when an FCM token is present', () {
+      final body = buildDeviceRegistration(
+        name: 'Pixel 7',
+        platform: 'android',
+        id: 'flutter-abc',
+        pushProvider: 'fcm',
+        pushToken: 'fcm-token-xyz',
+        pushEnabled: true,
+        background: true,
+      );
+      expect(body['pushProvider'], 'fcm');
+      expect(body['pushToken'], 'fcm-token-xyz');
+      expect(body['pushEnabled'], true);
+      expect(body['background'], true);
+    });
+
+    test('C22: no pushToken key when Firebase is not configured', () {
+      final body = buildDeviceRegistration(
+        name: 'Pixel 7',
+        platform: 'android',
+        id: 'flutter-abc',
+      );
+      // Optional Firebase: default is no-push, and the token key is omitted.
+      expect(body['pushProvider'], 'none');
+      expect(body['pushEnabled'], false);
+      expect(body['background'], false);
+      expect(body.containsKey('pushToken'), isFalse);
+    });
   });
 }

@@ -48,6 +48,28 @@ class _ChatListScreenState extends State<ChatListScreen> {
     super.dispose();
   }
 
+  // C22: if a notification tap requested a chat GUID, open the matching merged
+  // conversation once and clear the request. Done after the frame so it doesn't
+  // navigate during build.
+  void _maybeOpenPendingChat(List<MergedChat> merged) {
+    final app = context.read<AppController>();
+    final guid = app.pendingOpenChat.value;
+    if (guid == null || guid.isEmpty) return;
+    MergedChat? match;
+    for (final m in merged) {
+      if (m.routes.any((r) => r.guid == guid)) {
+        match = m;
+        break;
+      }
+    }
+    if (match == null) return;
+    final target = match;
+    app.clearPendingOpenChat();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onOpen(target);
+    });
+  }
+
   List<ChatSummary> _filtered(
     List<ChatSummary> chats,
     ContactsService contacts,
@@ -100,6 +122,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
             // C21: merge a contact's multiple chats (iMessage/SMS routes) into
             // one list entry. Client-side view only; real chat GUIDs are intact.
             final merged = mergeChatsByContact(chats, contacts.contactIdFor);
+            // C22: a notification tap requested a specific chat — open it once
+            // the list is loaded, then clear the request.
+            _maybeOpenPendingChat(merged);
             return Column(
               children: [
                 _SearchField(

@@ -259,6 +259,7 @@ type DeviceRecord struct {
 	PushProvider string
 	PushToken    *string
 	PushEnabled  bool
+	Background   bool
 	LastSeenAt   *int64
 	CreatedAt    int64
 	UpdatedAt    int64
@@ -274,6 +275,7 @@ type DeviceJSON struct {
 	PushProvider string `json:"pushProvider"`
 	PushEnabled  bool   `json:"pushEnabled"`
 	PushTokenSet bool   `json:"pushTokenSet"`
+	Background   bool   `json:"background"`
 	Connected    bool   `json:"connected"`
 	LastSeenAt   *int64 `json:"lastSeenAt"`
 	CreatedAt    int64  `json:"createdAt"`

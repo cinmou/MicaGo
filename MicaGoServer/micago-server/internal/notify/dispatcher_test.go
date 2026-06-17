@@ -75,6 +75,80 @@ func TestDispatcherBuildsNotificationPreview(t *testing.T) {
 	}
 }
 
+// fakeProvider captures what the dispatcher sends (C22) so we can assert the
+// BlueBubbles-style payload + that disabled devices are skipped.
+type fakeProvider struct {
+	sent []struct {
+		device       store.DeviceRecord
+		notification Notification
+	}
+}
+
+func (f *fakeProvider) Name() string { return "fcm" }
+func (f *fakeProvider) Send(_ context.Context, d store.DeviceRecord, n Notification) error {
+	f.sent = append(f.sent, struct {
+		device       store.DeviceRecord
+		notification Notification
+	}{d, n})
+	return nil
+}
+
+func TestDispatchNewMessagesFakeProvider(t *testing.T) {
+	fake := &fakeProvider{}
+	d := NewDispatcher(config.Config{NotificationsEnabled: true, NotificationPreview: "sender"})
+	d.providers["fcm"] = fake
+
+	rowID := int64(4242)
+	text := "yo"
+	events := []relaydb.NotificationEvent{{
+		ChatGUID:       "chat-1",
+		ChatIdentifier: ptr("+15550001"),
+		Message: store.MessageJSON{
+			GUID:        "msg-1",
+			Text:        &text,
+			SourceRowID: &rowID,
+		},
+	}}
+	devices := []store.DeviceRecord{
+		{ID: "on", PushProvider: "fcm", PushEnabled: true},
+		{ID: "off", PushProvider: "fcm", PushEnabled: false},  // disabled → skipped
+		{ID: "none", PushProvider: "none", PushEnabled: true}, // provider none → skipped
+	}
+
+	if err := d.DispatchNewMessages(context.Background(), devices, events); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.sent) != 1 {
+		t.Fatalf("expected 1 push (only the enabled fcm device), got %d", len(fake.sent))
+	}
+	got := fake.sent[0]
+	if got.device.ID != "on" {
+		t.Fatalf("expected push to the enabled device, got %q", got.device.ID)
+	}
+	// BlueBubbles-style data fields + the C22 delta cursor.
+	if got.notification.Type != "message:new" || got.notification.ChatGUID != "chat-1" ||
+		got.notification.MessageGUID != "msg-1" || got.notification.SourceRowID != 4242 {
+		t.Fatalf("unexpected push payload: %#v", got.notification)
+	}
+}
+
+func TestDispatchSkipsOwnMessages(t *testing.T) {
+	fake := &fakeProvider{}
+	d := NewDispatcher(config.Config{NotificationsEnabled: true, NotificationPreview: "sender"})
+	d.providers["fcm"] = fake
+	events := []relaydb.NotificationEvent{{
+		ChatGUID: "chat-1",
+		Message:  store.MessageJSON{GUID: "mine", IsFromMe: true},
+	}}
+	devices := []store.DeviceRecord{{ID: "on", PushProvider: "fcm", PushEnabled: true}}
+	if err := d.DispatchNewMessages(context.Background(), devices, events); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.sent) != 0 {
+		t.Fatalf("expected no push for an outgoing message, got %d", len(fake.sent))
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

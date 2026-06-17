@@ -127,6 +127,45 @@ func TestDeviceReregisterUpsertsNoDuplicates(t *testing.T) {
 
 func ptrInt(v int64) *int64 { return &v }
 
+// C22: an FCM token refresh on the same stable device id updates the existing
+// row (no duplicate), and the new token + push/background flags are persisted.
+func TestDeviceTokenRefreshUpdatesSameRow(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := store.DeviceRecord{
+		ID: "flutter-stable", Name: "Pixel", Platform: "android", ClientType: "flutter",
+		PushProvider: "fcm", PushEnabled: true, Background: true,
+		PushToken:  ptr("token-A"),
+		LastSeenAt: ptrInt(100), CreatedAt: 100, UpdatedAt: 100,
+	}
+	if _, err := db.UpsertDevice(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed := base
+	refreshed.PushToken = ptr("token-B")
+	refreshed.UpdatedAt = 200
+	if _, err := db.UpsertDevice(ctx, refreshed); err != nil {
+		t.Fatal(err)
+	}
+
+	devices, err := db.ListDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device after token refresh, got %d", len(devices))
+	}
+	got := devices[0]
+	if got.PushToken == nil || *got.PushToken != "token-B" {
+		t.Fatalf("expected refreshed token-B, got %v", got.PushToken)
+	}
+	if !got.PushEnabled || !got.Background || got.PushProvider != "fcm" {
+		t.Fatalf("expected push+background enabled fcm, got %#v", got)
+	}
+}
+
 func TestUpsertDoesNotDuplicateRows(t *testing.T) {
 	db := openTestDB(t)
 	tx, err := db.sqlDB.Begin()

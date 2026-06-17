@@ -226,3 +226,56 @@ func TestSetPublicURLHandlerRejectsInvalid(t *testing.T) {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
+
+// C23: the connection revision is stable for the same settings and changes when
+// LAN/Public change, so paired clients can refresh candidates without rescanning.
+func TestConnectionRevisionChangesWithSettings(t *testing.T) {
+	base := ServerURLsResponse{
+		LAN: []EndpointInfo{{Kind: "lan", BaseURL: "http://192.168.1.5:3000", WSURL: "ws://192.168.1.5:3000/ws"}},
+	}
+	r1 := connectionRevision(base)
+	if r1 == "" {
+		t.Fatal("expected a non-empty revision")
+	}
+	// Same settings → same revision.
+	if connectionRevision(base) != r1 {
+		t.Fatal("revision should be stable for identical settings")
+	}
+	// Different LAN → different revision.
+	changed := ServerURLsResponse{
+		LAN: []EndpointInfo{{Kind: "lan", BaseURL: "http://192.168.1.9:3000", WSURL: "ws://192.168.1.9:3000/ws"}},
+	}
+	if connectionRevision(changed) == r1 {
+		t.Fatal("revision should change when the LAN endpoint changes")
+	}
+	// Adding a public endpoint → different revision.
+	withPublic := base
+	withPublic.Public = PublicEndpoint{Enabled: true, BaseURL: "https://x.example.com", WSURL: "wss://x.example.com/ws"}
+	if connectionRevision(withPublic) == r1 {
+		t.Fatal("revision should change when a public endpoint is added")
+	}
+}
+
+func TestBuildServerURLsIncludesRevision(t *testing.T) {
+	h := newURLHandlers("192.168.1.5:3000", nil)
+	resp := h.buildServerURLs()
+	if resp.ConnectionRevision == "" {
+		t.Fatal("buildServerURLs should populate a connection revision")
+	}
+}
+
+// C23r: with no public URL configured, LAN endpoints + a revision are still
+// produced — Public missing must never block LAN status.
+func TestBuildServerURLsLanOnlyHasNoPublic(t *testing.T) {
+	h := newURLHandlers("192.168.1.5:3000", nil)
+	resp := h.buildServerURLs()
+	if len(resp.LAN) == 0 {
+		t.Fatal("expected LAN endpoints when bound to a LAN address")
+	}
+	if resp.Public.Enabled {
+		t.Fatal("public should be disabled when none is configured")
+	}
+	if resp.ConnectionRevision == "" {
+		t.Fatal("LAN-only config should still have a connection revision")
+	}
+}

@@ -45,7 +45,9 @@ Map<String, Object?> buildDeviceRegistration({
   String appVersion = kAppVersion,
   String mode = 'lan',
   String pushProvider = 'none',
+  String? pushToken,
   bool pushEnabled = false,
+  bool background = false,
 }) {
   final label = name.trim().isEmpty ? 'MicaGo client' : name.trim();
   return {
@@ -58,6 +60,10 @@ Map<String, Object?> buildDeviceRegistration({
     'mode': mode,
     'clientType': 'flutter',
     'pushProvider': pushProvider,
+    // C22: include the FCM token when push is configured so the server can wake
+    // this device. Empty/absent → the server keeps push disabled for it.
+    if (pushToken != null && pushToken.isNotEmpty) 'pushToken': pushToken,
     'pushEnabled': pushEnabled,
+    'background': background,
   };
 }

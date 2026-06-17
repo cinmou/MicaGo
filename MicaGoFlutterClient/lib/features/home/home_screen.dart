@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
+import '../../core/network/push_service.dart';
 import '../chats/chats_pane.dart';
 import '../settings/settings_screen.dart';
 import 'connection_notice_host.dart';
@@ -20,6 +23,8 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _index = 0;
+  PushService? _push;
+  AppController? _app;
 
   static const _destinations = <_Destination>[
     _Destination('Chats', Icons.chat_bubble_outline, Icons.chat_bubble),
@@ -33,21 +38,35 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     // Open the realtime socket + load endpoints once the shell appears.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final app = context.read<AppController>();
+      _app = app;
       app.connectWebSocket();
       app.refreshServerUrls().catchError((_) {});
+      // C22: start the optional FCM wake path (no-op without Firebase config).
+      _push = PushService(app);
+      unawaited(_push!.start());
+      // A notification tap routes here: jump to the Chats tab so the chat opens.
+      app.pendingOpenChat.addListener(_onOpenChatRequested);
     });
+  }
+
+  void _onOpenChatRequested() {
+    if (_app?.pendingOpenChat.value == null) return;
+    if (_index != 0) setState(() => _index = 0);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       // C20: one entry point — reconnect if needed + lightweight catch-up.
+      // C22: this resume → catchUp is also the post-FCM-wake correctness path.
       context.read<AppController>().onResume();
+      unawaited(_push?.start() ?? Future<void>.value());
     }
   }
 
   @override
   void dispose() {
+    _app?.pendingOpenChat.removeListener(_onOpenChatRequested);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

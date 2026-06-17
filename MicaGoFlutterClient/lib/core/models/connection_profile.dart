@@ -47,6 +47,11 @@ class ConnectionProfile {
   final String? publicWsUrl;
   final ConnectionMode mode;
 
+  /// C23: the server connection-config revision this profile was last synced to.
+  /// Used to detect when the server's LAN/Public candidates change so the client
+  /// can refresh them without rescanning a QR.
+  final String configRevision;
+
   const ConnectionProfile({
     required this.baseUrl,
     required this.token,
@@ -56,6 +61,7 @@ class ConnectionProfile {
     this.publicBaseUrl,
     this.publicWsUrl,
     this.mode = ConnectionMode.auto,
+    this.configRevision = '',
   });
 
   String get effectiveBaseUrl {
@@ -99,6 +105,7 @@ class ConnectionProfile {
     String? publicBaseUrl,
     String? publicWsUrl,
     ConnectionMode? mode,
+    String? configRevision,
   }) {
     return ConnectionProfile(
       baseUrl: baseUrl ?? this.baseUrl,
@@ -109,6 +116,7 @@ class ConnectionProfile {
       publicBaseUrl: publicBaseUrl ?? this.publicBaseUrl,
       publicWsUrl: publicWsUrl ?? this.publicWsUrl,
       mode: mode ?? this.mode,
+      configRevision: configRevision ?? this.configRevision,
     );
   }
 
@@ -121,6 +129,7 @@ class ConnectionProfile {
     'publicBaseUrl': publicBaseUrl,
     'publicWsUrl': publicWsUrl,
     'mode': connectionModeToWire(mode),
+    'configRevision': configRevision,
   };
 
   factory ConnectionProfile.fromJson(Map<String, dynamic> json) {
@@ -133,6 +142,7 @@ class ConnectionProfile {
       publicBaseUrl: json['publicBaseUrl'] as String?,
       publicWsUrl: json['publicWsUrl'] as String?,
       mode: connectionModeFromWire(json['mode'] as String?),
+      configRevision: (json['configRevision'] as String?) ?? '',
     );
   }
 

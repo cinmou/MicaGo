@@ -42,6 +42,9 @@ List<PairingEndpoint> endpointTryOrder(
 /// with only a LAN endpoint offers LAN-only; one with both offers LAN-only and
 /// LAN + Public fallback.
 List<ConnectionMode> offeredModes(PairingPayload payload) {
+  // C23: the unified v3 payload has no manual mode — the client always tries
+  // LAN first then Public, so we never ask the user to choose.
+  if (payload.version >= 3) return const [];
   final hasLan = payload.lan != null;
   final hasPublic = payload.public != null;
   if (hasLan && hasPublic) {
@@ -51,17 +54,5 @@ List<ConnectionMode> offeredModes(PairingPayload payload) {
   if (hasPublic) return const [ConnectionMode.publicOnly];
   return const [];
 }
-
-/// Human label for a connection mode (onboarding UI).
-String connectionModeLabel(ConnectionMode mode) {
-  switch (mode) {
-    case ConnectionMode.lanOnly:
-      return 'LAN only';
-    case ConnectionMode.lanFirst:
-      return 'LAN + Public fallback';
-    case ConnectionMode.publicOnly:
-      return 'Public only';
-    case ConnectionMode.auto:
-      return 'Automatic';
-  }
-}
+// C23 cleanup: connectionModeLabel was removed — the UI no longer shows a
+// LAN-only vs LAN+Public mode chooser (the unified payload auto-selects).

@@ -70,6 +70,9 @@ struct ServerURLs: Codable {
     var lan: [ConnectionEndpoint]
     var `public`: PublicEndpoint
     var preferredPairingEndpoint: String
+    /// C23: a revision that changes whenever the LAN/Public connection settings
+    /// change, so paired clients can refresh candidates without rescanning.
+    var connectionRevision: String?
 }
 
 struct PublicURLCheckResult: Codable {

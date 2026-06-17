@@ -164,6 +164,7 @@ struct DeviceInfo: Codable, Identifiable {
     var pushProvider: String
     var pushEnabled: Bool
     var pushTokenSet: Bool
+    var background: Bool?
     var connected: Bool?
     var lastSeenAt: Int64?
     var createdAt: Int64
@@ -185,12 +186,17 @@ struct DeviceInfo: Codable, Identifiable {
         }
     }
 
-    /// Push capability, shown plainly when not configured (C21u).
+    /// Push capability, shown plainly when not configured (C21u/C22).
     var pushLabel: String {
         if pushProvider == "none" || pushProvider.isEmpty {
             return "not configured"
         }
         return pushEnabled ? "enabled (\(pushProvider))" : "disabled"
+    }
+
+    /// Background (FCM wake) capability for the secondary line (C22).
+    var backgroundLabel: String {
+        (background ?? false) ? "enabled" : "disabled"
     }
 
     var isConnected: Bool { connected ?? false }

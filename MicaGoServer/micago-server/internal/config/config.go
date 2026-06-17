@@ -74,6 +74,12 @@ type FCMConfig struct {
 	Enabled            bool
 	ProjectID          string
 	ServiceAccountPath string
+	// GoogleServicesPath points at the user's own google-services.json (C22).
+	// The server parses its client config (api key, app id, sender id, storage
+	// bucket) and serves it at GET /api/fcm/client so the Flutter app can
+	// initialize Firebase at runtime — no config baked into the APK, fully
+	// optional, BlueBubbles-style user-owned Firebase.
+	GoogleServicesPath string
 }
 
 // FirebaseConfig controls the optional Firestore public-URL sync (v0.12). It
@@ -120,6 +126,7 @@ type fileConfig struct {
 		Enabled            bool
 		ProjectID          string
 		ServiceAccountPath string
+		GoogleServicesPath string
 	}
 	HMS struct {
 		Enabled        bool
@@ -200,6 +207,7 @@ func Load(opts Options) (Config, error) {
 			Enabled:            fileCfg.FCM.Enabled,
 			ProjectID:          fileCfg.FCM.ProjectID,
 			ServiceAccountPath: expandPath(home, fileCfg.FCM.ServiceAccountPath),
+			GoogleServicesPath: expandPath(home, fileCfg.FCM.GoogleServicesPath),
 		},
 		HMS: HMSConfig{
 			Enabled:        fileCfg.HMS.Enabled,
@@ -489,6 +497,7 @@ func renderConfig(cfg fileConfig) string {
 		fmt.Sprintf("  enabled: %t", cfg.FCM.Enabled),
 		fmt.Sprintf("  project_id: %s", quoteYAML(cfg.FCM.ProjectID)),
 		fmt.Sprintf("  service_account_path: %s", quoteYAML(cfg.FCM.ServiceAccountPath)),
+		fmt.Sprintf("  google_services_path: %s", quoteYAML(cfg.FCM.GoogleServicesPath)),
 		"",
 		"hms:",
 		fmt.Sprintf("  enabled: %t", cfg.HMS.Enabled),
@@ -576,6 +585,8 @@ func parseConfig(body string) (fileConfig, error) {
 				cfg.FCM.ProjectID = value
 			case "service_account_path":
 				cfg.FCM.ServiceAccountPath = value
+			case "google_services_path":
+				cfg.FCM.GoogleServicesPath = value
 			}
 		case "hms":
 			switch key {

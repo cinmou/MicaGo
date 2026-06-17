@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"micagoserver/internal/config"
+	"micagoserver/internal/realtime"
 )
 
 // Connection-endpoint aggregation (v0.11). The server always exposes loopback
@@ -83,6 +86,11 @@ type ServerURLsResponse struct {
 	LAN                      []EndpointInfo `json:"lan"`
 	Public                   PublicEndpoint `json:"public"`
 	PreferredPairingEndpoint string         `json:"preferredPairingEndpoint"`
+	// ConnectionRevision (C23) is a short, stateless hash of the connection-
+	// relevant settings (bind address + LAN/Public endpoints). It changes
+	// whenever those change, so a paired client can detect that the server's
+	// connection candidates moved and refresh them without rescanning a QR.
+	ConnectionRevision string `json:"connectionRevision"`
 }
 
 // PublicURLCheckResult is the POST /api/server/public-url/check payload. It
@@ -253,7 +261,29 @@ func (h *Handlers) buildServerURLs() ServerURLsResponse {
 		resp.PreferredPairingEndpoint = snap.preferred
 		resp.Public = buildPublicEndpoint(snap)
 	}
+	resp.ConnectionRevision = connectionRevision(resp)
 	return resp
+}
+
+// connectionRevision is a short stable hash of the connection-relevant fields.
+// Stateless: the same settings always yield the same revision, and any LAN/
+// Public change yields a new one (C23).
+func connectionRevision(resp ServerURLsResponse) string {
+	var b strings.Builder
+	for _, e := range resp.LAN {
+		b.WriteString(e.BaseURL)
+		b.WriteByte('|')
+		b.WriteString(e.WSURL)
+		b.WriteByte('\n')
+	}
+	if resp.Public.Enabled {
+		b.WriteString("public:")
+		b.WriteString(resp.Public.BaseURL)
+		b.WriteByte('|')
+		b.WriteString(resp.Public.WSURL)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:6]) // 12 hex chars is plenty for a revision
 }
 
 func buildPublicEndpoint(snap networkSnapshot) PublicEndpoint {
@@ -307,7 +337,17 @@ func (h *Handlers) SetPublicURL(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, h.buildServerURLs())
+	resp := h.buildServerURLs()
+	// C23: tell connected clients their connection candidates changed so they
+	// refresh without rescanning a QR. Best-effort; the client also re-checks
+	// the revision on its normal reconnect/poll cycle.
+	if h.send != nil && h.send.Events != nil {
+		_ = h.send.Events.Broadcast(r.Context(), realtime.Event{
+			Type: "connection:updated",
+			Data: map[string]any{"configRevision": resp.ConnectionRevision},
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // CheckPublicURL handles POST /api/server/public-url/check.

@@ -97,7 +97,17 @@ class AppController extends ChangeNotifier {
 
   AppController({required this.store}) {
     ws.addListener(_onWebSocketStatusChanged);
+    // C23: when the server's connection settings change it pushes
+    // connection:updated — refresh our candidates so we follow the new LAN/
+    // Public URLs without the user rescanning a QR.
+    _connSub = ws.events.listen((e) {
+      if (e.type == 'connection:updated') {
+        unawaited(refreshServerUrls());
+      }
+    });
   }
+
+  StreamSubscription<WsEvent>? _connSub;
 
   /// Called by the app shell on foreground resume (lightweight refresh).
   void onResume() => _refresh.onResume();
@@ -164,6 +174,13 @@ class AppController extends ChangeNotifier {
   Future<void> _persistEndpointCandidates(ServerUrls urls) async {
     final profile = _profile;
     if (profile == null) return;
+    // C23: skip the rebuild churn when the server's connection config is
+    // unchanged (same revision) and we already have candidates stored.
+    if (urls.connectionRevision.isNotEmpty &&
+        urls.connectionRevision == profile.configRevision &&
+        (profile.lanBaseUrl != null || profile.publicBaseUrl != null)) {
+      return;
+    }
     final lan = urls.lan.isNotEmpty ? urls.lan.first : null;
     final pub = urls.public?.enabled == true ? urls.public : null;
     final next = profile.copyWith(
@@ -171,6 +188,7 @@ class AppController extends ChangeNotifier {
       lanWsUrl: lan?.wsUrl,
       publicBaseUrl: pub?.baseUrl,
       publicWsUrl: pub?.wsUrl,
+      configRevision: urls.connectionRevision,
     );
     _profile = next;
     _activeCandidate = null;
@@ -429,10 +447,51 @@ class AppController extends ChangeNotifier {
       platform: serverPlatformFor(defaultTargetPlatform, isWeb: kIsWeb),
       id: id,
       mode: mode,
+      // C22: include the push capability the PushService discovered (FCM token
+      // when Firebase is configured; 'none' otherwise — fully optional).
+      pushProvider: _pushProvider,
+      pushToken: _pushToken,
+      pushEnabled: _pushEnabled,
+      background: _pushEnabled,
     );
     await api.registerDevice(body);
     _startDeviceHeartbeat(id);
   }
+
+  // C22: push capability reported on registration, set by PushService once it
+  // has (or loses) an FCM token. Defaults to "no push" so a missing/optional
+  // Firebase config simply keeps WebSocket + delta sync as the only paths.
+  String _pushProvider = 'none';
+  String? _pushToken;
+  bool _pushEnabled = false;
+
+  /// Called by [PushService] when the FCM token is obtained, refreshed, or
+  /// cleared. Re-registers this device so the server can wake it (C22).
+  Future<void> updatePushRegistration({
+    required String provider,
+    required String? token,
+    required bool enabled,
+  }) async {
+    _pushProvider = provider;
+    _pushToken = token;
+    _pushEnabled = enabled;
+    await _registerDeviceIfPossible();
+  }
+
+  /// C22: a chat GUID requested via a notification tap. The shell listens and
+  /// opens the conversation (after a delta sync) when possible.
+  final ValueNotifier<String?> pendingOpenChat = ValueNotifier<String?>(null);
+  void requestOpenChat(String chatGuid) {
+    if (chatGuid.isEmpty) return;
+    pendingOpenChat.value = chatGuid;
+  }
+
+  void clearPendingOpenChat() => pendingOpenChat.value = null;
+
+  /// Whether the realtime WebSocket is currently connected. Used by the push
+  /// path to apply BlueBubbles' dedup rule: if the socket is live it already
+  /// delivered the event, so the FCM wake is ignored (C22).
+  bool get isRealtimeConnected => ws.status == WsStatus.connected;
 
   // C21u: keep this device "connected" on the server by refreshing its
   // last-seen time every 30s. When the app/network goes away the ticks stop and
@@ -707,6 +766,7 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     _heartbeatTimer?.cancel();
+    unawaited(_connSub?.cancel());
     _refresh.dispose();
     unawaited(_deltaController.close());
     ws.removeListener(_onWebSocketStatusChanged);

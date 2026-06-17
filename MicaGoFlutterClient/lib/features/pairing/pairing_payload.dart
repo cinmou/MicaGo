@@ -62,12 +62,18 @@ class PairingPayload {
   final String? serverName;
   final List<PairingEndpoint> endpoints;
 
+  /// C23: the server's connection-config revision, carried in the v3 unified
+  /// payload so a paired client can detect later LAN/Public changes without
+  /// rescanning. Empty for v1/v2.
+  final String configRevision;
+
   const PairingPayload({
     required this.version,
     required this.mode,
     required this.token,
     required this.endpoints,
     this.serverName,
+    this.configRevision = '',
   });
 
   PairingEndpoint? get _primary => endpoints.isEmpty ? null : endpoints.first;
@@ -100,6 +106,7 @@ class PairingPayload {
       publicBaseUrl: publicE == null ? null : normalizeBaseUrl(publicE.baseUrl),
       publicWsUrl: publicE?.wsUrl,
       mode: mode,
+      configRevision: configRevision,
     );
   }
 
@@ -136,10 +143,55 @@ PairingPayload parsePairingPayload(String raw) {
   }
 
   final version = (decoded['version'] as num?)?.toInt() ?? 1;
+  // C23 v3: unified payload — all candidates, no mode, with a config revision.
+  if (version >= 3 && decoded['candidates'] is List) {
+    return _parseV3(decoded, token);
+  }
   if (version >= 2 && decoded['endpoints'] is List) {
     return _parseV2(decoded, token);
   }
   return _parseV1(decoded, token);
+}
+
+PairingPayload _parseV3(Map<String, dynamic> decoded, String token) {
+  final rawCandidates = (decoded['candidates'] as List)
+      .whereType<Map<String, dynamic>>()
+      .toList(growable: false);
+
+  final parsed = <PairingEndpoint>[];
+  for (final e in rawCandidates) {
+    final baseUrl = (e['baseUrl'] as String?)?.trim() ?? '';
+    if (baseUrl.isEmpty || !isValidHttpUrl(baseUrl)) continue;
+    final ws = (e['wsUrl'] as String?)?.trim();
+    _validateWs(ws);
+    parsed.add(
+      PairingEndpoint(
+        kind: endpointKindFromWire(e['kind'] as String?),
+        baseUrl: baseUrl,
+        wsUrl: (ws?.isNotEmpty ?? false) ? ws : null,
+        priority: (e['priority'] as num?)?.toInt() ?? 1,
+      ),
+    );
+  }
+
+  // Drop loopback/local; the client always tries LAN first then Public.
+  final usable = parsed.where((e) => e.kind != EndpointKind.local).toList()
+    ..sort((a, b) => a.priority.compareTo(b.priority));
+  if (usable.isEmpty) {
+    throw const PairingParseException(
+      'The connection has no usable LAN or public endpoint.',
+    );
+  }
+
+  return PairingPayload(
+    version: 3,
+    // No user-facing mode in v3 — auto LAN-first, Public fallback.
+    mode: ConnectionMode.lanFirst,
+    token: token,
+    serverName: (decoded['serverName'] as String?)?.trim(),
+    configRevision: (decoded['configRevision'] as String?)?.trim() ?? '',
+    endpoints: usable,
+  );
 }
 
 PairingPayload _parseV1(Map<String, dynamic> decoded, String token) {

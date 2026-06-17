@@ -92,7 +92,7 @@ func TestFCMMessagePayloadIsMinimalStringData(t *testing.T) {
 	// No contact/handle/token fields leak into the payload.
 	for k := range data {
 		switch k {
-		case "type", "messageGuid", "chatGuid", "title", "body", "previewMode", "createdAt":
+		case "type", "messageGuid", "chatGuid", "sourceRowId", "title", "body", "previewMode", "createdAt":
 		default:
 			t.Fatalf("unexpected data key %q", k)
 		}

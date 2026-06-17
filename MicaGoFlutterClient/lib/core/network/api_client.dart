@@ -386,6 +386,26 @@ class ApiClient {
     }
   }
 
+  /// `GET /api/fcm/client` — the server's user-owned Firebase client config
+  /// (C22), parsed from the admin's google-services.json. Returns the `data`
+  /// map (`configured`, `projectId`, `appId`, `apiKey`, `messagingSenderId`,
+  /// `storageBucket`) or null on failure. When `configured` is false the app
+  /// stays on WebSocket + delta sync (Firebase is optional).
+  Future<Map<String, dynamic>?> fetchFcmClientConfig() async {
+    try {
+      final res = await _send(
+        () => _http
+            .get(_uri('/api/fcm/client'), headers: _authHeaders)
+            .timeout(const Duration(seconds: 10)),
+      );
+      if (res.statusCode != 200) return null;
+      final data = _decodeObject(res)['data'];
+      return data is Map<String, dynamic> ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// `POST /api/devices/{id}/heartbeat` — refresh this device's last-seen time
   /// (C21u) so the server can report it as connected. Best-effort; failures are
   /// swallowed (the device simply goes stale → disconnected).

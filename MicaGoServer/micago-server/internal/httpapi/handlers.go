@@ -132,6 +132,7 @@ type deviceRegisterRequest struct {
 	PushProvider string `json:"pushProvider"`
 	PushToken    string `json:"pushToken"`
 	PushEnabled  bool   `json:"pushEnabled"`
+	Background   bool   `json:"background"`
 }
 
 type devicePatchRequest struct {
@@ -1113,6 +1114,23 @@ func (h *Handlers) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, store.DeviceResponse{Data: deviceToJSON(*saved)})
 }
 
+// GetFCMClientConfig serves the user's own Firebase client config (parsed from
+// their google-services.json) so the Flutter app can initialize Firebase at
+// runtime (C22). Returns {configured:false} when Firebase isn't set up, so the
+// app degrades cleanly to WebSocket + delta sync. No secrets: these are public
+// client identifiers, never the service account.
+func (h *Handlers) GetFCMClientConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := notify.LoadFirebaseClientConfig(h.cfg.FCM.GoogleServicesPath)
+	if err != nil {
+		// Misconfigured path → treat as not-configured rather than erroring, so
+		// the client falls back to WS/delta instead of breaking.
+		h.logInternal("load fcm client config", err)
+		writeJSON(w, http.StatusOK, map[string]any{"data": notify.FirebaseClientConfig{Configured: false}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": cfg})
+}
+
 func (h *Handlers) ListDevices(w http.ResponseWriter, r *http.Request) {
 	if h.devices == nil {
 		writeInternalError(w)
@@ -1462,6 +1480,7 @@ func (h *Handlers) buildDeviceRecord(req deviceRegisterRequest) (store.DeviceRec
 		Mode:         mode,
 		PushProvider: strings.TrimSpace(req.PushProvider),
 		PushEnabled:  req.PushEnabled,
+		Background:   req.Background,
 		LastSeenAt:   &now,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -1546,6 +1565,7 @@ func deviceToJSON(device store.DeviceRecord) store.DeviceJSON {
 		PushProvider: device.PushProvider,
 		PushEnabled:  device.PushEnabled,
 		PushTokenSet: device.PushToken != nil && strings.TrimSpace(*device.PushToken) != "",
+		Background:   device.Background,
 		Connected:    deviceConnected(device.LastSeenAt),
 		LastSeenAt:   device.LastSeenAt,
 		CreatedAt:    device.CreatedAt,
