@@ -21,3 +21,13 @@ func TestBuildSendToChatScript(t *testing.T) {
 		t.Fatalf("expected escaped chat guid in script: %s", script)
 	}
 }
+
+func TestBuildSendAttachmentScript(t *testing.T) {
+	script := BuildSendAttachmentScript("iMessage;-;+1555", `/tmp/ab cd/photo".jpg`)
+	if !strings.Contains(script, `POSIX file "/tmp/ab cd/photo\".jpg"`) {
+		t.Fatalf("path not escaped into POSIX file: %s", script)
+	}
+	if !strings.Contains(script, `to chat id "iMessage;-;+1555"`) {
+		t.Fatalf("chat id missing: %s", script)
+	}
+}

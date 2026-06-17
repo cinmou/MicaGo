@@ -54,7 +54,9 @@ SELECT c.guid, c.chat_identifier, c.service_name, c.display_name, c.is_archived,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid) AS total,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0) AS renderable,
   (SELECT m.date_created FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_at,
-  (SELECT m.text FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_text
+  (SELECT m.text FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_text,
+  (SELECT m.service FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_service,
+  (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid AND m.service IN ('iMessage','iMessageLite')) AS imessage_count
 FROM chats c
 WHERE (? = 1 OR c.is_archived = 0)
   AND (? = 'all' OR c.service_name = ?)
@@ -78,6 +80,8 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		var total, renderable int64
 		var latestAt *int64
 		var latestText *string
+		var latestService *string
+		var imessageCount int64
 		if err := rows.Scan(
 			&chat.GUID,
 			&chat.ChatIdentifier,
@@ -88,11 +92,18 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 			&renderable,
 			&latestAt,
 			&latestText,
+			&latestService,
+			&imessageCount,
 		); err != nil {
 			return nil, err
 		}
 		chat.HasRenderableMessages = renderable > 0
 		chat.ServiceCategory = ServiceCategory(chat.ServiceName)
+		// C21: the single server-authoritative service (message-aware, prefers
+		// iMessage when the chat is iMessage-capable) — drives the client badge,
+		// the explicit send capabilities, and the server send gate.
+		chat.EffectiveService = ResolveEffectiveService(chat.ServiceName, latestService, imessageCount > 0)
+		chat.CanSendText, chat.CanSendAttachments = settings.SendCapabilities(chat.EffectiveService)
 		chat.LatestRenderableAt = latestAt
 		if latestText != nil {
 			if t := strings.TrimSpace(*latestText); t != "" {
@@ -147,7 +158,7 @@ SELECT m.guid, m.text, m.subject, m.service, m.account, m.date_created, m.date_r
        m.associated_message_type, m.associated_message_guid, m.thread_originator_guid,
        m.item_type, m.group_action_type, m.group_title, m.balloon_bundle_id,
        m.expressive_send_style_id, m.payload_data_present,
-       ms.date_edited, ms.date_retracted, ms.error
+       ms.date_edited, ms.date_retracted, ms.error, m.source_rowid
 FROM messages AS m
 LEFT JOIN message_state AS ms ON ms.guid = m.guid
 `
@@ -186,6 +197,92 @@ LIMIT ? OFFSET ?;
 	return db.scanRelayMessagesWithAttachments(ctx, rows)
 }
 
+// DeltaResult is the response to a cursor delta fetch (C21): renderable messages
+// changed since the cursor, the affected chat GUIDs, the new cursor, and whether
+// more remain (so the client can page until caught up).
+type DeltaResult struct {
+	Messages  []store.MessageJSON `json:"messages"`
+	ChatGUIDs []string            `json:"chatGuids"`
+	Cursor    int64               `json:"cursor"`
+	HasMore   bool                `json:"hasMore"`
+}
+
+// ListMessagesSince returns renderable messages whose source_rowid is greater
+// than [since], oldest-first, capped at [limit]. The cursor advances to the last
+// returned row, or — when nothing is newer — to the current max so it never
+// regresses. This is the correctness path: realtime WS is the fast path, this
+// catch-up guarantees nothing missed while disconnected/backgrounded.
+//
+// A negative [since] means "uninitialized": return no messages, just the current
+// max cursor, so a fresh client seeds its cursor to "now" without backfilling.
+func (db *DB) ListMessagesSince(ctx context.Context, since int64, limit int) (DeltaResult, error) {
+	maxRowID, err := db.maxMessageRowID(ctx)
+	if err != nil {
+		return DeltaResult{}, err
+	}
+	if since < 0 {
+		return DeltaResult{Messages: []store.MessageJSON{}, ChatGUIDs: []string{}, Cursor: maxRowID}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	query := relayMessageSelect + `
+WHERE COALESCE(m.is_debug_only, 0) = 0
+  AND m.source_rowid > ?
+ORDER BY m.source_rowid ASC
+LIMIT ?;
+`
+	// Fetch one extra to detect hasMore.
+	rows, err := db.sqlDB.QueryContext(ctx, query, since, limit+1)
+	if err != nil {
+		return DeltaResult{}, err
+	}
+	defer rows.Close()
+	messages, err := db.scanRelayMessagesWithAttachments(ctx, rows)
+	if err != nil {
+		return DeltaResult{}, err
+	}
+
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+
+	cursor := since
+	chatSet := map[string]struct{}{}
+	chatGUIDs := []string{}
+	for _, m := range messages {
+		if m.SourceRowID != nil && *m.SourceRowID > cursor {
+			cursor = *m.SourceRowID
+		}
+		if m.ChatGUID != nil {
+			if _, seen := chatSet[*m.ChatGUID]; !seen {
+				chatSet[*m.ChatGUID] = struct{}{}
+				chatGUIDs = append(chatGUIDs, *m.ChatGUID)
+			}
+		}
+	}
+	// No newer rows → advance to the current ceiling so quiet periods don't
+	// re-scan the same window forever.
+	if !hasMore && cursor < maxRowID {
+		cursor = maxRowID
+	}
+
+	return DeltaResult{Messages: messages, ChatGUIDs: chatGUIDs, Cursor: cursor, HasMore: hasMore}, nil
+}
+
+func (db *DB) maxMessageRowID(ctx context.Context) (int64, error) {
+	var maxRowID sql.NullInt64
+	if err := db.sqlDB.QueryRowContext(ctx, `SELECT MAX(source_rowid) FROM messages`).Scan(&maxRowID); err != nil {
+		return 0, err
+	}
+	if maxRowID.Valid {
+		return maxRowID.Int64, nil
+	}
+	return 0, nil
+}
+
 func (db *DB) ChatExists(ctx context.Context, guid string) (bool, error) {
 	var one int
 	err := db.sqlDB.QueryRowContext(ctx, `SELECT 1 FROM chats WHERE guid = ? LIMIT 1`, guid).Scan(&one)
@@ -207,6 +304,23 @@ func (db *DB) GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, er
 	if err != nil {
 		return nil, err
 	}
+	// C21: resolve the same message-aware effective service the chat list and
+	// client use, so the send gate can never disagree with the displayed badge.
+	var latestService *string
+	err = db.sqlDB.QueryRowContext(ctx, `
+SELECT m.service FROM messages m
+WHERE m.chat_guid = ? AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0
+ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1`, guid).Scan(&latestService)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	// C21c: capability signal — does the chat have ANY iMessage message?
+	var imessageCount int64
+	if err := db.sqlDB.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM messages m WHERE m.chat_guid = ? AND m.service IN ('iMessage','iMessageLite')`, guid).Scan(&imessageCount); err != nil {
+		return nil, err
+	}
+	info.EffectiveService = ResolveEffectiveService(info.ServiceName, latestService, imessageCount > 0)
 	return &info, nil
 }
 
@@ -372,6 +486,7 @@ func scanRelayMessages(rows *sql.Rows) ([]store.MessageJSON, error) {
 			&message.DateEdited,
 			&message.DateRetracted,
 			&message.Error,
+			&message.SourceRowID,
 		); err != nil {
 			return nil, err
 		}

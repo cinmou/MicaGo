@@ -126,6 +126,15 @@ func (db *DB) Migrate() error {
 		}
 	}
 
+	// C21u: device identity carries the client app version + connection mode
+	// (lan / lan_public) so the Companion can show a richer device card.
+	if err := db.ensureColumn("devices", "app_version", "TEXT"); err != nil {
+		return err
+	}
+	if err := db.ensureColumn("devices", "mode", "TEXT"); err != nil {
+		return err
+	}
+
 	// C7: persist the renderable/debug-only classification so the chat list can
 	// hide noise and compute a real last-message preview without re-scanning.
 	if err := db.ensureColumn("messages", "is_debug_only", "INTEGER"); err != nil {

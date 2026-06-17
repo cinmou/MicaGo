@@ -24,6 +24,17 @@ class DateSeparatorItem extends ThreadViewItem {
   String get key => 'date:$label';
 }
 
+/// C21u: a centered time chip inserted only between **large time gaps** within
+/// the same day (BlueBubbles-style), so timestamps appear when useful instead
+/// of under every bubble. Keyed by the boundary message so it stays stable.
+class TimeSeparatorItem extends ThreadViewItem {
+  final String label;
+  final String afterKey;
+  TimeSeparatorItem(this.label, this.afterKey);
+  @override
+  String get key => 'time:$afterKey';
+}
+
 class LoadingOlderItem extends ThreadViewItem {
   @override
   String get key => 'loading-older';
@@ -46,6 +57,7 @@ class MessageViewItem extends ThreadViewItem {
   final String? effectHint;
   final MessageDeliveryState deliveryState;
   final bool showStatus; // whether to render a delivery label
+  final bool showTimestamp; // whether the footer shows the time by default
 
   MessageViewItem({
     required this.message,
@@ -60,6 +72,7 @@ class MessageViewItem extends ThreadViewItem {
     required this.effectHint,
     required this.deliveryState,
     required this.showStatus,
+    required this.showTimestamp,
   });
 
   @override
@@ -117,8 +130,14 @@ class ThreadPresentationBuilder {
       );
     }
 
+    // The newest renderable row anchors a footer timestamp at the bottom of the
+    // thread (BlueBubbles shows a time on the last message); everything else is
+    // grouped under date/time separators or revealed on tap.
+    final lastRowKey = rows.isNotEmpty ? rows.last.message.dedupeKey : null;
+
     final items = <ThreadViewItem>[];
     DateTime? lastDay;
+    int? lastTs;
     for (final row in rows) {
       final m = row.message;
       final ts = m.dateCreated;
@@ -128,7 +147,11 @@ class ThreadPresentationBuilder {
         if (lastDay == null || day != lastDay) {
           items.add(DateSeparatorItem(dayLabel(day)));
           lastDay = day;
+        } else if (shouldShowTimeSeparator(lastTs, ts)) {
+          // Same day but a large gap since the previous message: a time chip.
+          items.add(TimeSeparatorItem(timeOfDayLabel(dt), m.dedupeKey));
         }
+        lastTs = ts;
       }
 
       final isSystem =
@@ -159,6 +182,7 @@ class ThreadPresentationBuilder {
               : null,
           deliveryState: deliveryStateFor(m),
           showStatus: !isSystem && showStatusFor(m),
+          showTimestamp: !isSystem && m.dedupeKey == lastRowKey,
         ),
       );
     }
@@ -184,6 +208,26 @@ class ThreadPresentationBuilder {
         return 'Unsupported message';
     }
   }
+}
+
+/// C21u: the gap (since the previous message, same day) above which a centered
+/// time chip is shown. BlueBubbles groups closely-spaced messages and only
+/// surfaces a timestamp when the conversation pauses.
+const Duration kTimeClusterGap = Duration(minutes: 60);
+
+/// Whether a same-day time separator should precede a message sent at [ts],
+/// given the previous message's timestamp [prevTs]. Pure + testable.
+bool shouldShowTimeSeparator(int? prevTs, int? ts, {Duration gap = kTimeClusterGap}) {
+  if (prevTs == null || ts == null) return false;
+  return (ts - prevTs) >= gap.inMilliseconds;
+}
+
+/// 12-hour clock label, e.g. "3:45 PM".
+String timeOfDayLabel(DateTime dt) {
+  final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+  final minute = dt.minute.toString().padLeft(2, '0');
+  final ampm = dt.hour < 12 ? 'AM' : 'PM';
+  return '$hour12:$minute $ampm';
 }
 
 /// Human day-separator label ("Today" / "Yesterday" / "Jan 5" / "Jan 5, 2024").

@@ -6,7 +6,11 @@ plugins {
 
 android {
     namespace = "com.micago.message.mica_go"
-    compileSdk = flutter.compileSdkVersion
+    // C19: file_picker (and its flutter_plugin_android_lifecycle transitive dep)
+    // require compileSdk 36. compileSdk only affects which APIs are available at
+    // compile time — it does not change minSdk/targetSdk (runtime behavior or
+    // device support), so this is the safe, recommended bump.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/websocket_client.dart';
+import 'attachment_panel.dart' show StagedAttachment;
 import 'models/message_model.dart';
 import 'realtime_event_helpers.dart' as rt;
 import 'store/message_collection.dart';
@@ -36,6 +37,7 @@ class ThreadController extends ChangeNotifier {
   bool loadingOlder = false;
 
   StreamSubscription<WsEvent>? _wsSub;
+  StreamSubscription<MessageModel>? _deltaSub;
   Timer? _reloadDebounce;
 
   /// Chronological (oldest → newest); the thread view renders it reversed.
@@ -43,8 +45,18 @@ class ThreadController extends ChangeNotifier {
 
   void start() {
     _wsSub = app.ws.events.listen(_onWsEvent);
+    // C21: also patch from the delta catch-up (the correctness path), not only
+    // WebSocket events. GUID dedup in the collection prevents duplicate bubbles.
+    _deltaSub = app.deltaMessages.listen(_onDeltaMessage);
     unawaited(app.catchUp(reason: 'thread:$chatGuid'));
     load();
+  }
+
+  void _onDeltaMessage(MessageModel msg) {
+    if (msg.chatGuid != chatGuid || msg.guid.isEmpty) return;
+    _col.upsertServer(msg);
+    state = ThreadState.loaded;
+    notifyListeners();
   }
 
   Future<void> load({bool showSpinner = true}) async {
@@ -172,6 +184,59 @@ class ThreadController extends ChangeNotifier {
     if (text == null) return;
     notifyListeners();
     await send(text);
+  }
+
+  // C19 attachment send. Unlike text, the server cannot reconcile an attachment
+  // by content (there is no text to match), so we do NOT add a persistent
+  // optimistic bubble — that would duplicate the real row. Instead we surface a
+  // transient sending/error state on the composer and let the real attachment
+  // row arrive through the normal sync/WS path.
+  bool attachmentSending = false;
+  String? attachmentError;
+
+  Future<void> sendAttachment({
+    required Uint8List bytes,
+    required String filename,
+  }) => sendAttachments([StagedAttachment(bytes: bytes, filename: filename)]);
+
+  /// C21c: BlueBubbles-style multi-send — send each staged attachment to the
+  /// chat GUID sequentially (our server endpoint is one-file-per-request). No
+  /// optimistic bubbles (the server can't reconcile attachments by content, so
+  /// a bubble would duplicate the real row); a single catch-up after the batch
+  /// pulls the real rows. Stops on the first failure and surfaces the error.
+  Future<void> sendAttachments(List<StagedAttachment> items) async {
+    final api = app.api;
+    if (api == null || attachmentSending || items.isEmpty) return;
+    attachmentSending = true;
+    attachmentError = null;
+    notifyListeners();
+
+    try {
+      for (final item in items) {
+        final tempId = 'tmp-att-${DateTime.now().microsecondsSinceEpoch}';
+        await api.sendAttachment(
+          chatGuid: chatGuid,
+          tempGuid: tempId,
+          bytes: item.bytes,
+          filename: item.filename,
+        );
+      }
+      // One catch-up after the batch; the rows also arrive via message:new.
+      await app.catchUp(reason: 'attachment_sent', minInterval: Duration.zero);
+    } on ApiException catch (e) {
+      attachmentError = e.friendly;
+    } catch (e) {
+      attachmentError = '$e';
+    } finally {
+      attachmentSending = false;
+      notifyListeners();
+    }
+  }
+
+  void clearAttachmentError() {
+    if (attachmentError == null) return;
+    attachmentError = null;
+    notifyListeners();
   }
 
   void _onWsEvent(WsEvent e) {
@@ -319,6 +384,7 @@ class ThreadController extends ChangeNotifier {
   void dispose() {
     _reloadDebounce?.cancel();
     _wsSub?.cancel();
+    _deltaSub?.cancel();
     super.dispose();
   }
 }

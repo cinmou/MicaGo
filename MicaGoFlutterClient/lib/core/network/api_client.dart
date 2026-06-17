@@ -9,6 +9,22 @@ import '../../features/chats/models/message_model.dart';
 import '../models/server_urls.dart';
 import 'endpoint_utils.dart';
 
+/// Result of a cursor delta fetch (C21 catch-up). [cursor] is the new persistent
+/// cursor to store; [messages] are oldest-first; [chatGuids] are the chats to
+/// refresh in the list.
+class MessageDelta {
+  final List<MessageModel> messages;
+  final List<String> chatGuids;
+  final int cursor;
+  final bool hasMore;
+  const MessageDelta({
+    required this.messages,
+    required this.chatGuids,
+    required this.cursor,
+    required this.hasMore,
+  });
+}
+
 /// A structured error from a MicaGo REST call. [code] is the stable
 /// machine-readable string from the server error envelope (`{"error":{...}}`)
 /// or a client-side code (`network_error`, `timeout`, `bad_response`).
@@ -198,6 +214,42 @@ class ApiClient {
         .toList(growable: false);
   }
 
+  /// `GET /api/messages/delta?since=<cursor>` — cursor catch-up (C21). Returns
+  /// messages changed since the cursor (oldest-first), the affected chat GUIDs,
+  /// the new cursor, and whether more remain. `since == null` seeds the cursor.
+  Future<MessageDelta> fetchDelta({int? since, int limit = 200}) async {
+    final res = await _send(
+      () => _http
+          .get(
+            _uri('/api/messages/delta', {
+              if (since != null) 'since': '$since',
+              'limit': '$limit',
+            }),
+            headers: _authHeaders,
+          )
+          .timeout(timeout),
+    );
+    if (res.statusCode != 200) {
+      throw _errorFrom(res);
+    }
+    final body = _decodeObject(res);
+    final msgs = (body['messages'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(MessageModel.fromJson)
+            .toList(growable: false) ??
+        const <MessageModel>[];
+    final guids = (body['chatGuids'] as List?)
+            ?.whereType<String>()
+            .toList(growable: false) ??
+        const <String>[];
+    return MessageDelta(
+      messages: msgs,
+      chatGuids: guids,
+      cursor: (body['cursor'] as num?)?.toInt() ?? since ?? -1,
+      hasMore: (body['hasMore'] as bool?) ?? false,
+    );
+  }
+
   /// `GET /api/chats/{guid}/messages` — message history for one chat. The
   /// server returns newest-first; callers reverse to chronological order.
   Future<List<MessageModel>> getMessages(
@@ -266,6 +318,126 @@ class ApiClient {
       throw _errorFrom(res);
     }
     return MessageModel.fromJson(_decodeObject(res));
+  }
+
+  /// `GET /api/sync/settings` — the server's authoritative sync settings,
+  /// including `allowSmsSend` (C20). Returns the flat settings map, or null on
+  /// failure (the caller falls back to read-only behavior).
+  Future<Map<String, dynamic>?> getSyncSettings() async {
+    try {
+      final res = await _send(
+        () => _http
+            .get(_uri('/api/sync/settings'), headers: _authHeaders)
+            .timeout(const Duration(seconds: 10)),
+      );
+      if (res.statusCode != 200) return null;
+      return _decodeObject(res);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `PUT /api/sync/settings` — update the server settings. [settings] is the
+  /// full settings map (the server replaces all fields). Returns the updated
+  /// settings from the `{settings, diagnostics}` envelope, or null on failure.
+  Future<Map<String, dynamic>?> putSyncSettings(
+    Map<String, dynamic> settings,
+  ) async {
+    try {
+      final res = await _send(
+        () => _http
+            .put(
+              _uri('/api/sync/settings'),
+              headers: {..._authHeaders, 'Content-Type': 'application/json'},
+              body: jsonEncode(settings),
+            )
+            .timeout(const Duration(seconds: 15)),
+      );
+      if (res.statusCode != 200) return null;
+      final body = _decodeObject(res);
+      final updated = body['settings'];
+      return updated is Map<String, dynamic> ? updated : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `POST /api/devices/register` — register this client so the server/Companion
+  /// can show a connected device (C19). [body] is a small identity built by
+  /// `buildDeviceRegistration`. Returns the server-assigned device id (echoed in
+  /// `data.id`), or null on any failure (registration is best-effort).
+  Future<String?> registerDevice(Map<String, Object?> body) async {
+    try {
+      final res = await _send(
+        () => _http
+            .post(
+              _uri('/api/devices/register'),
+              headers: {..._authHeaders, 'Content-Type': 'application/json'},
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 10)),
+      );
+      if (res.statusCode != 200) return null;
+      final data = _decodeObject(res)['data'];
+      if (data is Map<String, dynamic>) return data['id'] as String?;
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `POST /api/devices/{id}/heartbeat` — refresh this device's last-seen time
+  /// (C21u) so the server can report it as connected. Best-effort; failures are
+  /// swallowed (the device simply goes stale → disconnected).
+  Future<void> deviceHeartbeat(String id) async {
+    try {
+      await _send(
+        () => _http
+            .post(
+              _uri('/api/devices/${Uri.encodeComponent(id)}/heartbeat'),
+              headers: _authHeaders,
+            )
+            .timeout(const Duration(seconds: 10)),
+      );
+    } catch (_) {
+      // Ignore — presence is derived from freshness, not from this call.
+    }
+  }
+
+  /// `POST /api/chats/{guid}/send-attachment` — send a file to an iMessage chat
+  /// (C19). multipart/form-data with `file` + `tempGuid`. The server replies
+  /// 202 optimistically; the real attachment row arrives via sync/WS. Throws
+  /// [ApiException] on any non-2xx (e.g. 400 for a non-iMessage chat).
+  Future<void> sendAttachment({
+    required String chatGuid,
+    required String tempGuid,
+    required Uint8List bytes,
+    required String filename,
+  }) async {
+    final request = http.MultipartRequest(
+      'POST',
+      _uri('/api/chats/${Uri.encodeComponent(chatGuid)}/send-attachment'),
+    );
+    request.headers.addAll(_authHeaders);
+    request.fields['tempGuid'] = tempGuid;
+    request.files.add(
+      http.MultipartFile.fromBytes('file', bytes, filename: filename),
+    );
+
+    final http.Response res;
+    try {
+      final streamed = await _http
+          .send(request)
+          .timeout(const Duration(seconds: 60));
+      res = await http.Response.fromStream(streamed);
+    } on TimeoutException {
+      throw const ApiException(code: 'timeout', message: 'Attachment send timed out');
+    } catch (e) {
+      throw ApiException(code: 'network_error', message: '$e');
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw _errorFrom(res);
+    }
   }
 
   /// `GET /api/attachments/{guid}` — raw attachment bytes (authenticated).

@@ -66,5 +66,12 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- C21c: image_picker media attachment send. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>MicaGo needs access to your photos so you can send images and videos in chats.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>MicaGo needs camera access so you can take and send photos or videos in chats.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MicaGo needs microphone access to record video with sound for attachments.</string>
 </dict>
 </plist>

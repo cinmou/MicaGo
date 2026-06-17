@@ -473,4 +473,17 @@ final class AppModel: ObservableObject {
         let client = APIClient(baseURL: baseURL, token: token)
         notifResult = await client.testPush(deviceID: deviceID)
     }
+
+    /// C21u: remove a stale/historical paired device, then refresh the list.
+    func deleteDevice(deviceID: String) async {
+        guard let baseURL else { return }
+        let client = APIClient(baseURL: baseURL, token: token)
+        do {
+            try await client.deleteDevice(deviceID: deviceID)
+            devices.removeAll { $0.id == deviceID }
+            devices = (try? await client.devices()) ?? devices
+        } catch {
+            notifResult = "Could not remove device: \(error.localizedDescription)"
+        }
+    }
 }

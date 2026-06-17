@@ -6,9 +6,13 @@ import 'models/connection_profile.dart';
 import 'models/server_urls.dart';
 import 'network/api_client.dart';
 import 'network/connection_candidate.dart';
+import 'network/connection_notice.dart';
+import 'network/device_identity.dart';
+import 'network/refresh_coordinator.dart';
 import 'network/websocket_client.dart';
 import 'storage/local_cache_store.dart';
 import 'storage/secure_store.dart';
+import '../features/chats/models/message_model.dart';
 import '../features/chats/realtime_event_helpers.dart';
 
 /// Counts from a per-chat initial backfill (C10 Part F diagnostics).
@@ -57,6 +61,20 @@ class AppController extends ChangeNotifier {
   /// The realtime client is long-lived; home screen listens to it directly.
   final WebSocketClient ws = WebSocketClient();
 
+  /// C19: one-shot connection notices for the UI (banner/snackbar). Emits only
+  /// on real transitions, de-duplicated, so there are no noisy repeated alerts.
+  final ValueNotifier<ConnectionNotice?> connectionNotice =
+      ValueNotifier<ConnectionNotice?>(null);
+  ConnectionSnapshot? _lastConnectionSnapshot;
+  bool _serverReachable = false;
+
+  /// C20: the server's authoritative sync settings (incl. allowSmsSend),
+  /// fetched on connect. The composer reads [allowSmsSend] from here — the
+  /// client never guesses SMS sendability.
+  Map<String, dynamic>? _syncSettings;
+  bool get allowSmsSend => _syncSettings?['allowSmsSend'] == true;
+  Map<String, dynamic>? get syncSettings => _syncSettings;
+
   ConnectionProfile? _profile;
   ApiClient? _api;
   ServerUrls? _serverUrls;
@@ -69,9 +87,20 @@ class AppController extends ChangeNotifier {
   final RealtimeRefreshDiagnostics realtimeDiagnostics =
       RealtimeRefreshDiagnostics();
 
+  /// C20: owns the fallback refresh tier (reconnect backoff + poll while the
+  /// socket is down). Realtime + targeted refresh stay in the controllers.
+  late final RefreshCoordinator _refresh = RefreshCoordinator(
+    reconnect: () => selectReachableCandidate(reason: 'reconnect'),
+    catchUp: (reason) => catchUp(reason: reason, minInterval: Duration.zero),
+    wsStatus: () => ws.status,
+  );
+
   AppController({required this.store}) {
     ws.addListener(_onWebSocketStatusChanged);
   }
+
+  /// Called by the app shell on foreground resume (lightweight refresh).
+  void onResume() => _refresh.onResume();
 
   ConnectionProfile? get profile => _profile;
   ApiClient? get api => _api;
@@ -193,9 +222,12 @@ class AppController extends ChangeNotifier {
         if (healthy) {
           await client.authCheck();
           _activeCandidate = candidate;
+          _serverReachable = true;
           _logConnectionSelection('${candidate.label} health=true auth=true');
           _logConnectionSelection('selected ${candidate.label}');
           _rebuildApi();
+          // Surface a LAN↔Public fallback switch before the WS reconnects.
+          _emitConnectionNotice();
           notifyListeners();
           connectWebSocket();
           unawaited(catchUp(reason: reason, minInterval: Duration.zero));
@@ -209,6 +241,8 @@ class AppController extends ChangeNotifier {
       }
     }
     _logConnectionSelection('no reachable candidate');
+    _serverReachable = false;
+    _emitConnectionNotice();
     notifyListeners();
     return false;
   }
@@ -237,6 +271,10 @@ class AppController extends ChangeNotifier {
       );
       await cache.writeMetadata('last_catch_up_result_count', '$count');
       notifyListeners();
+      // C21: after the server relay refresh, pull any messages we missed via the
+      // delta cursor — the correctness path that guarantees nothing is lost while
+      // disconnected/backgrounded, independent of WebSocket events.
+      await runDeltaSync(reason: reason);
     } catch (_) {
       // Foreground catch-up is opportunistic; normal REST loads still surface
       // actionable errors in the views that requested data.
@@ -245,23 +283,82 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  // --- C21 delta cursor sync (correctness path) --------------------------------
+
+  int? _syncCursor; // persistent; -1/null seeds to "now" on first run
+  bool _deltaInFlight = false;
+  final StreamController<MessageModel> _deltaController =
+      StreamController<MessageModel>.broadcast();
+
+  /// Messages applied by the delta catch-up. Thread/chat-list controllers
+  /// subscribe and patch their state (GUID dedup prevents duplicate bubbles).
+  Stream<MessageModel> get deltaMessages => _deltaController.stream;
+
+  /// Fetches everything newer than the persisted cursor and applies it to the
+  /// cache + open views, paging until caught up. Idempotent and safe to call on
+  /// reconnect, resume, startup, and the fallback poll.
+  Future<void> runDeltaSync({required String reason}) async {
+    final api = _api;
+    if (api == null || _deltaInFlight) return;
+    _deltaInFlight = true;
+    try {
+      _syncCursor ??=
+          int.tryParse(await cache.readMetadata('sync_cursor') ?? '');
+      var guard = 0;
+      while (guard++ < 20) {
+        final delta = await api.fetchDelta(since: _syncCursor);
+        for (final msg in delta.messages) {
+          final chatGuid = msg.chatGuid;
+          if (chatGuid != null && chatGuid.isNotEmpty) {
+            await cache.upsertMessage(chatGuid, msg);
+          }
+          _deltaController.add(msg);
+        }
+        final advanced = delta.cursor != _syncCursor;
+        _syncCursor = delta.cursor;
+        await cache.writeMetadata('sync_cursor', '${delta.cursor}');
+        if (delta.messages.isNotEmpty) notifyListeners();
+        if (!delta.hasMore) break;
+        if (!advanced) break; // safety: never loop on a non-advancing cursor
+      }
+    } catch (_) {
+      // Opportunistic; the next trigger retries.
+    } finally {
+      _deltaInFlight = false;
+    }
+  }
+
+  /// Recomputes the connection snapshot and surfaces a one-shot notice on a
+  /// real transition (C19). Called whenever WS status or the active endpoint /
+  /// reachability changes. De-duplicates by only emitting on a non-null
+  /// transition result; the UI clears [connectionNotice] after showing it.
+  void _emitConnectionNotice() {
+    final current = ConnectionSnapshot(
+      ws: ws.status,
+      activeKind: _activeCandidate?.kind,
+      serverReachable: _serverReachable || ws.status == WsStatus.connected,
+    );
+    final notice = connectionNoticeFor(_lastConnectionSnapshot, current);
+    _lastConnectionSnapshot = current;
+    if (notice != null) connectionNotice.value = notice;
+  }
+
   void _onWebSocketStatusChanged() {
+    if (ws.status == WsStatus.connected) _serverReachable = true;
+    // Surface a user-visible notice for any status transition (connect, lost,
+    // reconnecting, disconnect). De-dup is handled in the pure derivation.
+    _emitConnectionNotice();
+
     if (ws.status == WsStatus.connected) {
       unawaited(_handleWebSocketReconnect());
-    } else if (ws.status == WsStatus.failed) {
-      _logConnectionSelection(
-        'WS ${ws.status.name}: ${ws.lastError ?? 'closed'}',
-      );
-      if (_profile?.mode == ConnectionMode.lanFirst ||
-          _profile?.mode == ConnectionMode.auto) {
-        unawaited(
-          selectReachableCandidate(
-            reason: 'websocket_${ws.status.name}',
-            skipKind: _activeCandidate?.kind,
-          ),
-        );
-      }
+    } else if (ws.status == WsStatus.failed ||
+        ws.status == WsStatus.disconnected) {
+      _logConnectionSelection('WS ${ws.status.name}: ${ws.lastError ?? 'closed'}');
     }
+    // C20: the coordinator owns all reconnect scheduling + the fallback poll —
+    // covering clean disconnects and single-mode profiles, which the old
+    // failed-only path missed.
+    _refresh.onWsStatusChanged(ws.status);
   }
 
   Future<void> _handleWebSocketReconnect() async {
@@ -279,12 +376,87 @@ class AppController extends ChangeNotifier {
     );
     await cache.writeMetadata('last_reconnect_reason', 'websocket_connected');
     notifyListeners();
+    unawaited(_registerDeviceIfPossible());
+    unawaited(refreshSyncSettings());
     try {
       await catchUp(reason: 'websocket', minInterval: Duration.zero);
     } finally {
       _realtimeCatchingUp = false;
       notifyListeners();
     }
+  }
+
+  /// Fetches the server's sync settings (server-authoritative SMS sendability).
+  Future<void> refreshSyncSettings() async {
+    final settings = await _api?.getSyncSettings();
+    if (settings != null) {
+      _syncSettings = settings;
+      notifyListeners();
+    }
+  }
+
+  /// Updates "Allow SMS sending through Mac" on the server, then refreshes the
+  /// local copy. Returns true on success.
+  Future<bool> setAllowSmsSend(bool value) async {
+    final api = _api;
+    if (api == null) return false;
+    final current = _syncSettings ?? await api.getSyncSettings();
+    if (current == null) return false;
+    final updated = await api.putSyncSettings({
+      ...current,
+      'allowSmsSend': value,
+    });
+    if (updated == null) return false;
+    _syncSettings = updated;
+    notifyListeners();
+    return true;
+  }
+
+  /// C19/C21u: register this client so the Companion shows a connected device.
+  /// Best-effort and idempotent — sends a **stable, client-generated** device id
+  /// (memoized below) on every reconnect so the server upserts the same row
+  /// rather than creating duplicates. Also reports the app version, the active
+  /// connection mode (LAN vs LAN+Public), and the push capability.
+  Future<void> _registerDeviceIfPossible() async {
+    final api = _api;
+    if (api == null) return;
+    final id = await _ensureDeviceId();
+    final mode = _activeCandidate?.kind == ConnectionCandidateKind.public
+        ? 'lan_public'
+        : 'lan';
+    final body = buildDeviceRegistration(
+      name: 'MicaGo on ${defaultTargetPlatform.name}',
+      platform: serverPlatformFor(defaultTargetPlatform, isWeb: kIsWeb),
+      id: id,
+      mode: mode,
+    );
+    await api.registerDevice(body);
+    _startDeviceHeartbeat(id);
+  }
+
+  // C21u: keep this device "connected" on the server by refreshing its
+  // last-seen time every 30s. When the app/network goes away the ticks stop and
+  // the device naturally falls out of the server's connected window.
+  Timer? _heartbeatTimer;
+  void _startDeviceHeartbeat(String id) {
+    _heartbeatTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(_api?.deviceHeartbeat(id) ?? Future<void>.value());
+    });
+  }
+
+  // The stable device id is loaded/created exactly once; the memoized Future
+  // makes concurrent registrations (reconnect + resume + startup) converge on
+  // the same id, so they can never race into two server rows.
+  Future<String>? _deviceIdFuture;
+  Future<String> _ensureDeviceId() =>
+      _deviceIdFuture ??= _loadOrCreateDeviceId();
+
+  Future<String> _loadOrCreateDeviceId() async {
+    final existing = await cache.readMetadata('device_id');
+    if (existing != null && existing.isNotEmpty) return existing;
+    final id = generateStableDeviceId();
+    await cache.writeMetadata('device_id', id);
+    return id;
   }
 
   Future<bool> markRealtimeEventApplied(
@@ -534,6 +706,9 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _heartbeatTimer?.cancel();
+    _refresh.dispose();
+    unawaited(_deltaController.close());
     ws.removeListener(_onWebSocketStatusChanged);
     ws.dispose();
     _api?.close();

@@ -358,6 +358,7 @@ func Run(options Options) error {
 				IncludeRCS:            s.IncludeRCS,
 				IncludeUnknown:        s.IncludeUnknown,
 				IncludeDebugInNormal:  s.IncludeDebugInNormal,
+				AllowSMSSend:          s.AllowSMSSend,
 			}
 		},
 	}

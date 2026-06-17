@@ -1,26 +1,26 @@
-/// The single client-side mapping from server-provided service fields to a
-/// display/behavior category. The server is authoritative: it sends
-/// `serviceCategory` ("imessage" | "sms" | "rcs" | "unknown") and the raw
-/// `service`/`serviceName` string on chats and messages.
+/// The single client-side mapping from the server's service decision to a
+/// display/behavior category. The server is authoritative: C21 it computes one
+/// message-aware `effectiveService` ("imessage" | "sms" | "rcs" | "unknown")
+/// per chat — preferring iMessage — and the client uses ONLY that.
+/// `serviceCategory`/`serviceName` are accepted only as a fallback for an older
+/// server that doesn't send `effectiveService`.
 ///
 /// Deliberately takes ONLY server service fields — never a chat GUID, handle,
 /// phone number, or display name — so the client cannot "guess" SMS from a
-/// phone-shaped sender or a `any;-;` GUID. If the server doesn't provide a
-/// usable value the result is [ChatService.unknown], not SMS.
+/// phone-shaped sender or a `any;-;` GUID. Unknown is the floor, never SMS.
 enum ChatService { imessage, sms, rcs, unknown }
 
-ChatService chatServiceFromServer({String? category, String? rawService}) {
-  switch (category?.trim().toLowerCase()) {
-    case 'imessage':
-      return ChatService.imessage;
-    case 'sms':
-      return ChatService.sms;
-    case 'rcs':
-      return ChatService.rcs;
-  }
-  // Older server without serviceCategory: normalize the raw service string
-  // with the same table the server uses (relaydb.ServiceCategory). This is
-  // string normalization of a server value, not a heuristic.
+ChatService chatServiceFromServer({
+  String? effectiveService,
+  String? category,
+  String? rawService,
+}) {
+  // The server's resolved effective service wins (C21).
+  final eff = _categoryToService(effectiveService);
+  if (eff != null) return eff;
+  // Fallback for older servers: serviceCategory, then a normalized raw service.
+  final cat = _categoryToService(category);
+  if (cat != null) return cat;
   switch (rawService?.trim().toLowerCase()) {
     case 'imessage':
     case 'imessagelite':
@@ -35,6 +35,19 @@ ChatService chatServiceFromServer({String? category, String? rawService}) {
   return ChatService.unknown;
 }
 
+ChatService? _categoryToService(String? category) {
+  switch (category?.trim().toLowerCase()) {
+    case 'imessage':
+      return ChatService.imessage;
+    case 'sms':
+      return ChatService.sms;
+    case 'rcs':
+      return ChatService.rcs;
+    default:
+      return null;
+  }
+}
+
 extension ChatServiceDisplay on ChatService {
   String get label => switch (this) {
     ChatService.imessage => 'iMessage',
@@ -43,8 +56,22 @@ extension ChatServiceDisplay on ChatService {
     ChatService.unknown => 'Unknown',
   };
 
-  /// Sending goes through the server's iMessage (AppleScript) pipeline only.
-  /// SMS/RCS/unknown conversations are readable but read-only until the server
-  /// explicitly supports sending there.
-  bool get canSend => this == ChatService.imessage;
+  /// iMessage is always sendable. SMS is sendable only when the server's
+  /// "Allow SMS sending through Mac" setting is on (C20) — server-authoritative,
+  /// never inferred from the GUID/handle. RCS/unknown are always read-only.
+  bool canSendWith({required bool allowSmsSend}) {
+    switch (this) {
+      case ChatService.imessage:
+        return true;
+      case ChatService.sms:
+        return allowSmsSend;
+      case ChatService.rcs:
+      case ChatService.unknown:
+        return false;
+    }
+  }
+
+  /// iMessage-only sendability (the SMS setting defaults off). Kept for the
+  /// chat-list label; the composer uses [canSendWith] with the live setting.
+  bool get canSend => canSendWith(allowSmsSend: false);
 }

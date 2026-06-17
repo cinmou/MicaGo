@@ -246,7 +246,7 @@ private struct DashboardPage: View {
                 Text(state.label).font(.headline)
                 Spacer()
                 if let s = model.status {
-                    Text("v\(s.version) · up \(uptime(s.uptimeSeconds))").foregroundStyle(.secondary)
+                    Text("\(displayVersion(s.version)) · up \(uptime(s.uptimeSeconds))").foregroundStyle(.secondary)
                 }
             }
             LabeledRow(label: "Control", value: managedLabel(state))
@@ -409,24 +409,68 @@ private struct DashboardDevicesCard: View {
     var body: some View {
         SectionCard(title: "Paired Devices (\(model.devices.count))") {
             if model.devices.isEmpty {
-                Text("Device registration will appear here after push / device registration is implemented.")
+                Text("No devices yet. A device appears here when a MicaGo client connects and registers.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(model.devices) { device in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(device.name).fontWeight(.medium)
-                            Text(device.platform).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Text("\(device.clientType) · push: \(device.pushProvider)\(device.pushEnabled ? " (on)" : "")")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 2)
+                    DeviceCardRow(device: device)
                     Divider()
                 }
             }
         }
+    }
+}
+
+// MARK: - Shared device card (C21u)
+
+/// One paired-device card: "{name} - MicaGo {version}" main line, a
+/// "mode: …, push: …" secondary line, and a right column with connection state
+/// + last-connected time. The top-right edit menu exposes Remove (for stale
+/// devices) and, optionally, Test Push. No private data is shown.
+private struct DeviceCardRow: View {
+    @EnvironmentObject var model: AppModel
+    let device: DeviceInfo
+    var showTestPush: Bool = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(device.displayTitle).fontWeight(.medium)
+                Text("mode: \(device.modeLabel), push: \(device.pushLabel)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 3) {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(device.isConnected ? Color.green : Color.secondary)
+                        .frame(width: 8, height: 8)
+                    Text(device.isConnected ? "Connected" : "Disconnected")
+                        .font(.caption)
+                        .foregroundStyle(device.isConnected ? Color.green : Color.secondary)
+                }
+                Text("last: \(device.lastConnectedLabel)")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Menu {
+                if showTestPush {
+                    Button("Test Push") {
+                        Task { await model.testPush(deviceID: device.id) }
+                    }
+                    .disabled(model.notifBusy || !device.pushEnabled)
+                }
+                Button("Remove Device", role: .destructive) {
+                    Task { await model.deleteDevice(deviceID: device.id) }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -922,7 +966,7 @@ private struct BackendIdentityCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let b = model.status?.backend {
-                LabeledRow(label: "Running version", value: "\(b.version) (\(b.commit))")
+                LabeledRow(label: "Running version", value: "\(displayVersion(b.version)) (\(b.commit))")
                 LabeledRow(label: "Built", value: b.buildTime)
                 LabeledRow(label: "Toolchain", value: "\(b.goVersion) \(b.osArch)")
                 LabeledRow(label: "Executable", value: b.executablePath)
@@ -1403,22 +1447,7 @@ private struct DevicesSection: View {
                 Text("No devices registered.").foregroundStyle(.secondary)
             } else {
                 ForEach(model.devices) { device in
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(device.name).fontWeight(.medium)
-                                Text(device.platform).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Text("\(device.clientType) · push: \(device.pushProvider)\(device.pushEnabled ? " (on)" : "")\(device.pushTokenSet ? " · token set" : "")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Test Push") { Task { await model.testPush(deviceID: device.id) } }
-                            .buttonStyle(.borderless)
-                            .disabled(model.notifBusy || !device.pushEnabled)
-                    }
-                    .padding(.vertical, 4)
+                    DeviceCardRow(device: device, showTestPush: true)
                     Divider()
                 }
                 if let result = model.notifResult {

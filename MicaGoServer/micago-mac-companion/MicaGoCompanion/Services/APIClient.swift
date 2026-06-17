@@ -264,6 +264,14 @@ struct APIClient {
         return "Test push failed: HTTP \(http.statusCode)."
     }
 
+    /// Deletes a paired device record (C21u) — used to prune stale/historical
+    /// devices from the list.
+    func deleteDevice(deviceID: String) async throws {
+        let req = request("api/devices/\(deviceID)", method: "DELETE")
+        let (_, response) = try await Self.session().data(for: req)
+        try Self.validate(response)
+    }
+
     private static func validate(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.badResponse

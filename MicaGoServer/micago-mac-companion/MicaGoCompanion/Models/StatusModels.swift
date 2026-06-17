@@ -159,10 +159,48 @@ struct DeviceInfo: Codable, Identifiable {
     var name: String
     var platform: String
     var clientType: String
+    var appVersion: String?
+    var mode: String?
     var pushProvider: String
     var pushEnabled: Bool
     var pushTokenSet: Bool
+    var connected: Bool?
     var lastSeenAt: Int64?
     var createdAt: Int64
     var updatedAt: Int64
+
+    /// "{name} - MicaGo {version}" — the card's main line (C21u).
+    var displayTitle: String {
+        if let v = appVersion, !v.isEmpty {
+            return "\(name) - MicaGo \(v)"
+        }
+        return name
+    }
+
+    /// "LAN" / "LAN + Public" for the secondary line.
+    var modeLabel: String {
+        switch mode {
+        case "lan_public": return "LAN + Public"
+        default: return "LAN"
+        }
+    }
+
+    /// Push capability, shown plainly when not configured (C21u).
+    var pushLabel: String {
+        if pushProvider == "none" || pushProvider.isEmpty {
+            return "not configured"
+        }
+        return pushEnabled ? "enabled (\(pushProvider))" : "disabled"
+    }
+
+    var isConnected: Bool { connected ?? false }
+
+    /// Human "last connected" string from `lastSeenAt`.
+    var lastConnectedLabel: String {
+        guard let ms = lastSeenAt else { return "never" }
+        let date = Date(timeIntervalSince1970: Double(ms) / 1000.0)
+        let fmt = RelativeDateTimeFormatter()
+        fmt.unitsStyle = .abbreviated
+        return fmt.localizedString(for: date, relativeTo: Date())
+    }
 }

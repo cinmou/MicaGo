@@ -16,6 +16,7 @@ import (
 
 	"micagoserver/internal/config"
 	"micagoserver/internal/notify"
+	"micagoserver/internal/relaydb"
 	micasend "micagoserver/internal/send"
 	"micagoserver/internal/store"
 	"micagoserver/internal/version"
@@ -60,6 +61,10 @@ func (s *stubQueries) ListChatMessages(_ context.Context, _ string, _ int, _ int
 	// layer (here, the stub) — the handler no longer post-filters. includeDebug
 	// returns the raw timeline for the Inspector.
 	return filterStubRows(s.chatMessages, includeDebug), nil
+}
+
+func (s *stubQueries) ListMessagesSince(_ context.Context, since int64, _ int) (relaydb.DeltaResult, error) {
+	return relaydb.DeltaResult{Messages: []store.MessageJSON{}, ChatGUIDs: []string{}, Cursor: since}, nil
 }
 
 // filterStubRows mimics the relay's SQL-level renderable filter: drop debug-only
@@ -290,7 +295,8 @@ func (duplicatePendingManager) ClaimedSnapshot() map[string]struct{}            
 
 type noopSender struct{}
 
-func (noopSender) SendText(context.Context, string, string) error { return nil }
+func (noopSender) SendText(context.Context, string, string) error       { return nil }
+func (noopSender) SendAttachment(context.Context, string, string) error { return nil }
 
 func TestSendTextRejectsDuplicateTempGUID(t *testing.T) {
 	queries := &stubQueries{}
@@ -374,6 +380,9 @@ func (m *fakePendingManager) ClaimedSnapshot() map[string]struct{} {
 type errorSender struct{}
 
 func (errorSender) SendText(context.Context, string, string) error { return errors.New("boom") }
+func (errorSender) SendAttachment(context.Context, string, string) error {
+	return errors.New("boom")
+}
 
 func TestSendTextCleansPendingOnFailure(t *testing.T) {
 	queries := &stubQueries{}
@@ -907,6 +916,33 @@ func TestSyncRulesUnavailableWhenUnset(t *testing.T) {
 	h.GetSyncRules(rec, httptest.NewRequest(http.MethodGet, "/api/sync/rules", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 when rule service unset, got %d", rec.Code)
+	}
+}
+
+// C21u: connection state is derived from last-seen freshness (heartbeat), and
+// the device JSON carries app version + mode for the Companion card.
+func TestDeviceConnectedDerivation(t *testing.T) {
+	now := time.Now().UnixMilli()
+	fresh := now - 10_000  // 10s ago → connected
+	stale := now - 600_000 // 10min ago → disconnected
+
+	if !deviceConnected(&fresh) {
+		t.Fatal("a device seen 10s ago should be connected")
+	}
+	if deviceConnected(&stale) {
+		t.Fatal("a device seen 10min ago should be disconnected")
+	}
+	if deviceConnected(nil) {
+		t.Fatal("a device that never checked in should be disconnected")
+	}
+
+	js := deviceToJSON(store.DeviceRecord{
+		ID: "d1", Name: "Pixel", Platform: "android", ClientType: "flutter",
+		AppVersion: "0.1.0", Mode: "lan_public", PushProvider: "none",
+		LastSeenAt: &fresh,
+	})
+	if js.AppVersion != "0.1.0" || js.Mode != "lan_public" || !js.Connected {
+		t.Fatalf("unexpected device JSON: %#v", js)
 	}
 }
 

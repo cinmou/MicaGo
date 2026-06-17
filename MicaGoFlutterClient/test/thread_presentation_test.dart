@@ -175,6 +175,47 @@ void main() {
     },
   );
 
+  group('C21u timestamp grouping', () {
+    test('no time separator for closely-spaced same-day messages', () {
+      final t0 = DateTime(2024, 1, 1, 10).millisecondsSinceEpoch;
+      final items = _build([
+        _m(guid: 'a', text: 'one', dateCreated: t0),
+        _m(guid: 'b', text: 'two', dateCreated: t0 + 5 * 60 * 1000), // +5 min
+      ]);
+      expect(items.whereType<TimeSeparatorItem>(), isEmpty);
+      // Exactly one date separator (the day), no extra time chips.
+      expect(items.whereType<DateSeparatorItem>().length, 1);
+    });
+
+    test('inserts a time separator on a large same-day gap', () {
+      final t0 = DateTime(2024, 1, 1, 10).millisecondsSinceEpoch;
+      final items = _build([
+        _m(guid: 'a', text: 'one', dateCreated: t0),
+        _m(guid: 'b', text: 'two', dateCreated: t0 + 90 * 60 * 1000), // +90 min
+      ]);
+      expect(items.whereType<TimeSeparatorItem>().length, 1);
+    });
+
+    test('only the newest message shows a default timestamp', () {
+      final t0 = DateTime(2024, 1, 1, 10).millisecondsSinceEpoch;
+      final items = _build([
+        _m(guid: 'a', text: 'one', dateCreated: t0),
+        _m(guid: 'b', text: 'two', dateCreated: t0 + 60 * 1000),
+      ]);
+      final msgs = items.whereType<MessageViewItem>().toList();
+      expect(msgs.firstWhere((m) => m.message.guid == 'a').showTimestamp, isFalse);
+      expect(msgs.firstWhere((m) => m.message.guid == 'b').showTimestamp, isTrue);
+    });
+
+    test('shouldShowTimeSeparator + label are pure and correct', () {
+      expect(shouldShowTimeSeparator(null, 100), isFalse);
+      expect(shouldShowTimeSeparator(0, 30 * 60 * 1000), isFalse); // 30 min
+      expect(shouldShowTimeSeparator(0, 60 * 60 * 1000), isTrue); // 60 min
+      expect(timeOfDayLabel(DateTime(2024, 1, 1, 15, 45)), '3:45 PM');
+      expect(timeOfDayLabel(DateTime(2024, 1, 1, 0, 5)), '12:05 AM');
+    });
+  });
+
   test('loadingOlder appends a spinner item at the chronological end', () {
     final items = _build([
       _m(guid: 'a', text: 'hi', dateCreated: 1),

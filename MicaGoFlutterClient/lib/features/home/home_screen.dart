@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/app_controller.dart';
 import '../chats/chats_pane.dart';
 import '../settings/settings_screen.dart';
+import 'connection_notice_host.dart';
 
 /// The post-pairing app shell: a native Material 3 messenger layout with an
 /// adaptive bottom NavigationBar (narrow) / side NavigationRail (wide).
@@ -40,9 +41,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      final app = context.read<AppController>();
-      app.connectWebSocket();
-      app.catchUp(reason: 'resume');
+      // C20: one entry point — reconnect if needed + lightweight catch-up.
+      context.read<AppController>().onResume();
     }
   }
 
@@ -70,14 +70,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final scaffold = Scaffold(
       appBar: AppBar(title: Text(_destinations[_index].label)),
       body: SafeArea(
-        child: IndexedStack(
-          index: _index,
-          children: [
-            for (var i = 0; i < _destinations.length; i++)
-              // Build lazily-ish: only the visible body needs to be live, but
-              // IndexedStack keeps state across tab switches.
-              _body(i),
-          ],
+        // C19: connection banner (offline / public-fallback) + recovery snackbars.
+        child: ConnectionNoticeHost(
+          child: IndexedStack(
+            index: _index,
+            children: [
+              for (var i = 0; i < _destinations.length; i++)
+                // Build lazily-ish: only the visible body needs to be live, but
+                // IndexedStack keeps state across tab switches.
+                _body(i),
+            ],
+          ),
         ),
       ),
       bottomNavigationBar: wide
@@ -106,6 +109,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             NavigationRail(
               selectedIndex: _index,
               onDestinationSelected: (i) => setState(() => _index = i),
+              // Center the rail items vertically within the rail (default is
+              // top-aligned). Alignment only — the destinations are unchanged.
+              groupAlignment: 0.0,
               labelType: NavigationRailLabelType.all,
               destinations: [
                 for (final d in _destinations)

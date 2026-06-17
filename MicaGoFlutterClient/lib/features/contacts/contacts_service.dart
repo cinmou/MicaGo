@@ -91,6 +91,12 @@ class ContactsService extends ChangeNotifier {
   /// Local display name for a handle/identifier, or null when unmatched.
   String? displayNameFor(String? handle) => index.displayNameFor(handle);
 
+  /// Stable contact id for a handle (normalized phone/email), or null when
+  /// contacts are off or the handle has no confident match (C21 — used to merge
+  /// a contact's multiple chats; a null result means "don't merge").
+  String? contactIdFor(String? handle) =>
+      isReady ? index.contactIdFor(handle) : null;
+
   // In-memory thumbnail cache (never persisted, never uploaded). Keyed by
   // contact id; a missing photo is recorded so we don't refetch.
   final Map<String, Uint8List> _thumbCache = {};

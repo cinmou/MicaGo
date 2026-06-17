@@ -85,6 +85,48 @@ func TestDeviceUpsertListDelete(t *testing.T) {
 	}
 }
 
+// C21u: re-registering the same stable device id must update the existing row
+// (mode/version/last-seen) rather than create duplicates.
+func TestDeviceReregisterUpsertsNoDuplicates(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	first := store.DeviceRecord{
+		ID: "flutter-stable", Name: "Pixel", Platform: "android",
+		ClientType: "flutter", AppVersion: "0.1.0", Mode: "lan",
+		PushProvider: "none", LastSeenAt: ptrInt(100), CreatedAt: 100, UpdatedAt: 100,
+	}
+	if _, err := db.UpsertDevice(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same id, later reconnect: mode flips to lan_public, last-seen advances.
+	second := first
+	second.Mode = "lan_public"
+	second.LastSeenAt = ptrInt(500)
+	second.UpdatedAt = 500
+	if _, err := db.UpsertDevice(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+
+	devices, err := db.ListDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device after re-register, got %d", len(devices))
+	}
+	got := devices[0]
+	if got.Mode != "lan_public" || got.AppVersion != "0.1.0" {
+		t.Fatalf("expected updated mode/version, got mode=%q version=%q", got.Mode, got.AppVersion)
+	}
+	if got.LastSeenAt == nil || *got.LastSeenAt != 500 {
+		t.Fatalf("expected last-seen 500, got %v", got.LastSeenAt)
+	}
+}
+
+func ptrInt(v int64) *int64 { return &v }
+
 func TestUpsertDoesNotDuplicateRows(t *testing.T) {
 	db := openTestDB(t)
 	tx, err := db.sqlDB.Begin()

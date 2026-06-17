@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'chat_list_screen.dart';
 import 'message_thread_screen.dart';
-import 'models/chat_summary.dart';
+import 'models/merged_chat.dart';
 
 /// Responsive Chats surface:
 /// - **compact** (phone): single pane — tapping a chat pushes the thread.
@@ -18,7 +18,7 @@ class ChatsPane extends StatefulWidget {
 }
 
 class _ChatsPaneState extends State<ChatsPane> {
-  ChatSummary? _selected;
+  MergedChat? _selected;
 
   static const double _wideBreakpoint = 720;
 
@@ -30,9 +30,9 @@ class _ChatsPaneState extends State<ChatsPane> {
 
         if (!wide) {
           return ChatListScreen(
-            onOpen: (chat) => Navigator.of(context).push(
+            onOpen: (merged) => Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (_) => MessageThreadScreen(chat: chat),
+                builder: (_) => MessageThreadScreen(merged: merged),
               ),
             ),
           );
@@ -43,8 +43,8 @@ class _ChatsPaneState extends State<ChatsPane> {
             SizedBox(
               width: 360,
               child: ChatListScreen(
-                selectedGuid: _selected?.guid,
-                onOpen: (chat) => setState(() => _selected = chat),
+                selectedGuid: _selected?.primary.guid,
+                onOpen: (merged) => setState(() => _selected = merged),
               ),
             ),
             const VerticalDivider(width: 1),
@@ -52,8 +52,8 @@ class _ChatsPaneState extends State<ChatsPane> {
               child: _selected == null
                   ? const _NoSelection()
                   : MessageThreadScreen(
-                      key: ValueKey(_selected!.guid),
-                      chat: _selected!,
+                      key: ValueKey(_selected!.key),
+                      merged: _selected!,
                       embedded: true,
                     ),
             ),

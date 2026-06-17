@@ -13,6 +13,12 @@ class ChatSummary {
   final String? chatIdentifier;
   final String? serviceName; // raw chat.db value, e.g. iMessage | SMS | null
   final String? serviceCategory; // server-normalized: imessage|sms|rcs|unknown
+  final String? effectiveService; // C21 server-authoritative, message-aware
+  // C21c: explicit server-computed send capabilities. The client consumes these
+  // directly — it never re-derives sendability from the service + setting. Null
+  // (older server) falls back to deriving from [service] + the SMS setting.
+  final bool? canSendTextRaw;
+  final bool? canSendAttachmentsRaw;
   final String? displayName; // group name; null for 1:1 (per server contract)
   final bool isArchived;
 
@@ -35,6 +41,9 @@ class ChatSummary {
     this.chatIdentifier,
     this.serviceName,
     this.serviceCategory,
+    this.effectiveService,
+    this.canSendTextRaw,
+    this.canSendAttachmentsRaw,
     this.displayName,
     this.isArchived = false,
     this.lastMessagePreview,
@@ -53,11 +62,26 @@ class ChatSummary {
   /// should be hidden from the default list.
   bool get isNoiseOnly => !hasRenderableMessages;
 
-  /// Server-authoritative service for this chat row. Falls back from the
-  /// normalized category to the raw service string; never inferred from the
-  /// GUID, handle, or phone-number shape.
-  ChatService get service =>
-      chatServiceFromServer(category: serviceCategory, rawService: serviceName);
+  /// The single server-authoritative service (C21): the server's message-aware
+  /// `effectiveService` (prefers iMessage), with serviceCategory/serviceName as
+  /// a fallback for older servers. Drives the badge, composer, and every send
+  /// path. Never inferred from the GUID, handle, or phone-number shape.
+  ChatService get service => chatServiceFromServer(
+    effectiveService: effectiveService,
+    category: serviceCategory,
+    rawService: serviceName,
+  );
+
+  /// C21c: whether text can be sent to this chat. Uses the explicit server
+  /// capability when present (zero client inference); falls back to deriving
+  /// from [service] + [allowSmsSend] only for an older server. iMessage always;
+  /// SMS iff the setting is on; unknown never.
+  bool canSendText({required bool allowSmsSend}) =>
+      canSendTextRaw ?? service.canSendWith(allowSmsSend: allowSmsSend);
+
+  /// C21c: whether attachments can be sent to this chat (same source as text).
+  bool canSendAttachments({required bool allowSmsSend}) =>
+      canSendAttachmentsRaw ?? service.canSendWith(allowSmsSend: allowSmsSend);
 
   /// Best display title: group/display name, else the handle/identifier, else
   /// the opaque GUID as a last resort.
@@ -105,6 +129,9 @@ class ChatSummary {
     String? chatIdentifier,
     String? serviceName,
     String? serviceCategory,
+    String? effectiveService,
+    bool? canSendTextRaw,
+    bool? canSendAttachmentsRaw,
     String? displayName,
     bool? isArchived,
     String? lastMessagePreview,
@@ -123,6 +150,9 @@ class ChatSummary {
       chatIdentifier: chatIdentifier ?? this.chatIdentifier,
       serviceName: serviceName ?? this.serviceName,
       serviceCategory: serviceCategory ?? this.serviceCategory,
+      effectiveService: effectiveService ?? this.effectiveService,
+      canSendTextRaw: canSendTextRaw ?? this.canSendTextRaw,
+      canSendAttachmentsRaw: canSendAttachmentsRaw ?? this.canSendAttachmentsRaw,
       displayName: displayName ?? this.displayName,
       isArchived: isArchived ?? this.isArchived,
       lastMessagePreview: lastMessagePreview ?? this.lastMessagePreview,
@@ -146,6 +176,9 @@ class ChatSummary {
       chatIdentifier: json['chatIdentifier'] as String?,
       serviceName: json['serviceName'] as String?,
       serviceCategory: json['serviceCategory'] as String?,
+      effectiveService: json['effectiveService'] as String?,
+      canSendTextRaw: json['canSendText'] as bool?,
+      canSendAttachmentsRaw: json['canSendAttachments'] as bool?,
       displayName: json['displayName'] as String?,
       isArchived: (json['isArchived'] as bool?) ?? false,
       // Prefer the C7 server-computed renderable preview/timestamp (real data).
@@ -177,6 +210,9 @@ class ChatSummary {
     'chatIdentifier': chatIdentifier,
     'serviceName': serviceName,
     'serviceCategory': serviceCategory,
+    'effectiveService': effectiveService,
+    'canSendText': canSendTextRaw,
+    'canSendAttachments': canSendAttachmentsRaw,
     'displayName': displayName,
     'isArchived': isArchived,
     'latestRenderablePreview': lastMessagePreview,

@@ -8,13 +8,14 @@ import 'avatar.dart';
 import 'chat_list_controller.dart';
 import 'chat_service.dart';
 import 'models/chat_summary.dart';
+import 'models/merged_chat.dart';
 
 /// The chat list: loads `GET /api/chats` and shows loading/empty/error/loaded
 /// states with pull-to-refresh. Material 3 list rows (no iMessage styling).
 /// Selection is delegated to [onOpen] so the same widget works single-pane
 /// (push a thread) and two-pane (select into the detail pane).
 class ChatListScreen extends StatefulWidget {
-  final void Function(ChatSummary chat) onOpen;
+  final void Function(MergedChat merged) onOpen;
   final String? selectedGuid;
 
   const ChatListScreen({super.key, required this.onOpen, this.selectedGuid});
@@ -96,6 +97,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
           case ChatListState.loaded:
             final contacts = context.watch<ContactsService>();
             final chats = _filtered(_controller.chats, contacts);
+            // C21: merge a contact's multiple chats (iMessage/SMS routes) into
+            // one list entry. Client-side view only; real chat GUIDs are intact.
+            final merged = mergeChatsByContact(chats, contacts.contactIdFor);
             return Column(
               children: [
                 _SearchField(
@@ -105,18 +109,20 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 Expanded(
                   child: RefreshIndicator(
                     onRefresh: () => _controller.load(showSpinner: false),
-                    child: chats.isEmpty
+                    child: merged.isEmpty
                         ? _NoMatches(query: _query)
                         : ListView.separated(
-                            itemCount: chats.length,
+                            itemCount: merged.length,
                             separatorBuilder: (_, _) =>
                                 const Divider(height: 1, indent: 72),
                             itemBuilder: (context, i) {
-                              final chat = chats[i];
+                              final m = merged[i];
                               return _ChatRow(
-                                chat: chat,
-                                selected: chat.guid == widget.selectedGuid,
-                                onTap: () => widget.onOpen(chat),
+                                merged: m,
+                                selected: m.routes.any(
+                                  (r) => r.guid == widget.selectedGuid,
+                                ),
+                                onTap: () => widget.onOpen(m),
                               );
                             },
                           ),
@@ -181,12 +187,12 @@ class _NoMatches extends StatelessWidget {
 }
 
 class _ChatRow extends StatelessWidget {
-  final ChatSummary chat;
+  final MergedChat merged;
   final bool selected;
   final VoidCallback onTap;
 
   const _ChatRow({
-    required this.chat,
+    required this.merged,
     required this.onTap,
     this.selected = false,
   });
@@ -194,6 +200,7 @@ class _ChatRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final chat = merged.primary;
     // Prefer a local contact name (1:1) when contacts matching is enabled.
     final contacts = context.watch<ContactsService>();
     final resolvedName = (!chat.isGroup)
@@ -223,6 +230,11 @@ class _ChatRow extends StatelessWidget {
               ),
             ),
           ),
+          // C21: show how many routes this contact has (iMessage + SMS, etc.).
+          if (merged.isMerged) ...[
+            const SizedBox(width: 6),
+            Icon(Icons.merge_type, size: 13, color: scheme.onSurfaceVariant),
+          ],
           if (chat.isArchived) ...[
             const SizedBox(width: 6),
             Icon(
@@ -233,10 +245,8 @@ class _ChatRow extends StatelessWidget {
           ],
         ],
       ),
-      // Last-message preview is shown only if the server provides it; today's
-      // server does not, so fall back to the service/identifier subtitle.
       subtitle: Text(
-        _subtitle(chat),
+        _subtitle(),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -244,15 +254,23 @@ class _ChatRow extends StatelessWidget {
     );
   }
 
-  String _subtitle(ChatSummary chat) {
-    final preview = chat.lastMessagePreview?.trim() ?? '';
+  String _subtitle() {
+    final preview = merged.lastMessagePreview?.trim() ?? '';
     if (preview.isNotEmpty) return preview;
-    // Server-authoritative service label (normalized), never the raw chat.db
-    // string and never guessed from the handle/GUID shape.
+    final chat = merged.primary;
+    // For a merged contact, label the available routes (e.g. "iMessage · SMS");
+    // otherwise the single service label. Server-authoritative, never guessed.
     final parts = <String>[
-      if (chat.service != ChatService.unknown) chat.service.label,
+      if (merged.isMerged)
+        merged.routes
+            .map((r) => r.service.label)
+            .toSet()
+            .where((l) => l != 'Unknown')
+            .join(' · ')
+      else if (chat.service != ChatService.unknown)
+        chat.service.label,
       if (chat.isGroup) 'Group',
-    ];
+    ].where((s) => s.isNotEmpty).toList();
     if (parts.isEmpty && chat.chatIdentifier != null) {
       return chat.chatIdentifier!;
     }

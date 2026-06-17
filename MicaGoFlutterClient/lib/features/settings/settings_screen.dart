@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
 import '../../core/theme_controller.dart';
+import '../../core/ui/top_banner.dart';
 import '../contacts/people_screen.dart';
 import '../debug/debug_log_panel.dart';
 import '../home/connection_status_view.dart';
@@ -36,6 +37,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Text('Appearance', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
         _AppearanceCard(theme: theme),
+        const SizedBox(height: 20),
+        Text('Messaging', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        _SmsSendingCard(app: app),
         const SizedBox(height: 20),
         Text('More', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
@@ -226,6 +231,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
 }
 
 /// Theme mode, color, and language controls.
+/// C20: server-authoritative "Allow SMS sending through Mac" toggle. Reads and
+/// writes the server's sync settings — the client never guesses. Default off:
+/// SMS chats stay read-only until the user turns this on (and the server's
+/// Messages can actually send SMS).
+class _SmsSendingCard extends StatefulWidget {
+  final AppController app;
+  const _SmsSendingCard({required this.app});
+
+  @override
+  State<_SmsSendingCard> createState() => _SmsSendingCardState();
+}
+
+class _SmsSendingCardState extends State<_SmsSendingCard> {
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pull the current server value when the screen opens (it is also fetched
+    // on connect). Best-effort.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.app.syncSettings == null) {
+        widget.app.refreshSyncSettings();
+      }
+    });
+  }
+
+  Future<void> _toggle(bool value) async {
+    setState(() => _busy = true);
+    final ok = await widget.app.setAllowSmsSend(value);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!ok) {
+      TopBanner.show(
+        context,
+        'Could not update the SMS setting',
+        kind: TopBannerKind.error,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppController>();
+    final unreachable = app.syncSettings == null;
+    return Card(
+      child: SwitchListTile(
+        secondary: const Icon(Icons.sms_outlined),
+        title: const Text('Allow SMS sending through Mac'),
+        subtitle: Text(
+          unreachable
+              ? 'Connect to the server to change this setting.'
+              : 'When on, SMS conversations can be sent through your Mac’s '
+                    'Messages. When off, SMS is read-only. iMessage is always '
+                    'sendable; Unknown is always read-only.',
+        ),
+        value: app.allowSmsSend,
+        onChanged: (_busy || unreachable) ? null : _toggle,
+      ),
+    );
+  }
+}
+
 class _AppearanceCard extends StatelessWidget {
   final ThemeController theme;
   const _AppearanceCard({required this.theme});

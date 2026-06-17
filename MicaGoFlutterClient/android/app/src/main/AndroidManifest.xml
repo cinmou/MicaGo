@@ -9,6 +9,15 @@
          WRITE_CONTACTS is intentionally NOT declared; contacts are never
          modified or uploaded. -->
     <uses-permission android:name="android.permission.READ_CONTACTS"/>
+    <!-- C21c: photo_manager reads the gallery for the attachment media grid.
+         Android 13+ uses the granular READ_MEDIA_* permissions; older versions
+         fall back to READ_EXTERNAL_STORAGE (capped at SDK 32). Media is only
+         read to stage attachments the user selects; nothing is uploaded without
+         an explicit send. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
     <application
         android:label="MicaGo"
         android:name="${applicationName}"

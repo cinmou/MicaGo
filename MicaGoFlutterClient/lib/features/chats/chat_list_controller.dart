@@ -6,6 +6,7 @@ import '../../core/app_controller.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/websocket_client.dart';
 import 'models/chat_summary.dart';
+import 'models/message_model.dart';
 import 'realtime_event_helpers.dart' as rt;
 
 enum ChatListState { idle, loading, loaded, empty, error }
@@ -20,6 +21,7 @@ class ChatListController extends ChangeNotifier {
   List<ChatSummary> chats = const [];
   String? error;
   StreamSubscription<WsEvent>? _wsSub;
+  StreamSubscription<MessageModel>? _deltaSub;
   Timer? _reloadDebounce;
 
   /// When true, also request debug-only/noise-only chats from the server.
@@ -29,6 +31,10 @@ class ChatListController extends ChangeNotifier {
 
   void startRealtime() {
     _wsSub ??= app.ws.events.listen(_onWsEvent);
+    // C21: a delta catch-up message means a chat summary changed — reload the
+    // list (debounced) so the last-message preview/order updates even when no
+    // WebSocket event fired.
+    _deltaSub ??= app.deltaMessages.listen((_) => _scheduleServerReload());
     unawaited(app.catchUp(reason: 'chat-list'));
   }
 
@@ -205,6 +211,7 @@ class ChatListController extends ChangeNotifier {
   void dispose() {
     _reloadDebounce?.cancel();
     _wsSub?.cancel();
+    _deltaSub?.cancel();
     super.dispose();
   }
 }

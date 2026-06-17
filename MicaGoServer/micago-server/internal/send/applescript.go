@@ -29,6 +29,28 @@ func BuildSendToChatScript(chatGUID, message string) string {
 end tell`, escapeAppleScriptString(message), escapeAppleScriptString(chatGUID))
 }
 
+// SendAttachment sends a local file to the chat. Messages accepts a file
+// reference; `POSIX file "<path>"` resolves an absolute path to that reference.
+func (s AppleScriptSender) SendAttachment(ctx context.Context, chatGUID, filePath string) error {
+	script := BuildSendAttachmentScript(chatGUID, filePath)
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+func BuildSendAttachmentScript(chatGUID, filePath string) string {
+	return fmt.Sprintf(`tell application "Messages"
+  send (POSIX file "%s") to chat id "%s"
+end tell`, escapeAppleScriptString(filePath), escapeAppleScriptString(chatGUID))
+}
+
 func escapeAppleScriptString(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
 	value = strings.ReplaceAll(value, `"`, `\"`)

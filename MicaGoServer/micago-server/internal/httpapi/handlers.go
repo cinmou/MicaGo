@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net"
@@ -46,6 +47,7 @@ type queryService interface {
 	ChatExists(ctx context.Context, guid string) (bool, error)
 	GetChatInfo(ctx context.Context, guid string) (*store.ChatInfo, error)
 	ListChatMessages(ctx context.Context, guid string, limit, offset int, includeEmpty bool) ([]store.MessageJSON, error)
+	ListMessagesSince(ctx context.Context, since int64, limit int) (relaydb.DeltaResult, error)
 	FindOutgoingMessageMatch(ctx context.Context, guid string, normalizedText string, sentAtUnixMilli int64, excludedGUIDs map[string]struct{}) (*store.MessageJSON, error)
 }
 
@@ -125,6 +127,8 @@ type deviceRegisterRequest struct {
 	Name         string `json:"name"`
 	Platform     string `json:"platform"`
 	ClientType   string `json:"clientType"`
+	AppVersion   string `json:"appVersion"`
+	Mode         string `json:"mode"`
 	PushProvider string `json:"pushProvider"`
 	PushToken    string `json:"pushToken"`
 	PushEnabled  bool   `json:"pushEnabled"`
@@ -527,6 +531,38 @@ func (h *Handlers) GetRecentMessages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetMessagesDelta is the cursor catch-up endpoint (C21). The client passes its
+// persisted cursor as ?since=<rowid> (or omits it / passes -1 to seed); the
+// server returns renderable messages newer than the cursor, the affected chat
+// GUIDs, the new cursor, and whether more remain. This is the correctness path
+// that guarantees nothing is missed while the WebSocket was down or the app
+// backgrounded — realtime WS remains the fast path.
+func (h *Handlers) GetMessagesDelta(w http.ResponseWriter, r *http.Request) {
+	since := int64(-1)
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			writeBadRequest(w, "since must be an integer rowid")
+			return
+		}
+		since = v
+	}
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	result, err := h.queries.ListMessagesSince(r.Context(), since, limit)
+	if err != nil {
+		h.logInternal("list messages delta", err)
+		writeInternalError(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handlers) GetChats(w http.ResponseWriter, r *http.Request) {
 	limit, offset, ok := parseListParams(w, r)
 	if !ok {
@@ -604,6 +640,35 @@ func (h *Handlers) GetChatMessages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// chatSendable enforces the server-authoritative send gate (C20): iMessage is
+// always sendable; SMS only when the AllowSMSSend setting is on; everything else
+// is read-only. Decided purely from the chat's service name — never the GUID or
+// handle shape. Returns (ok, userMessage). If the settings service is missing,
+// it conservatively allows iMessage only.
+func (h *Handlers) chatSendable(ctx context.Context, chatInfo *store.ChatInfo) (bool, string) {
+	// C21: gate on the chat's resolved effective service — the SAME value the
+	// client shows on the badge — so display and sendability can never disagree.
+	effective := chatInfo.EffectiveService
+	if effective == "" {
+		// Older relay row without a resolved value: fall back to the raw service.
+		effective = relaydb.ServiceCategory(chatInfo.ServiceName)
+	}
+	if effective == "imessage" {
+		return true, ""
+	}
+	if h.syncSettings != nil {
+		if settings, err := h.syncSettings.GetSyncSettings(ctx); err == nil {
+			if settings.CategorySendable(effective) {
+				return true, ""
+			}
+			if effective == "sms" && !settings.AllowSMSSend {
+				return false, "SMS sending is disabled. Enable “Allow SMS sending through Mac” to send to this chat."
+			}
+		}
+	}
+	return false, "this chat is read-only (only iMessage, and SMS when enabled, can be sent to)"
+}
+
 func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 	if h.send == nil || h.send.Pending == nil || h.send.Sender == nil {
 		writeInternalError(w)
@@ -621,8 +686,8 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		writeNotFound(w, "chat not found")
 		return
 	}
-	if chatInfo.ServiceName == nil || *chatInfo.ServiceName != serviceIMessage {
-		writeBadRequest(w, "chat must be an iMessage chat")
+	if ok, msg := h.chatSendable(r.Context(), chatInfo); !ok {
+		writeBadRequest(w, msg)
 		return
 	}
 
@@ -792,6 +857,128 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 		"recoverable": true,
 		"message":     timeoutMsg,
 	})
+}
+
+// maxOutgoingAttachmentBytes caps an uploaded attachment (100 MiB). iMessage
+// itself enforces smaller limits per service; this is just a safety bound.
+const maxOutgoingAttachmentBytes = 100 << 20
+
+// SendAttachment sends a file to an iMessage chat (C19). The client uploads the
+// bytes as multipart/form-data ("file", optional "tempGuid"); the server writes
+// them to a private temp file and hands the path to Messages via AppleScript.
+//
+// Unlike text send, there is no text to match in chat.db, so confirmation is
+// optimistic: a successful osascript means "send requested" and the real row
+// arrives through the normal sync/WS path. The send is gated to iMessage only —
+// SMS/RCS/unknown chats are read-only on the client and rejected here too.
+func (h *Handlers) SendAttachment(w http.ResponseWriter, r *http.Request) {
+	if h.send == nil || h.send.Sender == nil {
+		writeInternalError(w)
+		return
+	}
+
+	guid := r.PathValue("guid")
+	chatInfo, err := h.queries.GetChatInfo(r.Context(), guid)
+	if err != nil {
+		h.logInternal("get chat info", err)
+		writeInternalError(w)
+		return
+	}
+	if chatInfo == nil {
+		writeNotFound(w, "chat not found")
+		return
+	}
+	if ok, msg := h.chatSendable(r.Context(), chatInfo); !ok {
+		writeBadRequest(w, msg)
+		return
+	}
+
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		writeBadRequest(w, "expected multipart/form-data with a file")
+		return
+	}
+	tempGUID := strings.TrimSpace(r.FormValue("tempGuid"))
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeBadRequest(w, "missing file field")
+		return
+	}
+	defer file.Close()
+	if header.Size > maxOutgoingAttachmentBytes {
+		writeAPIError(w, http.StatusRequestEntityTooLarge, "file_too_large", "attachment exceeds the size limit")
+		return
+	}
+
+	// Persist to a private temp file Messages can read. Keep the original
+	// filename (sanitized) so the recipient sees a sensible name.
+	tmpPath, err := h.writeOutgoingTempFile(header.Filename, file)
+	if err != nil {
+		h.logInternal("write outgoing attachment", err)
+		writeInternalError(w)
+		return
+	}
+	// Best-effort cleanup; Messages copies the file into its own store on send.
+	defer func() {
+		if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			h.logInternal("remove outgoing attachment temp", rmErr)
+		}
+	}()
+
+	if tempGUID != "" {
+		h.broadcastSendPending(r.Context(), tempGUID, guid)
+	}
+	if err := h.send.Sender.SendAttachment(r.Context(), guid, tmpPath); err != nil {
+		h.logSend(tempGUID, "attachment send failed", err.Error())
+		if tempGUID != "" {
+			h.broadcastSendError(r.Context(), tempGUID, guid, "send_failed", "failed to send attachment")
+		}
+		writeAPIError(w, http.StatusInternalServerError, "send_failed", "failed to send attachment")
+		return
+	}
+
+	// Optimistic: pull the new row in promptly so it appears without waiting for
+	// the next poll tick. The real attachment row is delivered via sync/WS.
+	if h.send.SyncNow != nil {
+		if err := h.send.SyncNow(r.Context()); err != nil {
+			h.logInternal("sync after attachment send", err)
+		}
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"tempGuid": tempGUID,
+		"chatGuid": guid,
+		"state":    "sent_unconfirmed",
+		"filename": filepath.Base(header.Filename),
+	})
+}
+
+// writeOutgoingTempFile saves an upload under <attachmentsRoot>/outgoing with a
+// random prefix, preserving the (sanitized) original base name.
+func (h *Handlers) writeOutgoingTempFile(filename string, src io.Reader) (string, error) {
+	dir := filepath.Join(h.attachmentsRoot, "outgoing")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	base := filepath.Base(filename)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "attachment"
+	}
+	var randBytes [8]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, hex.EncodeToString(randBytes[:])+"-"+base)
+	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, io.LimitReader(src, maxOutgoingAttachmentBytes)); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 func (h *Handlers) GetAttachment(w http.ResponseWriter, r *http.Request) {
@@ -1262,11 +1449,17 @@ func (h *Handlers) buildDeviceRecord(req deviceRegisterRequest) (store.DeviceRec
 	}
 
 	now := time.Now().UnixMilli()
+	mode := strings.TrimSpace(req.Mode)
+	if mode == "" {
+		mode = "lan"
+	}
 	device := store.DeviceRecord{
 		ID:           id,
 		Name:         strings.TrimSpace(req.Name),
 		Platform:     strings.TrimSpace(req.Platform),
 		ClientType:   strings.TrimSpace(req.ClientType),
+		AppVersion:   strings.TrimSpace(req.AppVersion),
+		Mode:         mode,
 		PushProvider: strings.TrimSpace(req.PushProvider),
 		PushEnabled:  req.PushEnabled,
 		LastSeenAt:   &now,
@@ -1308,6 +1501,9 @@ func validateDeviceRecord(device store.DeviceRecord, supportedProviders []string
 	if !slices.Contains([]string{"tauri", "flutter", "web", "native", "unknown"}, device.ClientType) {
 		return errors.New("clientType must be one of: tauri, flutter, web, native, unknown")
 	}
+	if device.Mode != "" && !slices.Contains([]string{"lan", "lan_public"}, device.Mode) {
+		return errors.New("mode must be one of: lan, lan_public")
+	}
 	if !slices.Contains([]string{"none", "webhook", "fcm", "hms", "harmony_push", "ntfy"}, device.PushProvider) {
 		return errors.New("pushProvider must be one of: none, webhook, fcm, hms, harmony_push, ntfy")
 	}
@@ -1326,15 +1522,31 @@ func validateDeviceRecord(device store.DeviceRecord, supportedProviders []string
 	return nil
 }
 
+// deviceConnectedWindow is how recently a device must have checked in (via
+// register or heartbeat) to be considered live. The Flutter client heartbeats
+// every ~30s while its WebSocket is up, so a device that has gone away falls
+// out of this window and is reported as disconnected (C21u).
+const deviceConnectedWindow = 90 * time.Second
+
+func deviceConnected(lastSeenAt *int64) bool {
+	if lastSeenAt == nil {
+		return false
+	}
+	return time.Since(time.UnixMilli(*lastSeenAt)) <= deviceConnectedWindow
+}
+
 func deviceToJSON(device store.DeviceRecord) store.DeviceJSON {
 	return store.DeviceJSON{
 		ID:           device.ID,
 		Name:         device.Name,
 		Platform:     device.Platform,
 		ClientType:   device.ClientType,
+		AppVersion:   device.AppVersion,
+		Mode:         device.Mode,
 		PushProvider: device.PushProvider,
 		PushEnabled:  device.PushEnabled,
 		PushTokenSet: device.PushToken != nil && strings.TrimSpace(*device.PushToken) != "",
+		Connected:    deviceConnected(device.LastSeenAt),
 		LastSeenAt:   device.LastSeenAt,
 		CreatedAt:    device.CreatedAt,
 		UpdatedAt:    device.UpdatedAt,

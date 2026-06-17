@@ -34,8 +34,18 @@ type ChatJSON struct {
 	ChatIdentifier  *string `json:"chatIdentifier"`
 	ServiceName     *string `json:"serviceName"`
 	ServiceCategory string  `json:"serviceCategory,omitempty"`
-	DisplayName     *string `json:"displayName"`
-	IsArchived      bool    `json:"isArchived"`
+	// EffectiveService (C21) is the single server-authoritative service that the
+	// client uses for the badge AND sendability — message-aware, prefers
+	// iMessage. The same value gates sending server-side. imessage|sms|rcs|unknown.
+	EffectiveService string `json:"effectiveService,omitempty"`
+	// CanSendText / CanSendAttachments (C21c) are explicit server-computed
+	// capabilities — the client consumes these booleans directly and never
+	// re-derives sendability from the service + setting. They match exactly what
+	// the send handlers enforce.
+	CanSendText        bool    `json:"canSendText"`
+	CanSendAttachments bool    `json:"canSendAttachments"`
+	DisplayName        *string `json:"displayName"`
+	IsArchived         bool    `json:"isArchived"`
 
 	// C7 renderable-timeline summary (additive). Populated by the relay store so
 	// the client can hide noisy chats and show a real last-message preview.
@@ -48,6 +58,7 @@ type ChatJSON struct {
 
 type MessageJSON struct {
 	GUID                 string           `json:"guid"`
+	SourceRowID          *int64           `json:"sourceRowId,omitempty"` // chat.db ROWID — the delta cursor (C21)
 	Text                 *string          `json:"text"`
 	Subject              *string          `json:"subject"`
 	Service              *string          `json:"service"`
@@ -233,6 +244,9 @@ type AttachmentMeta struct {
 type ChatInfo struct {
 	GUID        string
 	ServiceName *string
+	// EffectiveService (C21) is the resolved, message-aware service category the
+	// send gate uses, identical to the value exposed on ChatJSON.
+	EffectiveService string
 }
 
 type DeviceRecord struct {
@@ -240,6 +254,8 @@ type DeviceRecord struct {
 	Name         string
 	Platform     string
 	ClientType   string
+	AppVersion   string
+	Mode         string
 	PushProvider string
 	PushToken    *string
 	PushEnabled  bool
@@ -253,9 +269,12 @@ type DeviceJSON struct {
 	Name         string `json:"name"`
 	Platform     string `json:"platform"`
 	ClientType   string `json:"clientType"`
+	AppVersion   string `json:"appVersion"`
+	Mode         string `json:"mode"`
 	PushProvider string `json:"pushProvider"`
 	PushEnabled  bool   `json:"pushEnabled"`
 	PushTokenSet bool   `json:"pushTokenSet"`
+	Connected    bool   `json:"connected"`
 	LastSeenAt   *int64 `json:"lastSeenAt"`
 	CreatedAt    int64  `json:"createdAt"`
 	UpdatedAt    int64  `json:"updatedAt"`
@@ -369,6 +388,7 @@ type ServerSyncSettings struct {
 	IncludeRCS            bool   `json:"includeRCS"`
 	IncludeUnknown        bool   `json:"includeUnknown"`
 	IncludeDebugInNormal  bool   `json:"includeDebugInNormal"`
+	AllowSMSSend          bool   `json:"allowSmsSend"`
 }
 
 // ServerBackendStatus identifies the exact running backend binary (C17). Its
