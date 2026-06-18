@@ -15,6 +15,7 @@ import (
 
 	"micagoserver/internal/config"
 	"micagoserver/internal/httpapi"
+	"micagoserver/internal/imessage"
 	"micagoserver/internal/notify"
 	"micagoserver/internal/realtime"
 	"micagoserver/internal/relaydb"
@@ -367,6 +368,7 @@ func Run(options Options) error {
 	handlers.SetRuleService(relay)                   // v0.11.3 sync rules backed by relay.db
 	handlers.SetSyncSettingsService(relay)           // C13 service scope + backfill strategy
 	handlers.SetNotificationConfigurator(dispatcher) // v0.12 live FCM/Firebase config
+	handlers.SetMessageActionPerformer(imessage.NewHelperPerformer(""))
 	handlers.SetSyncNow(func(ctx context.Context) (store.ServerSyncDiagnostics, error) {
 		if _, err := syncAndBroadcast(ctx, "client_request"); err != nil {
 			return store.ServerSyncDiagnostics{}, err
@@ -400,6 +402,19 @@ func Run(options Options) error {
 
 	log.Printf("api-store: relaydb (single canonical path)")
 	log.Printf("listening on http://%s", cfg.HTTPAddr)
+	go func() {
+		timer := time.NewTimer(500 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			_ = hub.Broadcast(ctx, realtime.Event{
+				Type: "connection:updated",
+				Data: map[string]any{"reason": "startup"},
+			})
+		}
+	}()
 
 	err = srv.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {

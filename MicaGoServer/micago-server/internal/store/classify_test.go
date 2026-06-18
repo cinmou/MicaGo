@@ -139,6 +139,16 @@ func TestClassifyMessageJSONForNormalAPI(t *testing.T) {
 			wantRec:  RenderRecommendationBubble,
 		},
 		{
+			name: "associated sticker",
+			msg: MessageJSON{
+				AssociatedMessageType: ip(1000),
+				AssociatedMessageGUID: sp("p:0/target"),
+				Attachments:           []AttachmentJSON{{AttachmentKind: AttachmentKindSticker, IsSticker: true}},
+			},
+			wantKind: SemanticKindSticker,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
 			name:     "service event",
 			msg:      MessageJSON{ItemType: ip(1)},
 			wantKind: SemanticKindServiceEvent,

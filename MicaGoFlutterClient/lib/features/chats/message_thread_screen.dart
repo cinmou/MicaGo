@@ -591,30 +591,49 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
         final t = m.message.tempId;
         if (t != null) _controller.retry(t);
       },
-      onActions: (position) =>
-          showMessageActionMenu(context, m.message, position),
+      onActions: (position) => showMessageActionMenu(
+        context,
+        m.message,
+        position,
+        chatGuid: _active.guid,
+        api: api,
+        onChanged: () => _controller.load(showSpinner: false),
+      ),
     );
     return m.message.hasAttachments ? RepaintBoundary(child: bubble) : bubble;
   }
 }
 
-enum MessageAction { copy }
+enum MessageAction { copy, info, edit, retract, delete }
 
 Future<void> showMessageActionMenu(
   BuildContext context,
   MessageModel message,
-  Offset globalPosition,
-) async {
+  Offset globalPosition, {
+  String? chatGuid,
+  ApiClient? api,
+  Future<void> Function()? onChanged,
+}) async {
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
   final text = displayText(message);
-  if (text == null) return;
-  final selected = await showMenu<MessageAction>(
-    context: context,
-    position: RelativeRect.fromRect(
-      Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
-      Offset.zero & overlay.size,
-    ),
-    items: [
+  var caps = const MessageActionCapabilities();
+  if (api != null) {
+    try {
+      caps = await api.getMessageActionCapabilities();
+    } catch (_) {
+      caps = const MessageActionCapabilities();
+    }
+  }
+  if (!context.mounted) return;
+  final canMutate =
+      api != null &&
+      chatGuid != null &&
+      chatGuid.isNotEmpty &&
+      message.guid.isNotEmpty &&
+      !message.guid.startsWith('tmp-') &&
+      !message.isRetracted;
+  final items = <PopupMenuEntry<MessageAction>>[
+    if (text != null)
       const PopupMenuItem<MessageAction>(
         value: MessageAction.copy,
         child: ListTile(
@@ -623,17 +642,185 @@ Future<void> showMessageActionMenu(
           title: Text('Copy'),
         ),
       ),
-    ],
+    const PopupMenuItem<MessageAction>(
+      value: MessageAction.info,
+      child: ListTile(
+        dense: true,
+        leading: Icon(Icons.info_outline),
+        title: Text('Message Info'),
+      ),
+    ),
+    if (canMutate && caps.edit && message.isFromMe && text != null)
+      const PopupMenuItem<MessageAction>(
+        value: MessageAction.edit,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.edit_outlined),
+          title: Text('Edit'),
+        ),
+      ),
+    if (canMutate && caps.retract && message.isFromMe)
+      const PopupMenuItem<MessageAction>(
+        value: MessageAction.retract,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.undo),
+          title: Text('Undo Send'),
+        ),
+      ),
+    if (canMutate && caps.delete)
+      const PopupMenuItem<MessageAction>(
+        value: MessageAction.delete,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.delete_outline),
+          title: Text('Delete'),
+        ),
+      ),
+  ];
+  final selected = await showMenu<MessageAction>(
+    context: context,
+    position: RelativeRect.fromRect(
+      Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+      Offset.zero & overlay.size,
+    ),
+    items: items,
   );
   if (!context.mounted || selected == null) return;
   switch (selected) {
     case MessageAction.copy:
+      if (text == null) return;
       await Clipboard.setData(ClipboardData(text: text));
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Message copied')));
       break;
+    case MessageAction.info:
+      showMessageDebugSheet(context, message);
+      break;
+    case MessageAction.edit:
+      if (api == null || chatGuid == null || text == null) return;
+      final edited = await _promptForEditedMessage(context, text);
+      if (!context.mounted || edited == null) return;
+      await _runMessageAction(
+        context,
+        () => api.editMessage(chatGuid, message.guid, edited),
+        success: 'Message edit queued',
+        onChanged: onChanged,
+      );
+      break;
+    case MessageAction.retract:
+      if (api == null || chatGuid == null) return;
+      final ok = await _confirmMessageAction(
+        context,
+        title: 'Undo Send',
+        body: 'Undo send for this iMessage?',
+        confirm: 'Undo Send',
+      );
+      if (!context.mounted || !ok) return;
+      await _runMessageAction(
+        context,
+        () => api.retractMessage(chatGuid, message.guid),
+        success: 'Undo send queued',
+        onChanged: onChanged,
+      );
+      break;
+    case MessageAction.delete:
+      if (api == null || chatGuid == null) return;
+      final ok = await _confirmMessageAction(
+        context,
+        title: 'Delete Message',
+        body: 'Delete this message from this Mac?',
+        confirm: 'Delete',
+      );
+      if (!context.mounted || !ok) return;
+      await _runMessageAction(
+        context,
+        () => api.deleteMessage(chatGuid, message.guid),
+        success: 'Delete queued',
+        onChanged: onChanged,
+      );
+      break;
+  }
+}
+
+Future<String?> _promptForEditedMessage(
+  BuildContext context,
+  String initialText,
+) async {
+  final controller = TextEditingController(text: initialText);
+  final result = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Edit Message'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        minLines: 1,
+        maxLines: 5,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
+  controller.dispose();
+  if (result == null || result.isEmpty || result == initialText) return null;
+  return result;
+}
+
+Future<bool> _confirmMessageAction(
+  BuildContext context, {
+  required String title,
+  required String body,
+  required String confirm,
+}) async {
+  return await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          content: Text(body),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(confirm),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+}
+
+Future<void> _runMessageAction(
+  BuildContext context,
+  Future<void> Function() run, {
+  required String success,
+  Future<void> Function()? onChanged,
+}) async {
+  try {
+    await run();
+    await onChanged?.call();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(success)));
+  } on ApiException catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(e.friendly)));
   }
 }
 

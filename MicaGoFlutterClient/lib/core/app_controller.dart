@@ -468,6 +468,7 @@ class AppController extends ChangeNotifier {
     _emitConnectionNotice();
 
     if (ws.status == WsStatus.connected) {
+      unawaited(refreshServerUrls());
       unawaited(_handleWebSocketReconnect());
     } else if (ws.status == WsStatus.failed ||
         ws.status == WsStatus.disconnected) {

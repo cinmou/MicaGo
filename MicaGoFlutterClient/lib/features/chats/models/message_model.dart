@@ -57,8 +57,18 @@ class AttachmentModel {
   });
 
   bool get isImage =>
-      attachmentKind == 'image' || (mimeType?.startsWith('image/') ?? false);
+      attachmentKind == 'image' ||
+      (isSticker && displayKind == 'sticker') ||
+      (mimeType?.startsWith('image/') ?? false);
+  bool get canRenderSticker =>
+      isSticker &&
+      downloadUrl.isNotEmpty &&
+      !needsPreviewConversion &&
+      (isPreviewableImage ||
+          mimeType == null ||
+          (mimeType?.startsWith('image/') ?? false));
   bool get canRenderInlineImage =>
+      canRenderSticker ||
       (previewUrl?.isNotEmpty ?? false) ||
       (isImage && isPreviewableImage && !needsPreviewConversion);
   bool get isTiff =>

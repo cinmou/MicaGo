@@ -205,6 +205,11 @@ class ThreadPresentationBuilder {
             ? 'Removed a $emoji reaction'
             : '$emoji Reacted to a message';
       default:
+        if (m.semanticKind == 'deleted') return 'Message deleted';
+        if (m.semanticKind == 'unavailable') return 'Message unavailable';
+        if (m.semanticKind == 'missing_attachment_rows') {
+          return 'Attachment unavailable';
+        }
         return 'Unsupported message';
     }
   }
@@ -217,7 +222,11 @@ const Duration kTimeClusterGap = Duration(minutes: 60);
 
 /// Whether a same-day time separator should precede a message sent at [ts],
 /// given the previous message's timestamp [prevTs]. Pure + testable.
-bool shouldShowTimeSeparator(int? prevTs, int? ts, {Duration gap = kTimeClusterGap}) {
+bool shouldShowTimeSeparator(
+  int? prevTs,
+  int? ts, {
+  Duration gap = kTimeClusterGap,
+}) {
   if (prevTs == null || ts == null) return false;
   return (ts - prevTs) >= gap.inMilliseconds;
 }

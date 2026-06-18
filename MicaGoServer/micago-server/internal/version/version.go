@@ -11,7 +11,7 @@ import (
 )
 
 // Version is the semantic version of the backend. Bumped per milestone.
-var Version = "v0.15.0"
+var Version = "v0.26.0"
 
 // Commit and BuildTime are injected at build time via:
 //
@@ -70,7 +70,7 @@ func OSArch() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
 // String is the one-line identity printed by --version and logged at startup:
 //
-//	MicaGoServer v0.15.0 commit=abc1234 buildTime=2026-06-12T04:00:00Z go=go1.22.1 darwin/arm64
+//	MicaGoServer v0.26.0 commit=abc1234 buildTime=2026-06-12T04:00:00Z go=go1.22.1 darwin/arm64
 func String() string {
 	commit, buildTime := resolved()
 	return fmt.Sprintf("MicaGoServer %s commit=%s buildTime=%s go=%s %s",

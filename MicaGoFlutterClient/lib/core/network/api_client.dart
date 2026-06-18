@@ -25,6 +25,31 @@ class MessageDelta {
   });
 }
 
+class MessageActionCapabilities {
+  final bool available;
+  final bool edit;
+  final bool retract;
+  final bool delete;
+  final String? reason;
+
+  const MessageActionCapabilities({
+    this.available = false,
+    this.edit = false,
+    this.retract = false,
+    this.delete = false,
+    this.reason,
+  });
+
+  factory MessageActionCapabilities.fromJson(Map<String, dynamic> json) =>
+      MessageActionCapabilities(
+        available: (json['available'] as bool?) ?? false,
+        edit: (json['edit'] as bool?) ?? false,
+        retract: (json['retract'] as bool?) ?? false,
+        delete: (json['delete'] as bool?) ?? false,
+        reason: json['reason'] as String?,
+      );
+}
+
 /// A structured error from a MicaGo REST call. [code] is the stable
 /// machine-readable string from the server error envelope (`{"error":{...}}`)
 /// or a client-side code (`network_error`, `timeout`, `bad_response`).
@@ -105,6 +130,10 @@ class ApiClient {
   Map<String, String> get _authHeaders => {
     'Authorization': 'Bearer $token',
     'Accept': 'application/json',
+  };
+  Map<String, String> get _jsonHeaders => {
+    ..._authHeaders,
+    'Content-Type': 'application/json',
   };
 
   /// The exact URLs the diagnostics view probes (no token in the URL).
@@ -233,14 +262,16 @@ class ApiClient {
       throw _errorFrom(res);
     }
     final body = _decodeObject(res);
-    final msgs = (body['messages'] as List?)
+    final msgs =
+        (body['messages'] as List?)
             ?.whereType<Map<String, dynamic>>()
             .map(MessageModel.fromJson)
             .toList(growable: false) ??
         const <MessageModel>[];
-    final guids = (body['chatGuids'] as List?)
-            ?.whereType<String>()
-            .toList(growable: false) ??
+    final guids =
+        (body['chatGuids'] as List?)?.whereType<String>().toList(
+          growable: false,
+        ) ??
         const <String>[];
     return MessageDelta(
       messages: msgs,
@@ -248,6 +279,80 @@ class ApiClient {
       cursor: (body['cursor'] as num?)?.toInt() ?? since ?? -1,
       hasMore: (body['hasMore'] as bool?) ?? false,
     );
+  }
+
+  Future<MessageActionCapabilities> getMessageActionCapabilities() async {
+    final res = await _send(
+      () => _http
+          .get(
+            _uri('/api/messages/actions/capabilities'),
+            headers: _authHeaders,
+          )
+          .timeout(timeout),
+    );
+    if (res.statusCode != 200) {
+      throw _errorFrom(res);
+    }
+    return MessageActionCapabilities.fromJson(_decodeObject(res));
+  }
+
+  Future<void> editMessage(
+    String chatGuid,
+    String messageGuid,
+    String text, {
+    int partIndex = 0,
+  }) async {
+    final chat = Uri.encodeComponent(chatGuid);
+    final message = Uri.encodeComponent(messageGuid);
+    final res = await _send(
+      () => _http
+          .post(
+            _uri('/api/chats/$chat/messages/$message/edit'),
+            headers: _jsonHeaders,
+            body: jsonEncode({'text': text, 'partIndex': partIndex}),
+          )
+          .timeout(timeout),
+    );
+    if (res.statusCode != 200) {
+      throw _errorFrom(res);
+    }
+  }
+
+  Future<void> retractMessage(
+    String chatGuid,
+    String messageGuid, {
+    int partIndex = 0,
+  }) async {
+    final chat = Uri.encodeComponent(chatGuid);
+    final message = Uri.encodeComponent(messageGuid);
+    final res = await _send(
+      () => _http
+          .post(
+            _uri('/api/chats/$chat/messages/$message/retract'),
+            headers: _jsonHeaders,
+            body: jsonEncode({'partIndex': partIndex}),
+          )
+          .timeout(timeout),
+    );
+    if (res.statusCode != 200) {
+      throw _errorFrom(res);
+    }
+  }
+
+  Future<void> deleteMessage(String chatGuid, String messageGuid) async {
+    final chat = Uri.encodeComponent(chatGuid);
+    final message = Uri.encodeComponent(messageGuid);
+    final res = await _send(
+      () => _http
+          .delete(
+            _uri('/api/chats/$chat/messages/$message'),
+            headers: _authHeaders,
+          )
+          .timeout(timeout),
+    );
+    if (res.statusCode != 200) {
+      throw _errorFrom(res);
+    }
   }
 
   /// `GET /api/chats/{guid}/messages` — message history for one chat. The
@@ -451,7 +556,10 @@ class ApiClient {
           .timeout(const Duration(seconds: 60));
       res = await http.Response.fromStream(streamed);
     } on TimeoutException {
-      throw const ApiException(code: 'timeout', message: 'Attachment send timed out');
+      throw const ApiException(
+        code: 'timeout',
+        message: 'Attachment send timed out',
+      );
     } catch (e) {
       throw ApiException(code: 'network_error', message: '$e');
     }

@@ -39,6 +39,9 @@ const (
 	SemanticKindEffect                = "effect"
 	SemanticKindEmptyEditedResidue    = "empty_edited_residue"
 	SemanticKindRetracted             = "retracted"
+	SemanticKindDeleted               = "deleted"
+	SemanticKindUnavailable           = "unavailable"
+	SemanticKindSticker               = "sticker"
 	SemanticKindSyncNoise             = "sync_noise"
 	SemanticKindUnknown               = "unknown"
 
@@ -278,6 +281,9 @@ func ClassifyMessageJSON(m MessageJSON) (semanticKind, renderRecommendation stri
 	case m.AssociatedMessageType != nil && *m.AssociatedMessageType >= 2000 && *m.AssociatedMessageType <= 3005 &&
 		m.AssociatedMessageGUID != nil && strings.TrimSpace(*m.AssociatedMessageGUID) != "":
 		return SemanticKindTapback, RenderRecommendationMerge, false, UnsupportedReasonNone
+	case m.AssociatedMessageType != nil && *m.AssociatedMessageType == 1000 &&
+		m.AssociatedMessageGUID != nil && strings.TrimSpace(*m.AssociatedMessageGUID) != "":
+		return SemanticKindSticker, RenderRecommendationBubble, false, UnsupportedReasonNone
 	case m.ItemType != nil && *m.ItemType != 0:
 		return SemanticKindServiceEvent, RenderRecommendationSystem, false, UnsupportedReasonNone
 	case m.GroupActionType != nil && *m.GroupActionType != 0:

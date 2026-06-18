@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:mica_go/core/network/api_client.dart';
 import 'package:mica_go/features/chats/attachment_views.dart';
 import 'package:mica_go/features/chats/message_thread_screen.dart';
@@ -107,7 +109,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('long-press opens copy-only message action menu', (tester) async {
+  testWidgets('a sticker attachment renders as visual media, not a file card', (
+    tester,
+  ) async {
+    final stickerApi = ApiClient(
+      baseUrl: 'http://localhost:0',
+      token: 't',
+      httpClient: MockClient((_) async => http.Response.bytes(_png1x1, 200)),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AttachmentView(
+            api: stickerApi,
+            attachment: const AttachmentModel(
+              guid: 's1',
+              downloadUrl: '/api/attachments/s1',
+              filename: 'sticker.heic',
+              isSticker: true,
+              attachmentKind: 'sticker',
+              displayKind: 'sticker',
+              isPreviewableImage: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.byIcon(Icons.emoji_emotions_outlined), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('long-press opens normal message action menu', (tester) async {
     const msg = MessageModel(guid: 'm1', text: 'Copy me');
 
     await tester.pumpWidget(
@@ -128,7 +163,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Message Info'), findsNothing);
+    expect(find.text('Message Info'), findsOneWidget);
     expect(find.text('Copy debug JSON'), findsNothing);
   });
 
@@ -167,7 +202,55 @@ void main() {
     expect(find.text('Message copied'), findsOneWidget);
   });
 
-  testWidgets('message info is not exposed from the normal action menu', (
+  testWidgets('supported backend actions appear in the long-press menu', (
+    tester,
+  ) async {
+    final actionApi = ApiClient(
+      baseUrl: 'http://localhost:0',
+      token: 't',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/api/messages/actions/capabilities') {
+          return http.Response(
+            '{"available":true,"edit":true,"retract":true,"delete":true}',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+    const msg = MessageModel(guid: 'm1', text: 'Mutable', isFromMe: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => GestureDetector(
+              onLongPressStart: (details) => showMessageActionMenu(
+                context,
+                msg,
+                details.globalPosition,
+                chatGuid: 'chat-1',
+                api: actionApi,
+              ),
+              child: const Text('Mutable'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.text('Mutable'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Message Info'), findsOneWidget);
+    expect(find.text('Edit'), findsOneWidget);
+    expect(find.text('Undo Send'), findsOneWidget);
+    expect(find.text('Delete'), findsOneWidget);
+  });
+
+  testWidgets('message info remains accessible from the normal action menu', (
     tester,
   ) async {
     const msg = MessageModel(guid: 'm1', text: 'Inspect me');
@@ -190,7 +273,77 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Message Info'), findsNothing);
+    expect(find.text('Message Info'), findsOneWidget);
     expect(find.text('Copy debug JSON'), findsNothing);
   });
 }
+
+const _png1x1 = <int>[
+  0x89,
+  0x50,
+  0x4E,
+  0x47,
+  0x0D,
+  0x0A,
+  0x1A,
+  0x0A,
+  0x00,
+  0x00,
+  0x00,
+  0x0D,
+  0x49,
+  0x48,
+  0x44,
+  0x52,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x08,
+  0x06,
+  0x00,
+  0x00,
+  0x00,
+  0x1F,
+  0x15,
+  0xC4,
+  0x89,
+  0x00,
+  0x00,
+  0x00,
+  0x0A,
+  0x49,
+  0x44,
+  0x41,
+  0x54,
+  0x78,
+  0x9C,
+  0x63,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
+  0x05,
+  0x00,
+  0x01,
+  0x0D,
+  0x0A,
+  0x2D,
+  0xB4,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x49,
+  0x45,
+  0x4E,
+  0x44,
+  0xAE,
+  0x42,
+  0x60,
+  0x82,
+];

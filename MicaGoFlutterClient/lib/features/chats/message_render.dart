@@ -102,6 +102,13 @@ MessageRenderableKind? _renderableKindFromServerSemantics(MessageModel m) {
       return MessageRenderableKind.reaction;
     case 'service_event':
       return MessageRenderableKind.service;
+    case 'deleted':
+    case 'unavailable':
+      return MessageRenderableKind.unknown;
+    case 'sticker':
+      return m.hasAttachments
+          ? MessageRenderableKind.attachmentOnly
+          : MessageRenderableKind.unknown;
     case 'missing_attachment_rows':
     case 'empty_edited_residue':
     case 'sync_noise':

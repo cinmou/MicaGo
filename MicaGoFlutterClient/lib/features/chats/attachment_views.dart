@@ -215,12 +215,18 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
           // (cacheWidth) so a large photo never decodes at full resolution in
           // the scrolling list. Full-size loading happens in the media viewer.
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 260, maxWidth: 280),
+            constraints: widget.attachment.isSticker
+                ? const BoxConstraints(maxHeight: 180, maxWidth: 180)
+                : const BoxConstraints(maxHeight: 260, maxWidth: 280),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(
+                widget.attachment.isSticker ? 4 : 12,
+              ),
               child: Image.memory(
                 bytes,
-                fit: BoxFit.cover,
+                fit: widget.attachment.isSticker
+                    ? BoxFit.contain
+                    : BoxFit.cover,
                 gaplessPlayback: true,
                 cacheWidth: 560,
                 errorBuilder: (_, _, _) =>

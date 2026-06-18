@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"micagoserver/internal/config"
+	"micagoserver/internal/imessage"
 	"micagoserver/internal/notify"
 	"micagoserver/internal/realtime"
 	"micagoserver/internal/relaydb"
@@ -188,6 +189,7 @@ type Handlers struct {
 	debugColumns    map[string]bool
 	syncNow         func(context.Context) (store.ServerSyncDiagnostics, error)
 	syncSettings    syncSettingsService
+	actions         imessage.Performer
 }
 
 // SetRuleService wires the v0.11.3 sync-rule store after construction (kept off
@@ -205,6 +207,10 @@ func (h *Handlers) SetSyncNow(fn func(context.Context) (store.ServerSyncDiagnost
 
 func (h *Handlers) SetSyncSettingsService(svc syncSettingsService) {
 	h.syncSettings = svc
+}
+
+func (h *Handlers) SetMessageActionPerformer(actions imessage.Performer) {
+	h.actions = actions
 }
 
 func NewHandlers(
