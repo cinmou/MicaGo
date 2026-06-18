@@ -21,6 +21,9 @@ const (
 	KindReply         = "reply_candidate"
 	KindService       = "service_candidate"
 	KindUnsupported   = "unsupported_candidate"
+	KindMissingRows   = "missing_attachment_rows"
+	KindEmptyEdited   = "empty_edited_residue"
+	KindRetracted     = "retracted"
 	candidateControl  = "control_like"
 	candidateNoConten = "no_content"
 )
@@ -34,7 +37,7 @@ const (
 	SemanticKindReply                 = "reply"
 	SemanticKindServiceEvent          = "service_event"
 	SemanticKindEffect                = "effect"
-	SemanticKindEdited                = "edited"
+	SemanticKindEmptyEditedResidue    = "empty_edited_residue"
 	SemanticKindRetracted             = "retracted"
 	SemanticKindSyncNoise             = "sync_noise"
 	SemanticKindUnknown               = "unknown"
@@ -49,6 +52,7 @@ const (
 	UnsupportedReasonControlText           = "control_text"
 	UnsupportedReasonNoContent             = "no_content"
 	UnsupportedReasonMissingAttachmentRows = "missing_attachment_rows"
+	UnsupportedReasonEmptyEditedResidue    = "empty_edited_residue"
 	UnsupportedReasonUnknownAttachment     = "unknown_attachment"
 )
 
@@ -121,23 +125,32 @@ func ClassifyDebugMessage(m DebugMessageJSON) (kind string, candidates []string)
 		candidates = append(candidates, "interactive_candidate")
 	}
 
-	// Primary kind precedence: reaction > reply > service > attachment > text.
-	switch {
-	case contains(candidates, KindReaction):
+	semantic, _, _, reason := ClassifyMessageJSON(debugAsMessageJSON(m))
+
+	// Primary kind precedence mirrors the normal API classifier. Debug-specific
+	// candidates above remain available for filtering/explanation.
+	switch semantic {
+	case SemanticKindRetracted:
+		kind = KindRetracted
+	case SemanticKindTapback:
 		kind = KindReaction
-	case contains(candidates, KindReply):
+	case SemanticKindReply:
 		kind = KindReply
-	case contains(candidates, KindService):
+	case SemanticKindServiceEvent:
 		kind = KindService
-	case len(m.Attachments) > 0:
+	case SemanticKindAttachment:
 		kind = attachmentKindOf(m)
-	case m.Text != nil && strings.TrimSpace(*m.Text) != "" && !IsControlLikeText(*m.Text):
+	case SemanticKindNormalText, SemanticKindAttributedBodyText, SemanticKindEffect:
 		kind = KindText
+	case SemanticKindMissingAttachmentRows:
+		kind = KindMissingRows
+	case SemanticKindEmptyEditedResidue:
+		kind = KindEmptyEdited
 	default:
 		kind = KindUnsupported
-		if m.Text != nil && strings.TrimSpace(*m.Text) != "" && IsControlLikeText(*m.Text) {
+		if reason == UnsupportedReasonControlText {
 			candidates = append(candidates, candidateControl)
-		} else if !m.CacheHasAttachments {
+		} else {
 			candidates = append(candidates, candidateNoConten)
 		}
 	}
@@ -148,6 +161,44 @@ func ClassifyDebugMessage(m DebugMessageJSON) (kind string, candidates []string)
 		candidates = append(candidates, "missing_attachment_rows")
 	}
 	return kind, candidates
+}
+
+func debugAsMessageJSON(m DebugMessageJSON) MessageJSON {
+	attachments := make([]AttachmentJSON, 0, len(m.Attachments))
+	for _, a := range m.Attachments {
+		attachments = append(attachments, AttachmentJSON{
+			GUID:                   a.GUID,
+			Filename:               a.Filename,
+			TransferName:           a.TransferName,
+			MimeType:               a.MimeType,
+			Uti:                    a.Uti,
+			AttachmentKind:         a.AttachmentKind,
+			IsVoiceMessage:         a.IsVoiceMessage,
+			DisplayKind:            a.DisplayKind,
+			IsPreviewableImage:     a.IsPreviewableImage,
+			NeedsPreviewConversion: a.NeedsPreviewConversion,
+			TotalBytes:             a.TotalBytes,
+		})
+	}
+	return MessageJSON{
+		GUID:                  m.GUID,
+		Text:                  m.Text,
+		CacheHasAttachments:   m.CacheHasAttachments,
+		Attachments:           attachments,
+		HasAttributedBody:     m.HasAttributedBody,
+		AssociatedMessageType: m.AssociatedMessageType,
+		AssociatedMessageGUID: m.AssociatedMessageGUID,
+		ThreadOriginatorGUID:  m.ThreadOriginatorGUID,
+		ItemType:              m.ItemType,
+		GroupActionType:       m.GroupActionType,
+		GroupTitle:            m.GroupTitle,
+		BalloonBundleID:       m.BalloonBundleID,
+		ExpressiveSendStyleID: m.ExpressiveSendStyleID,
+		DateRetracted:         m.DateRetracted,
+		DateEdited:            m.DateEdited,
+		IsRetracted:           m.IsRetracted,
+		IsEdited:              m.IsEdited,
+	}
 }
 
 // AnnotateDebugMessage fills Kind/Candidates in place.
@@ -233,8 +284,6 @@ func ClassifyMessageJSON(m MessageJSON) (semanticKind, renderRecommendation stri
 		return SemanticKindServiceEvent, RenderRecommendationSystem, false, UnsupportedReasonNone
 	case m.GroupTitle != nil && strings.TrimSpace(*m.GroupTitle) != "":
 		return SemanticKindServiceEvent, RenderRecommendationSystem, false, UnsupportedReasonNone
-	case m.DateEdited != nil || m.IsEdited:
-		return SemanticKindEdited, RenderRecommendationBubble, false, UnsupportedReasonNone
 	case m.ThreadOriginatorGUID != nil && strings.TrimSpace(*m.ThreadOriginatorGUID) != "":
 		return SemanticKindReply, RenderRecommendationBubble, false, UnsupportedReasonNone
 	case m.ExpressiveSendStyleID != nil && strings.TrimSpace(*m.ExpressiveSendStyleID) != "":
@@ -244,13 +293,15 @@ func ClassifyMessageJSON(m MessageJSON) (semanticKind, renderRecommendation stri
 			return SemanticKindAttachment, RenderRecommendationBubble, false, UnsupportedReasonUnknownAttachment
 		}
 		return SemanticKindAttachment, RenderRecommendationBubble, false, UnsupportedReasonNone
-	case m.CacheHasAttachments:
-		return SemanticKindMissingAttachmentRows, RenderRecommendationSystem, false, UnsupportedReasonMissingAttachmentRows
 	case hasText:
 		if m.HasAttributedBody {
 			return SemanticKindAttributedBodyText, RenderRecommendationBubble, false, UnsupportedReasonNone
 		}
 		return SemanticKindNormalText, RenderRecommendationBubble, false, UnsupportedReasonNone
+	case m.CacheHasAttachments:
+		return SemanticKindMissingAttachmentRows, RenderRecommendationSystem, false, UnsupportedReasonMissingAttachmentRows
+	case m.DateEdited != nil || m.IsEdited:
+		return SemanticKindEmptyEditedResidue, RenderRecommendationSystem, false, UnsupportedReasonEmptyEditedResidue
 	case hasControlText:
 		return SemanticKindSyncNoise, RenderRecommendationDebugOnly, true, UnsupportedReasonControlText
 	default:
@@ -327,7 +378,7 @@ func debugMatchesType(m DebugMessageJSON, t string) bool {
 	case "service":
 		return m.Kind == KindService || contains(m.Candidates, KindService)
 	case "unknown", "unsupported":
-		return m.Kind == KindUnsupported
+		return m.Kind == KindUnsupported || m.Kind == KindMissingRows || m.Kind == KindEmptyEdited
 	default:
 		// text / image / video / audio / voice / file
 		return m.Kind == t

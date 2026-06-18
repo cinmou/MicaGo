@@ -151,14 +151,40 @@ func TestClassifyMessageJSONForNormalAPI(t *testing.T) {
 			wantRec:  RenderRecommendationBubble,
 		},
 		{
-			name:     "edited",
+			name:     "normal edited text",
 			msg:      MessageJSON{Text: sp("new"), IsEdited: true},
-			wantKind: SemanticKindEdited,
+			wantKind: SemanticKindNormalText,
 			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:     "normal edited attachment",
+			msg:      MessageJSON{Attachments: []AttachmentJSON{{AttachmentKind: AttachmentKindImage}}, DateEdited: ip(42)},
+			wantKind: SemanticKindAttachment,
+			wantRec:  RenderRecommendationBubble,
+		},
+		{
+			name:       "empty edited residue",
+			msg:        MessageJSON{IsEdited: true},
+			wantKind:   SemanticKindEmptyEditedResidue,
+			wantRec:    RenderRecommendationSystem,
+			wantReason: UnsupportedReasonEmptyEditedResidue,
+		},
+		{
+			name:       "empty edited missing attachment rows",
+			msg:        MessageJSON{IsEdited: true, CacheHasAttachments: true},
+			wantKind:   SemanticKindMissingAttachmentRows,
+			wantRec:    RenderRecommendationSystem,
+			wantReason: UnsupportedReasonMissingAttachmentRows,
 		},
 		{
 			name:     "retracted",
 			msg:      MessageJSON{IsRetracted: true, Text: sp("old")},
+			wantKind: SemanticKindRetracted,
+			wantRec:  RenderRecommendationSystem,
+		},
+		{
+			name:     "retracted priority over empty edited residue",
+			msg:      MessageJSON{IsRetracted: true, IsEdited: true},
 			wantKind: SemanticKindRetracted,
 			wantRec:  RenderRecommendationSystem,
 		},
@@ -177,6 +203,52 @@ func TestClassifyMessageJSONForNormalAPI(t *testing.T) {
 			kind, rec, debugOnly, reason := ClassifyMessageJSON(tc.msg)
 			if kind != tc.wantKind || rec != tc.wantRec || debugOnly != tc.debugOnly || reason != tc.wantReason {
 				t.Fatalf("got kind=%q rec=%q debug=%v reason=%q", kind, rec, debugOnly, reason)
+			}
+		})
+	}
+}
+
+func TestDebugClassificationMatchesNormalForEditedResidues(t *testing.T) {
+	cases := []struct {
+		name     string
+		debug    DebugMessageJSON
+		normal   MessageJSON
+		wantKind string
+	}{
+		{
+			name:     "empty edited residue",
+			debug:    DebugMessageJSON{IsEdited: true},
+			normal:   MessageJSON{IsEdited: true},
+			wantKind: KindEmptyEdited,
+		},
+		{
+			name:     "empty edited missing attachment rows",
+			debug:    DebugMessageJSON{IsEdited: true, CacheHasAttachments: true},
+			normal:   MessageJSON{IsEdited: true, CacheHasAttachments: true},
+			wantKind: KindMissingRows,
+		},
+		{
+			name: "normal edited attachment",
+			debug: DebugMessageJSON{
+				DateEdited:  ip(99),
+				Attachments: []DebugAttachmentJSON{{AttachmentKind: AttachmentKindImage}},
+			},
+			normal:   MessageJSON{DateEdited: ip(99), Attachments: []AttachmentJSON{{AttachmentKind: AttachmentKindImage}}},
+			wantKind: KindImage,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			debugKind, _ := ClassifyDebugMessage(tc.debug)
+			normalKind, normalRec, normalDebugOnly, normalReason := ClassifyMessageJSON(tc.normal)
+			convertedKind, convertedRec, convertedDebugOnly, convertedReason := ClassifyMessageJSON(debugAsMessageJSON(tc.debug))
+			if debugKind != tc.wantKind {
+				t.Fatalf("debug kind = %q, want %q", debugKind, tc.wantKind)
+			}
+			if convertedKind != normalKind || convertedRec != normalRec || convertedDebugOnly != normalDebugOnly || convertedReason != normalReason {
+				t.Fatalf("debug/normal mismatch: converted=%q/%q/%v/%q normal=%q/%q/%v/%q",
+					convertedKind, convertedRec, convertedDebugOnly, convertedReason,
+					normalKind, normalRec, normalDebugOnly, normalReason)
 			}
 		})
 	}

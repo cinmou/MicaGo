@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,6 +24,16 @@ type smsChatQueries struct{ stubQueries }
 func (s *smsChatQueries) GetChatInfo(_ context.Context, guid string) (*store.ChatInfo, error) {
 	svc := "SMS"
 	return &store.ChatInfo{GUID: guid, ServiceName: &svc}, nil
+}
+
+type recordingAttachmentSender struct {
+	noopSender
+	path string
+}
+
+func (s *recordingAttachmentSender) SendAttachment(_ context.Context, _ string, path string) error {
+	s.path = path
+	return nil
 }
 
 func multipartFile(t *testing.T, field, filename string, data []byte) (*bytes.Buffer, string) {
@@ -71,9 +82,12 @@ func TestSendAttachmentRejectsNonIMessageChat(t *testing.T) {
 // accepted optimistically.
 func TestSendAttachmentAcceptsIMessageUpload(t *testing.T) {
 	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sender := &recordingAttachmentSender{}
 	handlers := NewHandlers(
 		&stubQueries{}, log.New(io.Discard, "", 0), // stubQueries.GetChatInfo → iMessage
-		&SendDependencies{Sender: noopSender{}}, nil, root,
+		&SendDependencies{Sender: sender}, nil, root,
 		&stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{},
 	)
 
@@ -89,6 +103,13 @@ func TestSendAttachmentAcceptsIMessageUpload(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "photo.jpg") {
 		t.Fatalf("response should echo filename: %s", rec.Body.String())
+	}
+	wantPrefix := filepath.Join(home, "Library", "Messages", "Attachments", "MicaGo", "Outgoing")
+	if !strings.HasPrefix(sender.path, wantPrefix) {
+		t.Fatalf("attachment should be staged under Messages attachments; got %q want prefix %q", sender.path, wantPrefix)
+	}
+	if !strings.HasSuffix(sender.path, "photo.jpg") {
+		t.Fatalf("attachment should preserve filename, got %q", sender.path)
 	}
 }
 

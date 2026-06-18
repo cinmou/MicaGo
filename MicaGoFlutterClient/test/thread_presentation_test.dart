@@ -16,6 +16,12 @@ MessageModel _m({
   String? threadOriginatorGuid,
   String? expressiveSendStyleId,
   bool isRetracted = false,
+  bool isEdited = false,
+  int? dateEdited,
+  bool cacheHasAttachments = false,
+  String? semanticKind,
+  String? renderRecommendation,
+  String? unsupportedReason,
   int itemType = 0,
 }) => MessageModel(
   guid: guid,
@@ -28,6 +34,12 @@ MessageModel _m({
   threadOriginatorGuid: threadOriginatorGuid,
   expressiveSendStyleId: expressiveSendStyleId,
   isRetracted: isRetracted,
+  isEdited: isEdited,
+  dateEdited: dateEdited,
+  cacheHasAttachments: cacheHasAttachments,
+  semanticKind: semanticKind,
+  renderRecommendation: renderRecommendation,
+  unsupportedReason: unsupportedReason,
   itemType: itemType,
   localState: LocalSendState.confirmed,
 );
@@ -132,6 +144,24 @@ void main() {
     expect(retracted.systemLabel, 'You unsent a message');
   });
 
+  test('empty edited residue is a system row, not a normal bubble', () {
+    final items = _build([
+      _m(
+        guid: 'edited-residue',
+        isEdited: true,
+        semanticKind: 'empty_edited_residue',
+        renderRecommendation: 'system',
+        unsupportedReason: 'empty_edited_residue',
+        dateCreated: 1000,
+      ),
+    ], prefs: const MessageDisplayPrefs(mergeConsecutiveSystem: false));
+    final row = items.whereType<MessageViewItem>().single;
+    expect(row.kind.name, 'unknown');
+    expect(row.isSystem, isTrue);
+    expect(row.body, isNull);
+    expect(row.systemLabel, 'Unsupported message');
+  });
+
   test('effect hint precomputed only when prefs enable it', () {
     final on = _build([
       _m(
@@ -203,8 +233,14 @@ void main() {
         _m(guid: 'b', text: 'two', dateCreated: t0 + 60 * 1000),
       ]);
       final msgs = items.whereType<MessageViewItem>().toList();
-      expect(msgs.firstWhere((m) => m.message.guid == 'a').showTimestamp, isFalse);
-      expect(msgs.firstWhere((m) => m.message.guid == 'b').showTimestamp, isTrue);
+      expect(
+        msgs.firstWhere((m) => m.message.guid == 'a').showTimestamp,
+        isFalse,
+      );
+      expect(
+        msgs.firstWhere((m) => m.message.guid == 'b').showTimestamp,
+        isTrue,
+      );
     });
 
     test('shouldShowTimeSeparator + label are pure and correct', () {

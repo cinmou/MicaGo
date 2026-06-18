@@ -535,11 +535,18 @@ private struct CapabilityRow: View {
 // MARK: - Connections page
 
 private struct ConnectionsPage: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var backend: BackendController
+
     var body: some View {
         ConnectionEndpointsSection()
         // C18: the server bind address is a connection concern; it moved here
         // from the dissolved Server page.
         ServerBindAddressCard()
+            .onAppear { Task { await model.refresh() } }
+            .onChange(of: backend.processState) { _ in
+                Task { await model.refresh() }
+            }
     }
 }
 
@@ -695,11 +702,12 @@ private struct BinaryPathRow: View {
 // MARK: - Server Bind Address
 
 private enum BindMode: String, CaseIterable, Identifiable {
-    case thisMac, localNetwork, custom
+    // C25: "This Mac only" (loopback) was removed — it can't be paired from
+    // Android. LAN is the default; Custom remains for advanced interface binds.
+    case localNetwork, custom
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .thisMac: return "This Mac only"
         case .localNetwork: return "Local network"
         case .custom: return "Custom"
         }
@@ -710,14 +718,15 @@ private struct ServerBindAddressCard: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var backend: BackendController
 
-    @State private var mode: BindMode = .thisMac
-    @State private var host: String = "127.0.0.1"
+    @State private var mode: BindMode = .localNetwork
+    @State private var host: String = "0.0.0.0"
     @State private var port: String = "3000"
     @State private var loaded = false
+    @State private var didAutoApplyLANBind = false
 
     var body: some View {
         SectionCard(title: "Server Bind Address") {
-            Text("Choose whether the server is reachable only from this Mac, or from other devices on your network. This applies to the server the companion launches.")
+            Text("MicaGo listens on your local network so Android devices on the same Wi‑Fi can connect. This applies to the server the companion launches.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -730,12 +739,6 @@ private struct ServerBindAddressCard: View {
 
             Text(explanation)
                 .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Label(
-                "Remote access via Cloudflare Tunnel still works with “This Mac only”, because cloudflared runs on this Mac and connects to 127.0.0.1.",
-                systemImage: "info.circle")
-                .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
@@ -754,13 +757,18 @@ private struct ServerBindAddressCard: View {
             }
 
             if mode == .custom {
-                Text("Examples: 192.168.1.23:3000 · 127.0.0.1:3000 · 0.0.0.0:3000")
+                Text("Examples: 192.168.1.23:3000 · 0.0.0.0:3000")
                     .font(.caption2).foregroundStyle(.secondary)
             }
 
-            if let listen = model.status?.address.listen, !listen.isEmpty {
-                Text("Currently listening on: http://\(listen)")
+            // C25: show the real Android-usable LAN address, not the raw bind
+            // (0.0.0.0 is not an address a device can connect to).
+            if let lan = model.urls?.lan.first {
+                Text("Android devices connect to: \(lan.baseUrl)")
                     .font(.caption).foregroundStyle(.secondary)
+            } else if model.status?.address.listen.isEmpty == false {
+                Text("Listening, but no LAN address was found — check this Mac is on Wi‑Fi/Ethernet.")
+                    .font(.caption).foregroundStyle(.orange)
             } else {
                 Text("Server is not running. The change applies the next time it starts.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -769,12 +777,12 @@ private struct ServerBindAddressCard: View {
             if restartRequired {
                 Text("Restart required for this change to take effect.")
                     .font(.caption).foregroundStyle(.orange)
-            }
 
-            HStack(spacing: 12) {
-                Button { saveAndRestart() } label: { Label("Save & Restart", systemImage: "arrow.clockwise") }
-                    .disabled(!isValid || !backend.binaryExists || displayState(backend, model) == .externalUnmanaged)
-                Spacer()
+                HStack(spacing: 12) {
+                    Button { saveAndRestart() } label: { Label("Save & Restart", systemImage: "arrow.clockwise") }
+                        .disabled(!isValid || !backend.binaryExists || displayState(backend, model) == .externalUnmanaged)
+                    Spacer()
+                }
             }
 
             if displayState(backend, model) == .externalUnmanaged {
@@ -784,16 +792,17 @@ private struct ServerBindAddressCard: View {
             }
         }
         .onAppear(perform: loadInitial)
+        .onChange(of: model.status?.address.listen ?? "") { _ in
+            autoApplyDefaultLANBindIfNeeded()
+        }
     }
 
     private var explanation: String {
         switch mode {
-        case .thisMac:
-            return "Only apps on this Mac can connect. This is the safest local setting. (Local / loopback only.)"
         case .localNetwork:
-            return "Devices on the same Wi‑Fi can connect using the LAN address. (Local / loopback + LAN / same Wi‑Fi.)"
+            return "Devices on the same Wi‑Fi connect using the LAN address shown above. Recommended."
         case .custom:
-            return "Use this only if you know which interface the server should listen on."
+            return "Bind to a specific interface address. Use only if you know which interface the server should listen on."
         }
     }
 
@@ -813,7 +822,6 @@ private struct ServerBindAddressCard: View {
     private var desiredAddress: String {
         let p = port.trimmingCharacters(in: .whitespaces)
         switch mode {
-        case .thisMac: return "127.0.0.1:\(p)"
         case .localNetwork: return "0.0.0.0:\(p)"
         case .custom: return "\(host.trimmingCharacters(in: .whitespaces)):\(p)"
         }
@@ -825,37 +833,45 @@ private struct ServerBindAddressCard: View {
             return desiredAddress != listen
         }
         // Server not running: compare against the persisted launch value.
-        return desiredAddress != backend.bindAddress
+        return desiredAddress != backend.effectiveBindAddress
     }
 
     private func loadInitial() {
         guard !loaded else { return }
         loaded = true
-        let source = !backend.bindAddress.isEmpty
-            ? backend.bindAddress
-            : (model.status?.address.listen ?? "127.0.0.1:3000")
+        let liveListen = model.status?.address.listen ?? ""
+        let source = liveListen.isEmpty ? backend.effectiveBindAddress : liveListen
         let (h, p) = splitHostPort(source)
-        host = h.isEmpty ? "127.0.0.1" : h
+        host = h.isEmpty ? "0.0.0.0" : h
         port = p.isEmpty ? "3000" : p
         switch host {
-        case "127.0.0.1", "localhost", "::1": mode = .thisMac
-        case "0.0.0.0", "": mode = .localNetwork
+        // C25: loopback-only is no longer a user choice — treat any existing
+        // loopback/wildcard bind as "Local network" (it saves as 0.0.0.0).
+        case "0.0.0.0", "", "127.0.0.1", "localhost", "::1": mode = .localNetwork
         default: mode = .custom
         }
+        autoApplyDefaultLANBindIfNeeded()
     }
 
     private func applyModeDefaults(_ newMode: BindMode) {
         switch newMode {
-        case .thisMac: host = "127.0.0.1"
         case .localNetwork: host = "0.0.0.0"
         case .custom:
-            if host == "127.0.0.1" || host == "0.0.0.0" { /* keep as a starting point */ }
+            if host == "0.0.0.0" { /* keep as a starting point */ }
         }
     }
 
     private func saveAndRestart() {
         backend.bindAddress = desiredAddress
         backend.restart()
+    }
+
+    private func autoApplyDefaultLANBindIfNeeded() {
+        guard !didAutoApplyLANBind else { return }
+        guard displayState(backend, model) != .externalUnmanaged else { return }
+        guard mode == .localNetwork, isValid, restartRequired else { return }
+        didAutoApplyLANBind = true
+        saveAndRestart()
     }
 }
 
@@ -1006,23 +1022,11 @@ private struct ConnectionEndpointsSection: View {
 
     var body: some View {
         SectionCard(title: "Connection Endpoints") {
-            EndpointGroupHeader(
-                title: "Local / loopback",
-                subtitle: "Use this only on the Mac running MicaGo. 127.0.0.1 means “this Mac”.")
-            if let urls = model.urls, !urls.local.isEmpty {
-                ForEach(urls.local) { EndpointRow(endpoint: $0) }
-            } else if let base = model.baseURL?.absoluteString {
-                EndpointURLRow(label: "Base", value: base)
-            } else {
-                Text("Start the server to see the local endpoint.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Divider()
-
+            // C25: LAN is the primary, Android-usable path. Loopback is not shown
+            // — Android can't reach 127.0.0.1.
             EndpointGroupHeader(
                 title: "LAN / same Wi‑Fi",
-                subtitle: "Use this from Android devices on the same Wi‑Fi. Hide noisy VPN/virtual addresses so they aren’t offered for pairing (they stay active on the server).")
+                subtitle: "The address Android devices on the same Wi‑Fi use to connect. Hide noisy VPN/virtual addresses so they aren’t offered for pairing.")
             if let urls = model.urls, !urls.lan.isEmpty {
                 ForEach(urls.lan) { LANEndpointRow(endpoint: $0) }
                 if !model.hiddenLANBaseURLs.isEmpty {
@@ -1032,7 +1036,7 @@ private struct ConnectionEndpointsSection: View {
                     .controlSize(.small).font(.caption)
                 }
             } else {
-                Text("LAN access is not available because the server is listening on 127.0.0.1 only. Choose “Local network” in Server Bind Address and restart the server.")
+                Text("No LAN address available. Make sure this Mac is on Wi‑Fi or Ethernet (a VPN-only address won’t work).")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1041,7 +1045,7 @@ private struct ConnectionEndpointsSection: View {
 
             EndpointGroupHeader(
                 title: "Public / remote",
-                subtitle: "Use this from mobile data or another network. Optional and external.")
+                subtitle: "Optional fallback for access outside your Wi‑Fi. LAN works without it.")
             PublicURLEditor()
         }
     }
@@ -1060,23 +1064,6 @@ private struct EndpointGroupHeader: View {
     }
 }
 
-private struct EndpointRow: View {
-    let endpoint: ConnectionEndpoint
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                ReachableDot(endpoint.reachable)
-                Text(endpoint.label).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text(endpoint.reachable.label).font(.caption2).foregroundStyle(.secondary)
-            }
-            EndpointURLRow(label: "Base", value: endpoint.baseUrl)
-            EndpointURLRow(label: "WS", value: endpoint.wsUrl)
-        }
-        .padding(.vertical, 2)
-    }
-}
 
 /// A LAN endpoint row with a hide-from-pairing toggle. Hiding is a UI/pairing
 /// filter only — it never changes server networking.
@@ -1166,7 +1153,7 @@ private struct PublicURLEditor: View {
             }
 
             HStack(spacing: 6) {
-                Text("Status:").font(.caption).foregroundStyle(.secondary)
+                Text("Public status:").font(.caption).foregroundStyle(.secondary)
                 Text(reachabilityState).font(.caption).fontWeight(.medium)
                     .foregroundStyle(reachabilityColor)
                 if let pub = model.urls?.public, pub.enabled,
@@ -1187,7 +1174,7 @@ private struct PublicURLEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("Public access is an optional EXTRA endpoint — Local and LAN stay active regardless. Produce a public URL with Cloudflare Tunnel, Ngrok, a reverse proxy, or DDNS + port‑forwarding (set up separately). MicaGo does not manage these. See docs/remote-access-cloudflare.md.")
+            Text("Optional extra endpoint. Local and LAN stay active without it.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1293,9 +1280,7 @@ private struct CreateConnectionCard: View {
     var body: some View {
         SectionCard(title: "Create Connection") {
             if !ready {
-                Text(model.token.isEmpty
-                     ? "Start the server to generate a connection."
-                     : "No connection endpoint yet. Pick a bind address under Connections.")
+                Text(emptyMessage)
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -1333,6 +1318,14 @@ private struct CreateConnectionCard: View {
                 .font(.subheadline)
             }
         }
+    }
+
+    private var emptyMessage: String {
+        if model.token.isEmpty { return "Start the server to generate a connection." }
+        if model.urls != nil {
+            return "No Android-usable endpoint yet. Make sure this Mac is on Wi‑Fi or Ethernet, or configure Public as an optional remote endpoint."
+        }
+        return "No Android-usable endpoint yet."
     }
 }
 

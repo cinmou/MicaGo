@@ -43,7 +43,61 @@ class AttachmentView extends StatelessWidget {
     if (attachment.isAudio) {
       return _AudioAttachment(api: api, attachment: attachment);
     }
+    if (attachment.isVideo) {
+      return _VideoAttachment(api: api, attachment: attachment);
+    }
     return _FileAttachment(attachment: attachment);
+  }
+}
+
+/// C24: a video attachment card — tapping opens the full-screen player. We keep
+/// it a card (not an inline autoplaying player) so the scrolling list stays
+/// light; the player is only created on demand in the viewer.
+class _VideoAttachment extends StatelessWidget {
+  final ApiClient api;
+  final AttachmentModel attachment;
+  const _VideoAttachment({required this.api, required this.attachment});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: () =>
+          FullscreenVideo.open(context, api: api, attachment: attachment),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.play_circle_fill, color: scheme.primary, size: 30),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    attachment.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    attachment.totalBytes > 0
+                        ? 'Video · ${_formatSize(attachment.totalBytes)}'
+                        : 'Video · tap to play',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

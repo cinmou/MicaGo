@@ -67,6 +67,13 @@ class AppController extends ChangeNotifier {
       ValueNotifier<ConnectionNotice?>(null);
   ConnectionSnapshot? _lastConnectionSnapshot;
   bool _serverReachable = false;
+  bool _hasCompletedFirstConnectAttempt = false;
+  bool _hasEverConnected = false;
+  DateTime? _connectionNoticeGraceUntil;
+  DateTime _startupConnectionNoticeQuietUntil = DateTime.now().add(
+    const Duration(seconds: 10),
+  );
+  bool _hasSuppressedStartupConnectionNotice = false;
 
   /// C20: the server's authoritative sync settings (incl. allowSmsSend),
   /// fetched on connect. The composer reads [allowSmsSend] from here — the
@@ -110,7 +117,18 @@ class AppController extends ChangeNotifier {
   StreamSubscription<WsEvent>? _connSub;
 
   /// Called by the app shell on foreground resume (lightweight refresh).
-  void onResume() => _refresh.onResume();
+  void onResume() {
+    if (hasProfile && ws.status != WsStatus.connected) {
+      _connectionNoticeGraceUntil = DateTime.now().add(
+        const Duration(seconds: 10),
+      );
+      _startupConnectionNoticeQuietUntil = DateTime.now().add(
+        const Duration(seconds: 10),
+      );
+      _hasSuppressedStartupConnectionNotice = false;
+    }
+    _refresh.onResume();
+  }
 
   ConnectionProfile? get profile => _profile;
   ApiClient? get api => _api;
@@ -131,6 +149,14 @@ class AppController extends ChangeNotifier {
     _profile = await store.loadProfile();
     if (_profile != null) {
       _activeCandidate = connectionCandidatesForProfile(_profile!).firstOrNull;
+      _hasCompletedFirstConnectAttempt = false;
+      _connectionNoticeGraceUntil = DateTime.now().add(
+        const Duration(seconds: 10),
+      );
+      _startupConnectionNoticeQuietUntil = DateTime.now().add(
+        const Duration(seconds: 10),
+      );
+      _hasSuppressedStartupConnectionNotice = false;
       _logConnectionSelection('bootstrap profile mode=${_profile!.mode.name}');
       _logConnectionSelection(
         'candidates: ${connectionCandidates.join(' | ')}',
@@ -144,7 +170,11 @@ class AppController extends ChangeNotifier {
   /// Builds a throwaway [ApiClient] for the connection-test screen without
   /// persisting anything.
   ApiClient buildProbeClient(ConnectionProfile profile) {
-    return ApiClient(baseUrl: profile.baseUrl, token: profile.token);
+    final candidate = connectionCandidatesForProfile(profile).firstOrNull;
+    return ApiClient(
+      baseUrl: candidate?.baseUrl ?? profile.effectiveBaseUrl,
+      token: profile.token,
+    );
   }
 
   /// Persists [profile] and activates it as the live connection.
@@ -153,6 +183,14 @@ class AppController extends ChangeNotifier {
     _profile = profile;
     _serverUrls = null;
     _activeCandidate = null;
+    _hasCompletedFirstConnectAttempt = false;
+    _connectionNoticeGraceUntil = DateTime.now().add(
+      const Duration(seconds: 10),
+    );
+    _startupConnectionNoticeQuietUntil = DateTime.now().add(
+      const Duration(seconds: 10),
+    );
+    _hasSuppressedStartupConnectionNotice = false;
     _logConnectionSelection('save profile mode=${profile.mode.name}');
     _logConnectionSelection(
       'candidates: ${connectionCandidatesForProfile(profile).join(' | ')}',
@@ -183,11 +221,15 @@ class AppController extends ChangeNotifier {
     }
     final lan = urls.lan.isNotEmpty ? urls.lan.first : null;
     final pub = urls.public?.enabled == true ? urls.public : null;
-    final next = profile.copyWith(
+    final next = ConnectionProfile(
+      baseUrl: profile.baseUrl,
+      token: profile.token,
+      wsUrlOverride: profile.wsUrlOverride,
       lanBaseUrl: lan?.baseUrl,
       lanWsUrl: lan?.wsUrl,
       publicBaseUrl: pub?.baseUrl,
       publicWsUrl: pub?.wsUrl,
+      mode: profile.mode,
       configRevision: urls.connectionRevision,
     );
     _profile = next;
@@ -208,6 +250,22 @@ class AppController extends ChangeNotifier {
       'WS connect ${candidate.label}: ${candidate.wsUrl}',
     );
     ws.connect(candidate.wsUrl, profile.token);
+  }
+
+  /// Foreground startup/resume entry point: test candidates first, then connect.
+  /// During the first attempt we suppress scary offline banners unless the attempt
+  /// actually fails.
+  Future<bool> connectForeground({required String reason}) {
+    if (hasProfile && ws.status != WsStatus.connected) {
+      _connectionNoticeGraceUntil = DateTime.now().add(
+        const Duration(seconds: 10),
+      );
+      _startupConnectionNoticeQuietUntil = DateTime.now().add(
+        const Duration(seconds: 10),
+      );
+      _hasSuppressedStartupConnectionNotice = false;
+    }
+    return selectReachableCandidate(reason: reason);
   }
 
   Future<bool> selectReachableCandidate({
@@ -241,6 +299,8 @@ class AppController extends ChangeNotifier {
           await client.authCheck();
           _activeCandidate = candidate;
           _serverReachable = true;
+          _hasCompletedFirstConnectAttempt = true;
+          _connectionNoticeGraceUntil = null;
           _logConnectionSelection('${candidate.label} health=true auth=true');
           _logConnectionSelection('selected ${candidate.label}');
           _rebuildApi();
@@ -260,6 +320,8 @@ class AppController extends ChangeNotifier {
     }
     _logConnectionSelection('no reachable candidate');
     _serverReachable = false;
+    _hasCompletedFirstConnectAttempt = true;
+    _connectionNoticeGraceUntil = null;
     _emitConnectionNotice();
     notifyListeners();
     return false;
@@ -320,8 +382,9 @@ class AppController extends ChangeNotifier {
     if (api == null || _deltaInFlight) return;
     _deltaInFlight = true;
     try {
-      _syncCursor ??=
-          int.tryParse(await cache.readMetadata('sync_cursor') ?? '');
+      _syncCursor ??= int.tryParse(
+        await cache.readMetadata('sync_cursor') ?? '',
+      );
       var guard = 0;
       while (guard++ < 20) {
         final delta = await api.fetchDelta(since: _syncCursor);
@@ -358,11 +421,48 @@ class AppController extends ChangeNotifier {
     );
     final notice = connectionNoticeFor(_lastConnectionSnapshot, current);
     _lastConnectionSnapshot = current;
+    if (_shouldSuppressConnectionNotice(notice)) return;
     if (notice != null) connectionNotice.value = notice;
   }
 
+  bool _shouldSuppressConnectionNotice(ConnectionNotice? notice) {
+    if (notice == null) return false;
+    if (_shouldSuppressStartupConnectionNotice(notice)) return true;
+    if (!notice.isProblem) return false;
+    if (_hasEverConnected) return false;
+    if (_hasCompletedFirstConnectAttempt) return false;
+    final grace = _connectionNoticeGraceUntil;
+    if (grace == null) return false;
+    return DateTime.now().isBefore(grace);
+  }
+
+  bool _shouldSuppressStartupConnectionNotice(ConnectionNotice notice) {
+    if (_hasSuppressedStartupConnectionNotice) return false;
+    if (DateTime.now().isAfter(_startupConnectionNoticeQuietUntil)) {
+      return false;
+    }
+    final isStartupNoise = switch (notice) {
+      ConnectionNotice.connected ||
+      ConnectionNotice.webSocketRecovered ||
+      ConnectionNotice.disconnected ||
+      ConnectionNotice.serverUnavailable ||
+      ConnectionNotice.webSocketLost ||
+      ConnectionNotice.reconnecting => true,
+      ConnectionNotice.switchedToLan ||
+      ConnectionNotice.switchedToPublic => false,
+    };
+    if (!isStartupNoise) return false;
+    _hasSuppressedStartupConnectionNotice = true;
+    return true;
+  }
+
   void _onWebSocketStatusChanged() {
-    if (ws.status == WsStatus.connected) _serverReachable = true;
+    if (ws.status == WsStatus.connected) {
+      _serverReachable = true;
+      _hasEverConnected = true;
+      _hasCompletedFirstConnectAttempt = true;
+      _connectionNoticeGraceUntil = null;
+    }
     // Surface a user-visible notice for any status transition (connect, lost,
     // reconnecting, disconnect). De-dup is handled in the pure derivation.
     _emitConnectionNotice();
@@ -371,7 +471,9 @@ class AppController extends ChangeNotifier {
       unawaited(_handleWebSocketReconnect());
     } else if (ws.status == WsStatus.failed ||
         ws.status == WsStatus.disconnected) {
-      _logConnectionSelection('WS ${ws.status.name}: ${ws.lastError ?? 'closed'}');
+      _logConnectionSelection(
+        'WS ${ws.status.name}: ${ws.lastError ?? 'closed'}',
+      );
     }
     // C20: the coordinator owns all reconnect scheduling + the fallback poll —
     // covering clean disconnects and single-mode profiles, which the old

@@ -20,8 +20,10 @@ extension ConnectionNoticeDisplay on ConnectionNotice {
     ConnectionNotice.connected => 'Connected',
     ConnectionNotice.reconnecting => 'Reconnecting…',
     ConnectionNotice.disconnected => 'Disconnected',
-    ConnectionNotice.serverUnavailable => 'Server unavailable — check that it is running',
-    ConnectionNotice.switchedToPublic => 'LAN unreachable — switched to the public address',
+    ConnectionNotice.serverUnavailable =>
+      'Server unavailable — check that it is running',
+    ConnectionNotice.switchedToPublic =>
+      'LAN unreachable — switched to the public address',
     ConnectionNotice.switchedToLan => 'Back on your local network (LAN)',
     ConnectionNotice.webSocketLost => 'Realtime updates lost — reconnecting',
     ConnectionNotice.webSocketRecovered => 'Realtime updates restored',
@@ -105,10 +107,9 @@ ConnectionNotice? connectionNoticeFor(
         : ConnectionNotice.webSocketLost;
   }
   if (!wasConnected && isConnected) {
-    // Distinguish a first connect from a recovery.
-    return previous.ws == WsStatus.idle
-        ? ConnectionNotice.connected
-        : ConnectionNotice.webSocketRecovered;
+    // First connect is useful during manual pairing; routine realtime restore
+    // is too noisy and is intentionally silent.
+    return previous.ws == WsStatus.idle ? ConnectionNotice.connected : null;
   }
   if (!isConnected &&
       (current.ws == WsStatus.connecting || current.ws == WsStatus.failed) &&

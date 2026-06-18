@@ -35,6 +35,7 @@ final class AppModel: ObservableObject {
         Set(UserDefaults.standard.stringArray(forKey: "hiddenLANEndpoints") ?? [])
 
     private var pollTask: Task<Void, Never>?
+    private var startupRefreshTask: Task<Void, Never>?
     private let pollInterval: UInt64 = 3 * 1_000_000_000 // 3s
     private var didSeedPublicInput = false
 
@@ -116,10 +117,8 @@ final class AppModel: ObservableObject {
     /// configured). Local/LAN always remain present.
     var pairingTargets: [PairingTarget] {
         guard let urls else { return [] }
+        // C25: loopback is never a pairing target — Android can't reach it.
         var targets: [PairingTarget] = []
-        for e in urls.local {
-            targets.append(PairingTarget(scope: .local, label: "Local · \(e.label)", baseUrl: e.baseUrl, wsUrl: e.wsUrl))
-        }
         for e in urls.lan where !hiddenLANBaseURLs.contains(e.baseUrl) {
             targets.append(PairingTarget(scope: .lan, label: "LAN · \(e.baseUrl)", baseUrl: e.baseUrl, wsUrl: e.wsUrl))
         }
@@ -186,6 +185,8 @@ final class AppModel: ObservableObject {
         config = ConfigReader.read()
         if config == nil {
             lastError = "Could not read \(ConfigReader.configPath). Start the server once to generate it."
+        } else if lastError?.contains(ConfigReader.configPath) == true {
+            lastError = nil
         }
     }
 
@@ -202,11 +203,38 @@ final class AppModel: ObservableObject {
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+        startupRefreshTask?.cancel()
+        startupRefreshTask = nil
+    }
+
+    /// The backend can create or migrate config during start(), after the app's
+    /// initial reload already ran. Immediately reload config and poll briefly so
+    /// Dashboard/Connections get LAN URLs as soon as the server answers.
+    func refreshAfterBackendStart() {
+        startupRefreshTask?.cancel()
+        startupRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0..<16 {
+                self.reloadConfig()
+                await self.refresh()
+                if self.reachable, self.authValid, self.urls != nil {
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
     }
 
     func refresh() async {
+        if config == nil {
+            reloadConfig()
+        }
         guard let baseURL else {
             reachable = false
+            authValid = false
+            status = nil
+            devices = []
+            urls = nil
             return
         }
         let client = APIClient(baseURL: baseURL, token: token)

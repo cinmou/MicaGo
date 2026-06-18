@@ -84,7 +84,8 @@ class PublicEndpoint {
 
 /// Top-level `GET /api/server/urls` response.
 class ServerUrls {
-  final List<ServerEndpoint> local;
+  // C25: loopback/local is no longer part of the connection flow — the only
+  // client-usable endpoints are LAN and the optional Public.
   final List<ServerEndpoint> lan;
   final PublicEndpoint? public;
   final String preferredPairingEndpoint;
@@ -94,7 +95,6 @@ class ServerUrls {
   final String connectionRevision;
 
   const ServerUrls({
-    required this.local,
     required this.lan,
     required this.public,
     required this.preferredPairingEndpoint,
@@ -112,7 +112,6 @@ class ServerUrls {
 
     final publicRaw = json['public'];
     return ServerUrls(
-      local: parseList(json['local']),
       lan: parseList(json['lan']),
       public: publicRaw is Map<String, dynamic>
           ? PublicEndpoint.fromJson(publicRaw)

@@ -80,9 +80,10 @@ type PublicEndpoint struct {
 	LastCheckedAt *int64       `json:"lastCheckedAt"`
 }
 
-// ServerURLsResponse is the GET /api/server/urls payload.
+// ServerURLsResponse is the GET /api/server/urls payload. C25: loopback/local
+// is no longer part of the connection flow — Android can't use 127.0.0.1, so the
+// only client-usable endpoints are LAN and the optional Public.
 type ServerURLsResponse struct {
-	Local                    []EndpointInfo `json:"local"`
 	LAN                      []EndpointInfo `json:"lan"`
 	Public                   PublicEndpoint `json:"public"`
 	PreferredPairingEndpoint string         `json:"preferredPairingEndpoint"`
@@ -248,7 +249,6 @@ func (h *Handlers) GetServerURLs(w http.ResponseWriter, _ *http.Request) {
 
 func (h *Handlers) buildServerURLs() ServerURLsResponse {
 	resp := ServerURLsResponse{
-		Local:                    localEndpoints(h.cfg.HTTPAddr),
 		LAN:                      lanEndpoints(h.cfg.HTTPAddr),
 		PreferredPairingEndpoint: h.cfg.PreferredPairingEndpoint,
 	}
@@ -358,25 +358,6 @@ func (h *Handlers) CheckPublicURL(w http.ResponseWriter, r *http.Request) {
 	}
 	result := h.status.Network.Check(r.Context())
 	writeJSON(w, http.StatusOK, result)
-}
-
-// localEndpoints derives the loopback / "this Mac" endpoint(s) from the bind
-// address. Loopback is served whenever the server binds loopback or a wildcard
-// address; a specific non-loopback bind exposes that address as the local one.
-func localEndpoints(httpAddr string) []EndpointInfo {
-	host, port, loopback, wildcard := classifyHost(httpAddr)
-	hostForURL := "127.0.0.1"
-	if !loopback && !wildcard && host != "" {
-		hostForURL = host
-	}
-	base := "http://" + net.JoinHostPort(hostForURL, port)
-	return []EndpointInfo{{
-		Kind:      "loopback",
-		Label:     "This Mac",
-		BaseURL:   base,
-		WSURL:     config.WebSocketURLFromBase(base),
-		Reachable: reachableYes(),
-	}}
 }
 
 // lanEndpoints derives LAN endpoints when the bind address makes the server

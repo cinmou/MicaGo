@@ -15,7 +15,10 @@ import (
 )
 
 const (
-	defaultAddr             = "127.0.0.1:3000"
+	// C25: default to a LAN-capable bind so a fresh install is reachable from
+	// Android on the same Wi‑Fi out of the box. The bearer token still gates
+	// access; loopback-only is no longer the default (it can't be paired).
+	defaultAddr             = "0.0.0.0:3000"
 	defaultSyncInterval     = 5 * time.Second
 	defaultInitialSyncLimit = 1000
 	defaultNotificationProv = "none"

@@ -501,8 +501,8 @@ class _EndpointSummaryCard extends StatelessWidget {
             else if (urls == null && !loading)
               const Text('Pull to refresh to load /api/server/urls.')
             else if (urls != null) ...[
-              for (final e in urls.local)
-                _row(context, e.label, e.baseUrl, e.reachableLabel),
+              // C25: loopback is not a client-usable endpoint and is no longer
+              // listed — only LAN and the optional Public.
               for (final e in urls.lan)
                 _row(context, e.label, e.baseUrl, e.reachableLabel),
               if (urls.public?.enabled == true)

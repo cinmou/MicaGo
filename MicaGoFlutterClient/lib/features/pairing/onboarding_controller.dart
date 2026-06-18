@@ -172,6 +172,7 @@ class OnboardingController extends ChangeNotifier {
       publicBaseUrl: base.publicBaseUrl,
       publicWsUrl: base.publicWsUrl,
       mode: mode,
+      configRevision: base.configRevision,
     );
   }
 }

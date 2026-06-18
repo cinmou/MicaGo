@@ -80,6 +80,8 @@ MessageRenderableKind renderableKindFor(MessageModel m) {
   if (m.isRetracted || m.dateRetracted != null) {
     return MessageRenderableKind.retracted;
   }
+  final serverKind = _renderableKindFromServerSemantics(m);
+  if (serverKind != null) return serverKind;
   if (isReaction(m)) return MessageRenderableKind.reaction;
   if (m.itemType > 0 ||
       m.groupActionType > 0 ||
@@ -90,6 +92,41 @@ MessageRenderableKind renderableKindFor(MessageModel m) {
   if (hasText) return MessageRenderableKind.normal;
   if (m.hasAttachments) return MessageRenderableKind.attachmentOnly;
   return MessageRenderableKind.unknown;
+}
+
+MessageRenderableKind? _renderableKindFromServerSemantics(MessageModel m) {
+  switch (m.semanticKind) {
+    case 'retracted':
+      return MessageRenderableKind.retracted;
+    case 'tapback':
+      return MessageRenderableKind.reaction;
+    case 'service_event':
+      return MessageRenderableKind.service;
+    case 'missing_attachment_rows':
+    case 'empty_edited_residue':
+    case 'sync_noise':
+    case 'unknown':
+      return MessageRenderableKind.unknown;
+    case 'attachment':
+      return m.hasAttachments
+          ? MessageRenderableKind.attachmentOnly
+          : MessageRenderableKind.unknown;
+    case 'normal_text':
+    case 'attributed_body_text':
+    case 'reply':
+    case 'effect':
+      if (displayText(m) != null) return MessageRenderableKind.normal;
+      if (m.hasAttachments) return MessageRenderableKind.attachmentOnly;
+      return MessageRenderableKind.unknown;
+  }
+  switch (m.renderRecommendation) {
+    case 'system':
+    case 'unsupported':
+      return MessageRenderableKind.unknown;
+    case 'merge':
+      return MessageRenderableKind.reaction;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +335,7 @@ enum UnsupportedReason {
   controlText, // text was a control/typedstream artifact (e.g. "+!")
   unsupportedAttachment, // has attachment(s) but kind/mime is unknown
   missingServerFields, // cacheHasAttachments but no attachments / likely tapback/event the server didn't tag
+  emptyEditedResidue, // edited/dateEdited residue with no displayable content
   parseError,
 }
 
@@ -313,6 +351,8 @@ String unsupportedReasonLabel(UnsupportedReason r) {
       return 'unsupported attachment type';
     case UnsupportedReason.missingServerFields:
       return 'missing server fields';
+    case UnsupportedReason.emptyEditedResidue:
+      return 'empty edited residue';
     case UnsupportedReason.parseError:
       return 'parse error';
   }
@@ -346,6 +386,14 @@ MessageClassification classifyMessage(MessageModel m) {
     return const MessageClassification(
       MessageRenderableKind.unknown,
       UnsupportedReason.missingServerFields,
+    );
+  }
+  if (m.semanticKind == 'empty_edited_residue' ||
+      m.unsupportedReason == 'empty_edited_residue' ||
+      ((m.isEdited || m.dateEdited != null) && !m.hasAttachments)) {
+    return const MessageClassification(
+      MessageRenderableKind.unknown,
+      UnsupportedReason.emptyEditedResidue,
     );
   }
   return const MessageClassification(

@@ -7,8 +7,7 @@ ConnectionSnapshot snap(
   WsStatus ws, {
   ConnectionCandidateKind? kind = ConnectionCandidateKind.lan,
   bool reachable = true,
-}) =>
-    ConnectionSnapshot(ws: ws, activeKind: kind, serverReachable: reachable);
+}) => ConnectionSnapshot(ws: ws, activeKind: kind, serverReachable: reachable);
 
 void main() {
   group('connection notice derivation (transitions only, de-duped)', () {
@@ -34,27 +33,30 @@ void main() {
       expect(n, ConnectionNotice.webSocketLost);
     });
 
-    test('recovery after a non-idle drop = WebSocket recovered', () {
+    test('recovery after a non-idle drop is silent', () {
       final n = connectionNoticeFor(
         snap(WsStatus.failed),
         snap(WsStatus.connected),
       );
-      expect(n, ConnectionNotice.webSocketRecovered);
+      expect(n, isNull);
     });
 
-    test('reachable → unreachable = server unavailable (offline dominates)', () {
-      final n = connectionNoticeFor(
-        snap(WsStatus.connected),
-        snap(WsStatus.failed, reachable: false),
-      );
-      expect(n, ConnectionNotice.serverUnavailable);
+    test(
+      'reachable → unreachable = server unavailable (offline dominates)',
+      () {
+        final n = connectionNoticeFor(
+          snap(WsStatus.connected),
+          snap(WsStatus.failed, reachable: false),
+        );
+        expect(n, ConnectionNotice.serverUnavailable);
 
-      final n2 = connectionNoticeFor(
-        snap(WsStatus.connecting),
-        snap(WsStatus.connecting, reachable: false),
-      );
-      expect(n2, ConnectionNotice.serverUnavailable);
-    });
+        final n2 = connectionNoticeFor(
+          snap(WsStatus.connecting),
+          snap(WsStatus.connecting, reachable: false),
+        );
+        expect(n2, ConnectionNotice.serverUnavailable);
+      },
+    );
 
     test('clean WS close while still reachable = disconnected', () {
       final n = connectionNoticeFor(
@@ -106,7 +108,6 @@ void main() {
       expect(ConnectionNotice.serverUnavailable.isProblem, isTrue);
       expect(ConnectionNotice.switchedToPublic.isProblem, isTrue);
       expect(ConnectionNotice.connected.isTransient, isTrue);
-      expect(ConnectionNotice.webSocketRecovered.isTransient, isTrue);
       expect(ConnectionNotice.switchedToLan.isTransient, isTrue);
     });
   });

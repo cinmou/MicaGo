@@ -212,3 +212,24 @@ blocks LAN pairing, QR/JSON generation, the Connections page, Dashboard status, 
 client operation over LAN. Covered by the existing Swift `unifiedConnectionPayload`
 tests (LAN-only / both / public-only / empty), the Go LAN-only URLs test, and the
 Flutter v3 parse tests (LAN-only and public-only).
+
+---
+
+## C23 implementation pass — paste-first manual setup + reconnect grace
+
+Final connection model:
+
+- **LAN is independent.** LAN/local controls, Sync Control/Collections, QR
+  generation, and copied connection JSON do not depend on a Public URL.
+- **Public is optional.** It is an extra remote endpoint used only when configured;
+  empty Public is displayed as "Not configured" and never presented as a LAN
+  prerequisite.
+- **Normal Android setup is QR or pasted connection JSON.** Both paths use the
+  same v3 unified payload parser and produce the same candidate model.
+- **Low-level manual URL entry is advanced only.** The advanced editor asks for a
+  Public origin, optional LAN origin, and token, then derives HTTP/WebSocket
+  candidates automatically. Normal users no longer type a WebSocket URL.
+- **Cold start/resume reconnect is quiet first.** The Android client suppresses
+  sticky disconnect/server-unavailable banners during the initial reconnect grace
+  window, then shows the normal warning only after the first attempt fails. Active
+  in-use disconnects still show warnings.

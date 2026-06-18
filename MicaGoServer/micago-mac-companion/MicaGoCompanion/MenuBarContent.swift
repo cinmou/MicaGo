@@ -15,8 +15,8 @@ struct MenuBarContent: View {
 
         Text("MicaGo — \(state.label)")
 
-        if let local = localURL {
-            Text("Local: \(local)")
+        if let lan = lanURL {
+            Text("LAN: \(lan)")
         }
         if let pub = publicURL {
             Text("Public: \(pub)")
@@ -49,8 +49,9 @@ struct MenuBarContent: View {
         }
     }
 
-    private var localURL: String? {
-        model.urls?.local.first?.baseUrl ?? model.status?.address.baseUrl
+    // C25: show the Android-usable LAN address (loopback is no longer surfaced).
+    private var lanURL: String? {
+        model.urls?.lan.first?.baseUrl
     }
 
     private var publicURL: String? {

@@ -52,22 +52,23 @@ class _MemoryStore implements SecureStore {
 }
 
 void main() {
-  testWidgets('connection screen shows server, token, and ws fields', (
-    tester,
-  ) async {
-    final controller = AppController(store: _MemoryStore());
+  testWidgets(
+    'connection screen is QR/paste first and hides low-level WS entry',
+    (tester) async {
+      final controller = AppController(store: _MemoryStore());
 
-    await tester.pumpWidget(
-      ChangeNotifierProvider<AppController>.value(
-        value: controller,
-        child: const MaterialApp(home: ConnectionScreen()),
-      ),
-    );
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppController>.value(
+          value: controller,
+          child: const MaterialApp(home: ConnectionScreen()),
+        ),
+      );
 
-    expect(find.text('Server URL'), findsOneWidget);
-    expect(find.text('Bearer token'), findsOneWidget);
-    expect(find.text('WebSocket URL (optional)'), findsOneWidget);
-    expect(find.text('Test connection'), findsOneWidget);
-    expect(find.text('Save & continue'), findsOneWidget);
-  });
+      expect(find.text('Scan QR code'), findsOneWidget);
+      expect(find.text('Paste connection JSON'), findsOneWidget);
+      expect(find.text('Advanced manual setup'), findsOneWidget);
+      expect(find.text('WebSocket URL (optional)'), findsNothing);
+      expect(find.text('Server URL'), findsNothing);
+    },
+  );
 }

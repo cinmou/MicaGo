@@ -99,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installTunnelFollower()
             await AppModel.shared.refresh()
             BackendController.shared.autoStartIfNeeded(externalReachable: AppModel.shared.reachable)
+            AppModel.shared.refreshAfterBackendStart()
             AppModel.shared.startPolling()
             RuntimeMonitor.shared.startMonitoring()
         }
@@ -127,6 +128,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { healthy in
                 Task { @MainActor in
                     TunnelController.shared.serverHealthChanged(healthy: healthy)
+                }
+            }
+            .store(in: &cancellables)
+        BackendController.shared.$processState
+            .removeDuplicates()
+            .sink { state in
+                guard case .running = state else { return }
+                Task { @MainActor in
+                    AppModel.shared.refreshAfterBackendStart()
                 }
             }
             .store(in: &cancellables)

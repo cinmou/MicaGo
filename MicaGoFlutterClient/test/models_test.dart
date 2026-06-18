@@ -67,18 +67,17 @@ void main() {
   });
 
   group('ServerUrls.fromJson', () {
-    test('parses local/lan/public', () {
+    test('parses lan/public (C25: no loopback/local)', () {
       final urls = ServerUrls.fromJson({
-        'local': [
+        'lan': [
           {
-            'kind': 'loopback',
-            'label': 'This Mac',
-            'baseUrl': 'http://127.0.0.1:3000',
-            'wsUrl': 'ws://127.0.0.1:3000/ws',
-            'reachable': true,
+            'kind': 'lan',
+            'label': 'LAN',
+            'baseUrl': 'http://192.168.1.23:3000',
+            'wsUrl': 'ws://192.168.1.23:3000/ws',
+            'reachable': 'unknown',
           },
         ],
-        'lan': [],
         'public': {
           'enabled': true,
           'kind': 'custom',
@@ -91,16 +90,15 @@ void main() {
         'preferredPairingEndpoint': 'auto',
       });
 
-      expect(urls.local, hasLength(1));
-      expect(urls.local.first.reachableLabel, 'reachable');
-      expect(urls.lan, isEmpty);
+      expect(urls.lan, hasLength(1));
+      expect(urls.lan.first.baseUrl, 'http://192.168.1.23:3000');
       expect(urls.public?.enabled, isTrue);
       expect(urls.public?.reachableLabel, 'unknown');
       expect(urls.preferredPairingEndpoint, 'auto');
     });
 
     test('handles missing public block', () {
-      final urls = ServerUrls.fromJson({'local': [], 'lan': []});
+      final urls = ServerUrls.fromJson({'lan': []});
       expect(urls.public, isNull);
       expect(urls.preferredPairingEndpoint, 'auto');
     });

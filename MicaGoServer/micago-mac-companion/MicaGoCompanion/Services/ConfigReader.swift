@@ -22,7 +22,7 @@ enum ConfigReader {
             return nil
         }
 
-        var addr = "127.0.0.1:3000"
+        var addr = "0.0.0.0:3000"
         var token = ""
         var publicURL: String?
         var publicBaseURL: String?

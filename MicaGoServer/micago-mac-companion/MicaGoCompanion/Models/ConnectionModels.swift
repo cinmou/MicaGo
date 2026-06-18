@@ -66,7 +66,8 @@ struct PublicEndpoint: Codable {
 }
 
 struct ServerURLs: Codable {
-    var local: [ConnectionEndpoint]
+    // C25: loopback/local is no longer part of the connection flow — the only
+    // client-usable endpoints are LAN and the optional Public.
     var lan: [ConnectionEndpoint]
     var `public`: PublicEndpoint
     var preferredPairingEndpoint: String

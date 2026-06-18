@@ -17,7 +17,12 @@ MessageModel _msg({
   int groupActionType = 0,
   int errorCode = 0,
   bool isEdited = false,
+  int? dateEdited,
   bool isDebugOnly = false,
+  bool cacheHasAttachments = false,
+  String? semanticKind,
+  String? renderRecommendation,
+  String? unsupportedReason,
   String? tempId,
   LocalSendState localState = LocalSendState.confirmed,
 }) {
@@ -37,7 +42,12 @@ MessageModel _msg({
     groupActionType: groupActionType,
     errorCode: errorCode,
     isEdited: isEdited,
+    dateEdited: dateEdited,
     isDebugOnly: isDebugOnly,
+    cacheHasAttachments: cacheHasAttachments,
+    semanticKind: semanticKind,
+    renderRecommendation: renderRecommendation,
+    unsupportedReason: unsupportedReason,
     tempId: tempId,
     localState: localState,
   );
@@ -109,6 +119,24 @@ void main() {
       expect(
         renderableKindFor(_msg(text: 'hidden', isDebugOnly: true)),
         MessageRenderableKind.unknown,
+      );
+    });
+    test('empty edited residue does not render as a normal bubble', () {
+      final m = _msg(
+        isEdited: true,
+        semanticKind: 'empty_edited_residue',
+        renderRecommendation: 'system',
+        unsupportedReason: 'empty_edited_residue',
+      );
+      expect(renderableKindFor(m), MessageRenderableKind.unknown);
+      final cls = classifyMessage(m);
+      expect(cls.isUnsupported, isTrue);
+      expect(cls.reason, UnsupportedReason.emptyEditedResidue);
+    });
+    test('normal edited text stays a normal message', () {
+      expect(
+        renderableKindFor(_msg(text: 'fixed typo', isEdited: true)),
+        MessageRenderableKind.normal,
       );
     });
   });

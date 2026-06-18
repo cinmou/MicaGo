@@ -39,7 +39,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final app = context.read<AppController>();
       _app = app;
-      app.connectWebSocket();
+      unawaited(app.connectForeground(reason: 'startup'));
       app.refreshServerUrls().catchError((_) {});
       // C22: start the optional FCM wake path (no-op without Firebase config).
       _push = PushService(app);
@@ -145,11 +145,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             Expanded(
               child: Scaffold(
                 appBar: AppBar(title: Text(_destinations[_index].label)),
-                body: IndexedStack(
-                  index: _index,
-                  children: [
-                    for (var i = 0; i < _destinations.length; i++) _body(i),
-                  ],
+                body: ConnectionNoticeHost(
+                  child: IndexedStack(
+                    index: _index,
+                    children: [
+                      for (var i = 0; i < _destinations.length; i++) _body(i),
+                    ],
+                  ),
                 ),
               ),
             ),

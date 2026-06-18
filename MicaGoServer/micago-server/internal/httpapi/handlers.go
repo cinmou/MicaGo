@@ -919,17 +919,11 @@ func (h *Handlers) SendAttachment(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w)
 		return
 	}
-	// Best-effort cleanup; Messages copies the file into its own store on send.
-	defer func() {
-		if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
-			h.logInternal("remove outgoing attachment temp", rmErr)
-		}
-	}()
-
 	if tempGUID != "" {
 		h.broadcastSendPending(r.Context(), tempGUID, guid)
 	}
 	if err := h.send.Sender.SendAttachment(r.Context(), guid, tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
 		h.logSend(tempGUID, "attachment send failed", err.Error())
 		if tempGUID != "" {
 			h.broadcastSendError(r.Context(), tempGUID, guid, "send_failed", "failed to send attachment")
@@ -954,13 +948,11 @@ func (h *Handlers) SendAttachment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// writeOutgoingTempFile saves an upload under <attachmentsRoot>/outgoing with a
-// random prefix, preserving the (sanitized) original base name.
+// writeOutgoingTempFile saves an upload into Messages' attachment tree, mirroring
+// imsg's staging path. Keeping the file there lets Messages/imagent link the
+// outgoing row back to a readable attachment instead of racing a deleted temp
+// file, which makes the sender's own client able to render the media after sync.
 func (h *Handlers) writeOutgoingTempFile(filename string, src io.Reader) (string, error) {
-	dir := filepath.Join(h.attachmentsRoot, "outgoing")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
 	base := filepath.Base(filename)
 	if base == "" || base == "." || base == string(filepath.Separator) {
 		base = "attachment"
@@ -969,7 +961,15 @@ func (h *Handlers) writeOutgoingTempFile(filename string, src io.Reader) (string
 	if _, err := rand.Read(randBytes[:]); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, hex.EncodeToString(randBytes[:])+"-"+base)
+	root, err := messagesOutgoingAttachmentRoot()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, hex.EncodeToString(randBytes[:]))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, base)
 	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", err
@@ -980,6 +980,14 @@ func (h *Handlers) writeOutgoingTempFile(filename string, src io.Reader) (string
 		return "", err
 	}
 	return path, nil
+}
+
+func messagesOutgoingAttachmentRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "Library", "Messages", "Attachments", "MicaGo", "Outgoing"), nil
 }
 
 func (h *Handlers) GetAttachment(w http.ResponseWriter, r *http.Request) {

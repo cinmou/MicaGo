@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
@@ -6,9 +7,13 @@ import '../../app/router.dart';
 import '../../core/app_controller.dart';
 import '../../core/models/connection_profile.dart';
 import '../../core/network/endpoint_utils.dart';
+import '../../core/network/manual_connection_profile.dart';
+import '../pairing/pairing_payload.dart';
 import 'connection_controller.dart';
 
-/// Manual connection setup: server URL, bearer token, optional WebSocket URL.
+/// Connection setup. Normal paths are QR scan and pasted v3 connection JSON.
+/// Low-level URL entry is kept only as an advanced fallback and still generates
+/// the same LAN/Public candidate model used by QR pairing.
 class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({super.key});
 
@@ -18,10 +23,11 @@ class ConnectionScreen extends StatefulWidget {
 
 class _ConnectionScreenState extends State<ConnectionScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _baseUrlCtrl = TextEditingController();
+  final _publicUrlCtrl = TextEditingController();
+  final _lanUrlCtrl = TextEditingController();
   final _tokenCtrl = TextEditingController();
-  final _wsCtrl = TextEditingController();
   bool _obscureToken = true;
+  String? _pasteError;
 
   late final ConnectionController _controller;
 
@@ -29,49 +35,86 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   void initState() {
     super.initState();
     _controller = ConnectionController(context.read<AppController>());
-    // Pre-fill from an existing profile when editing.
     final existing = _controller.app.profile;
     if (existing != null) {
-      _baseUrlCtrl.text = existing.baseUrl;
+      _publicUrlCtrl.text = existing.publicBaseUrl ?? '';
+      _lanUrlCtrl.text = existing.lanBaseUrl ?? '';
       _tokenCtrl.text = existing.token;
-      _wsCtrl.text = existing.wsUrlOverride ?? '';
+      if (_publicUrlCtrl.text.isEmpty && _lanUrlCtrl.text.isEmpty) {
+        _publicUrlCtrl.text = existing.baseUrl;
+      }
     }
-    _baseUrlCtrl.addListener(() => setState(() {}));
-    _wsCtrl.addListener(() => setState(() {}));
+    _publicUrlCtrl.addListener(() => setState(() {}));
+    _lanUrlCtrl.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
     _controller.dispose();
-    _baseUrlCtrl.dispose();
+    _publicUrlCtrl.dispose();
+    _lanUrlCtrl.dispose();
     _tokenCtrl.dispose();
-    _wsCtrl.dispose();
     super.dispose();
   }
 
-  ConnectionProfile _buildProfile() {
-    return ConnectionProfile(
-      baseUrl: normalizeBaseUrl(_baseUrlCtrl.text),
-      token: _tokenCtrl.text.trim(),
-      wsUrlOverride: _wsCtrl.text.trim().isEmpty ? null : _wsCtrl.text.trim(),
+  ConnectionProfile _buildAdvancedProfile() {
+    return advancedManualProfile(
+      publicBaseUrl: _publicUrlCtrl.text,
+      lanBaseUrl: _lanUrlCtrl.text,
+      token: _tokenCtrl.text,
     );
   }
 
-  String get _derivedWs {
-    final base = _baseUrlCtrl.text.trim();
-    if (base.isEmpty) return '';
-    return deriveWebSocketUrl(base);
+  Future<void> _pasteConnectionJson() async {
+    setState(() => _pasteError = null);
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final controller = TextEditingController(text: clip?.text?.trim() ?? '');
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Paste connection JSON'),
+        content: TextField(
+          controller: controller,
+          maxLines: 7,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Paste the connection JSON from the Mac app',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Connect'),
+          ),
+        ],
+      ),
+    );
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final profile = parsePairingPayload(raw).toProfile();
+      await _controller.save(profile);
+      if (!mounted) return;
+      context.go(Routes.home);
+    } on PairingParseException catch (e) {
+      setState(() => _pasteError = e.message);
+    }
   }
 
-  Future<void> _onTest() async {
+  Future<void> _onTestAdvanced() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     FocusScope.of(context).unfocus();
-    await _controller.test(_buildProfile());
+    await _controller.test(_buildAdvancedProfile());
   }
 
-  Future<void> _onSave() async {
+  Future<void> _onSaveAdvanced() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    await _controller.save(_buildProfile());
+    await _controller.save(_buildAdvancedProfile());
     if (!mounted) return;
     context.go(Routes.home);
   }
@@ -86,116 +129,145 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           builder: (context, _) {
             return SingleChildScrollView(
               padding: const EdgeInsets.all(16),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const _BrandHeader(),
-                    const SizedBox(height: 24),
-                    // QR is the recommended pairing path.
-                    FilledButton.icon(
-                      onPressed: () => context.push(Routes.pair),
-                      icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('Scan QR code'),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const _BrandHeader(),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: () => context.push(Routes.pair),
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('Scan QR code'),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: _pasteConnectionJson,
+                    icon: const Icon(Icons.content_paste),
+                    label: const Text('Paste connection JSON'),
+                  ),
+                  if (_pasteError != null) ...[
+                    const SizedBox(height: 12),
+                    _InlineError(text: _pasteError!),
+                  ],
+                  const SizedBox(height: 24),
+                  Form(
+                    key: _formKey,
+                    child: ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text('Advanced manual setup'),
+                      subtitle: const Text(
+                        'Enter origins only; WebSocket URLs are derived automatically.',
+                      ),
                       children: [
-                        const Expanded(child: Divider()),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Text(
-                            'or enter manually',
-                            style: Theme.of(context).textTheme.bodySmall,
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _publicUrlCtrl,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          decoration: InputDecoration(
+                            labelText: 'Public URL (optional)',
+                            hintText: 'https://mica.example.com',
+                            helperText: _derivedPublicWs,
+                            prefixIcon: const Icon(Icons.public_outlined),
                           ),
+                          validator: (v) => _optionalUrlValidator(v, 'Public'),
                         ),
-                        const Expanded(child: Divider()),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _lanUrlCtrl,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          decoration: InputDecoration(
+                            labelText: 'LAN URL (optional)',
+                            hintText: 'http://192.168.1.23:3000',
+                            helperText: _derivedLanWs,
+                            prefixIcon: const Icon(Icons.wifi_tethering),
+                          ),
+                          validator: (v) => _optionalUrlValidator(v, 'LAN'),
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _tokenCtrl,
+                          obscureText: _obscureToken,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: InputDecoration(
+                            labelText: 'Bearer token',
+                            prefixIcon: const Icon(Icons.key_outlined),
+                            suffixIcon: IconButton(
+                              tooltip: _obscureToken ? 'Show' : 'Hide',
+                              icon: Icon(
+                                _obscureToken
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                              onPressed: () => setState(
+                                () => _obscureToken = !_obscureToken,
+                              ),
+                            ),
+                          ),
+                          validator: (v) => (v ?? '').trim().isEmpty
+                              ? 'Token is required'
+                              : null,
+                        ),
+                        const SizedBox(height: 20),
+                        OutlinedButton.icon(
+                          onPressed: _controller.state == TestState.testing
+                              ? null
+                              : _onTestAdvanced,
+                          icon: _controller.state == TestState.testing
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.wifi_tethering),
+                          label: const Text('Test advanced connection'),
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton.icon(
+                          onPressed: _onSaveAdvanced,
+                          icon: const Icon(Icons.save_outlined),
+                          label: const Text('Save advanced connection'),
+                        ),
+                        const SizedBox(height: 16),
+                        _TestResult(controller: _controller),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _baseUrlCtrl,
-                      keyboardType: TextInputType.url,
-                      autocorrect: false,
-                      decoration: const InputDecoration(
-                        labelText: 'Server URL',
-                        hintText: 'https://mica.example.com',
-                        prefixIcon: Icon(Icons.dns_outlined),
-                      ),
-                      validator: (v) => isValidHttpUrl(v ?? '')
-                          ? null
-                          : 'Enter a valid http(s) URL',
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _tokenCtrl,
-                      obscureText: _obscureToken,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: InputDecoration(
-                        labelText: 'Bearer token',
-                        prefixIcon: const Icon(Icons.key_outlined),
-                        suffixIcon: IconButton(
-                          tooltip: _obscureToken ? 'Show' : 'Hide',
-                          icon: Icon(
-                            _obscureToken
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                          ),
-                          onPressed: () =>
-                              setState(() => _obscureToken = !_obscureToken),
-                        ),
-                      ),
-                      validator: (v) =>
-                          (v ?? '').trim().isEmpty ? 'Token is required' : null,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _wsCtrl,
-                      keyboardType: TextInputType.url,
-                      autocorrect: false,
-                      decoration: InputDecoration(
-                        labelText: 'WebSocket URL (optional)',
-                        helperMaxLines: 2,
-                        helperText: _wsCtrl.text.trim().isEmpty
-                            ? (_derivedWs.isEmpty
-                                  ? 'Auto-derived from the server URL.'
-                                  : 'Auto: $_derivedWs')
-                            : null,
-                        prefixIcon: const Icon(Icons.cable_outlined),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    OutlinedButton.icon(
-                      onPressed: _controller.state == TestState.testing
-                          ? null
-                          : _onTest,
-                      icon: _controller.state == TestState.testing
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.wifi_tethering),
-                      label: const Text('Test connection'),
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton.icon(
-                      onPressed: _onSave,
-                      icon: const Icon(Icons.save_outlined),
-                      label: const Text('Save & continue'),
-                    ),
-                    const SizedBox(height: 16),
-                    _TestResult(controller: _controller),
-                  ],
-                ),
+                  ),
+                ],
               ),
             );
           },
         ),
       ),
     );
+  }
+
+  String? get _derivedPublicWs {
+    final raw = _publicUrlCtrl.text.trim();
+    if (raw.isEmpty) return null;
+    return 'WebSocket: ${deriveWebSocketUrl(raw)}';
+  }
+
+  String? get _derivedLanWs {
+    final raw = _lanUrlCtrl.text.trim();
+    if (raw.isEmpty) return null;
+    return 'WebSocket: ${deriveWebSocketUrl(raw)}';
+  }
+
+  String? _optionalUrlValidator(String? value, String label) {
+    final raw = value?.trim() ?? '';
+    final other = label == 'Public' ? _lanUrlCtrl.text : _publicUrlCtrl.text;
+    if (raw.isEmpty) {
+      if (other.trim().isEmpty) {
+        return 'Enter a Public URL, a LAN URL, or paste connection JSON.';
+      }
+      return null;
+    }
+    return isValidHttpUrl(raw) ? null : 'Enter a valid http(s) origin';
   }
 }
 
@@ -222,7 +294,7 @@ class _BrandHeader extends StatelessWidget {
           children: [
             Text('MicaGo', style: Theme.of(context).textTheme.headlineSmall),
             Text(
-              'Connect to your relay server',
+              'Connect with QR or connection JSON',
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
@@ -230,6 +302,30 @@ class _BrandHeader extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _InlineError extends StatelessWidget {
+  final String text;
+  const _InlineError({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline, color: scheme.error),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text)),
+        ],
+      ),
     );
   }
 }
@@ -261,22 +357,7 @@ class _TestResult extends StatelessWidget {
               color: color,
             ),
             const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(controller.message ?? ''),
-                  if (controller.urlsPreview?.public?.enabled == true) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      'Public endpoint: '
-                      '${controller.urlsPreview!.public!.baseUrl}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ],
-              ),
-            ),
+            Expanded(child: Text(controller.message ?? '')),
           ],
         ),
       ),

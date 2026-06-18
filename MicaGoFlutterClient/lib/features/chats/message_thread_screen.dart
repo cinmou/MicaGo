@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
@@ -13,12 +14,14 @@ import 'avatar.dart';
 import 'chat_service.dart';
 import '../settings/message_display_controller.dart';
 import 'diagnostics_store.dart';
+import 'emoji_text.dart';
 import 'message_debug_sheet.dart';
 import 'message_display.dart';
 import 'message_render.dart';
 import 'models/chat_summary.dart';
 import 'models/merged_chat.dart';
 import 'models/message_model.dart';
+import 'route_label.dart';
 import 'store/thread_presentation.dart';
 import 'thread_controller.dart';
 
@@ -119,11 +122,53 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   // C21c: staged attachments selected via the BlueBubbles-style panel, sent on
   // the next Send. The + toggles the panel instead of opening a picker directly.
   bool _attachOpen = false;
+  // C24: the emoji panel is now a bottom panel (below the composer), mutually
+  // exclusive with the attachment panel.
+  bool _emojiOpen = false;
   final List<StagedAttachment> _staged = [];
 
   void _toggleAttachPanel() {
     if (!_canSendAttachments) return;
-    setState(() => _attachOpen = !_attachOpen);
+    setState(() {
+      _attachOpen = !_attachOpen;
+      if (_attachOpen) _emojiOpen = false; // mutually exclusive
+    });
+  }
+
+  // C24: open/close the bottom emoji panel. Opening it closes the attachment
+  // panel and dismisses the keyboard so the panel takes the keyboard's place.
+  void _toggleEmojiPanel() {
+    final opening = !_emojiOpen;
+    if (opening) FocusScope.of(context).unfocus();
+    setState(() {
+      _emojiOpen = opening;
+      if (_emojiOpen) _attachOpen = false;
+    });
+  }
+
+  // When the user taps into the text field, the keyboard returns — close the
+  // emoji panel so they don't overlap.
+  void _onInputFocused() {
+    if (_emojiOpen) setState(() => _emojiOpen = false);
+  }
+
+  // Insert an emoji at the caret (or append), and remember it as a recent.
+  void _insertEmoji(String emoji) {
+    final sel = _composer.selection;
+    final text = _composer.text;
+    if (sel.isValid && sel.start >= 0) {
+      final newText = text.replaceRange(sel.start, sel.end, emoji);
+      _composer.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: sel.start + emoji.length),
+      );
+    } else {
+      _composer.text = text + emoji;
+      _composer.selection = TextSelection.collapsed(
+        offset: _composer.text.length,
+      );
+    }
+    EmojiPanel.remember(emoji);
   }
 
   void _onPicked(List<StagedAttachment> picked) {
@@ -146,11 +191,13 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     final name = await asset.titleAsync;
     if (!mounted) return;
     setState(() {
-      _staged.add(StagedAttachment(
-        bytes: bytes,
-        filename: name.isNotEmpty ? name : '${asset.id}.jpg',
-        sourceId: asset.id,
-      ));
+      _staged.add(
+        StagedAttachment(
+          bytes: bytes,
+          filename: name.isNotEmpty ? name : '${asset.id}.jpg',
+          sourceId: asset.id,
+        ),
+      );
     });
   }
 
@@ -208,8 +255,9 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
 
   /// Whether text can be sent right now — the server's explicit capability
   /// (C21c), no client inference. Same source drives the composer + retry.
-  bool get _canSendText =>
-      _active.canSendText(allowSmsSend: context.read<AppController>().allowSmsSend);
+  bool get _canSendText => _active.canSendText(
+    allowSmsSend: context.read<AppController>().allowSmsSend,
+  );
 
   /// Whether attachments can be sent right now — the server's explicit
   /// capability (same source as text today, separate field for the future).
@@ -273,14 +321,26 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
             service: _effectiveService,
             serviceCanSend: canSend,
             // Send is enabled when there's text OR staged attachments.
-            canSend:
-                _composer.text.trim().isNotEmpty || _staged.isNotEmpty,
+            canSend: _composer.text.trim().isNotEmpty || _staged.isNotEmpty,
             onSend: _send,
             attachmentSending: _controller.attachmentSending,
             attachOpen: _attachOpen,
             onAttach: _toggleAttachPanel,
             onVoice: _onVoiceAffordance,
+            emojiOpen: _emojiOpen,
+            onEmoji: _toggleEmojiPanel,
+            onInputFocused: _onInputFocused,
           ),
+        ),
+        // C24: emoji panel slides up from the bottom, below the composer —
+        // like a keyboard/attachment panel.
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          alignment: Alignment.bottomCenter,
+          child: _emojiOpen
+              ? EmojiPanel(onPick: _insertEmoji)
+              : const SizedBox(width: double.infinity),
         ),
       ],
     );
@@ -371,15 +431,19 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     );
   }
 
-  // C21: route selector — only when the contact has more than one real chat
-  // (e.g. iMessage + SMS). Picking a route rebinds the thread to that route's
-  // real GUID; sends then target it with its own server send capabilities.
+  // C21/C24: route selector — only when the contact has more than one real
+  // chat. The label includes the concrete handle/address so two routes on the
+  // same service (e.g. two iMessage numbers/emails) are distinguishable. Picking
+  // a route rebinds the thread to that route's real GUID; sends target it with
+  // its own server-provided send capabilities.
   Widget? _routeSelector(BuildContext context) {
     final routes = widget.merged.routes;
     if (routes.length < 2) return null;
     final scheme = Theme.of(context).colorScheme;
+    final allowSms = context.read<AppController>().allowSmsSend;
     return PopupMenuButton<String>(
       tooltip: 'Send route',
+      icon: Icon(Icons.swap_horiz, color: scheme.onSurfaceVariant),
       onSelected: (guid) {
         final route = routes.firstWhere((r) => r.guid == guid);
         _switchRoute(route);
@@ -389,6 +453,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
           PopupMenuItem<String>(
             value: r.guid,
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(
                   r.guid == _active.guid
@@ -398,25 +463,33 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
                   color: scheme.primary,
                 ),
                 const SizedBox(width: 10),
-                Text(r.service.label),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(r.service.label),
+                      if (routeHandle(r).isNotEmpty)
+                        Text(
+                          routeHandle(r),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      Text(
+                        routeSendabilityLabel(r, allowSmsSend: allowSms),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: r.canSendText(allowSmsSend: allowSms)
+                              ? scheme.primary
+                              : scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
       ],
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.swap_horiz, size: 16, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 4),
-            Text(
-              _active.service.label,
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -518,9 +591,49 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
         final t = m.message.tempId;
         if (t != null) _controller.retry(t);
       },
-      onDebug: () => showMessageDebugSheet(context, m.message),
+      onActions: (position) =>
+          showMessageActionMenu(context, m.message, position),
     );
     return m.message.hasAttachments ? RepaintBoundary(child: bubble) : bubble;
+  }
+}
+
+enum MessageAction { copy }
+
+Future<void> showMessageActionMenu(
+  BuildContext context,
+  MessageModel message,
+  Offset globalPosition,
+) async {
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  final text = displayText(message);
+  if (text == null) return;
+  final selected = await showMenu<MessageAction>(
+    context: context,
+    position: RelativeRect.fromRect(
+      Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+      Offset.zero & overlay.size,
+    ),
+    items: [
+      const PopupMenuItem<MessageAction>(
+        value: MessageAction.copy,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.copy),
+          title: Text('Copy'),
+        ),
+      ),
+    ],
+  );
+  if (!context.mounted || selected == null) return;
+  switch (selected) {
+    case MessageAction.copy:
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Message copied')));
+      break;
   }
 }
 
@@ -571,7 +684,7 @@ class _MessageBubble extends StatefulWidget {
   final ReplyPreview? reply;
   final String? effectHint;
   final VoidCallback onRetry;
-  final VoidCallback onDebug;
+  final void Function(Offset globalPosition) onActions;
 
   const _MessageBubble({
     required this.message,
@@ -584,7 +697,7 @@ class _MessageBubble extends StatefulWidget {
     this.reply,
     this.effectHint,
     required this.onRetry,
-    required this.onDebug,
+    required this.onActions,
   });
 
   @override
@@ -605,12 +718,17 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final effectHint = widget.effectHint;
     final scheme = Theme.of(context).colorScheme;
     final fromMe = message.isFromMe;
-    final bubbleColor = fromMe
-        ? scheme.primaryContainer
-        : scheme.surfaceContainerHighest;
+    final hasMedia = message.hasAttachments && api != null;
+    // C24: emoji-only messages render larger and without the colored bubble
+    // (BlueBubbles-style). Mixed text + emoji stays a normal text bubble.
+    final body = widget.body;
+    final bigEmoji =
+        body != null && !hasMedia && widget.reply == null && isBigEmoji(body);
+    final bubbleColor = bigEmoji
+        ? Colors.transparent
+        : (fromMe ? scheme.primaryContainer : scheme.surfaceContainerHighest);
     final textColor = fromMe ? scheme.onPrimaryContainer : scheme.onSurface;
 
-    final hasMedia = message.hasAttachments && api != null;
     final images = message.attachments
         .where((a) => a.canRenderInlineImage)
         .toList(growable: false);
@@ -663,7 +781,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
                 ),
               ),
           if (bodyText != null)
-            Text(bodyText, style: TextStyle(color: textColor)),
+            Text(
+              bodyText,
+              style: bigEmoji
+                  ? TextStyle(fontSize: bigEmojiFontSize(bodyText), height: 1.1)
+                  : TextStyle(color: textColor),
+            ),
           if (effect != null)
             Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -686,14 +809,39 @@ class _MessageBubbleState extends State<_MessageBubble> {
                 ],
               ),
             ),
-          _Footer(
-            message: message,
-            showStatus: widget.showStatus,
-            showTime: widget.showTimestamp || _revealed,
-            onRetry: widget.onRetry,
-          ),
         ],
       ),
+    );
+
+    final bubbleWithReactions = reactions.isEmpty
+        ? bubble
+        : Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Padding(padding: const EdgeInsets.only(top: 8), child: bubble),
+              Positioned(
+                top: -4,
+                right: fromMe ? null : 4,
+                left: fromMe ? 4 : null,
+                child: _ReactionChips(reactions: reactions),
+              ),
+            ],
+          );
+
+    final row = Column(
+      crossAxisAlignment: fromMe
+          ? CrossAxisAlignment.end
+          : CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        bubbleWithReactions,
+        _Footer(
+          message: message,
+          showStatus: widget.showStatus,
+          showTime: widget.showTimestamp || _revealed,
+          onRetry: widget.onRetry,
+        ),
+      ],
     );
 
     return Align(
@@ -704,24 +852,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
         ),
         child: GestureDetector(
           onTap: () => setState(() => _revealed = !_revealed),
-          onLongPress: widget.onDebug,
-          child: reactions.isEmpty
-              ? bubble
-              : Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: bubble,
-                    ),
-                    Positioned(
-                      top: -4,
-                      right: fromMe ? null : 4,
-                      left: fromMe ? 4 : null,
-                      child: _ReactionChips(reactions: reactions),
-                    ),
-                  ],
-                ),
+          onLongPressStart: (details) =>
+              widget.onActions(details.globalPosition),
+          child: row,
         ),
       ),
     );
@@ -985,6 +1118,11 @@ class _Composer extends StatefulWidget {
   final bool attachOpen;
   final VoidCallback onAttach;
   final VoidCallback onVoice;
+  // C24: the emoji panel is owned by the parent (a bottom panel). The composer
+  // just reports taps on the emoji button and keeps it visible while open.
+  final bool emojiOpen;
+  final VoidCallback onEmoji;
+  final VoidCallback onInputFocused;
 
   const _Composer({
     required this.controller,
@@ -996,6 +1134,9 @@ class _Composer extends StatefulWidget {
     required this.attachOpen,
     required this.onAttach,
     required this.onVoice,
+    required this.emojiOpen,
+    required this.onEmoji,
+    required this.onInputFocused,
   });
 
   @override
@@ -1004,23 +1145,14 @@ class _Composer extends StatefulWidget {
 
 class _ComposerState extends State<_Composer> {
   final FocusNode _focus = FocusNode();
-  bool _emojiOpen = false;
-
-  // A small, native set of common emoji for the inline picker (no plugin).
-  static const _emoji = <String>[
-    '😀', '😂', '🥰', '😍', '😊', '😉', '😎', '🤔',
-    '😅', '😭', '😡', '👍', '👎', '🙏', '👏', '🙌',
-    '🔥', '🎉', '❤️', '💔', '✅', '❌', '💯', '🤝',
-    '😴', '🤯', '🥳', '😇', '🤷', '👀', '💪', '☕',
-  ];
 
   @override
   void initState() {
     super.initState();
-    // Rebuild on focus change so the voice↔emoji swap animates.
+    // Rebuild on focus change so the voice↔emoji swap animates; tapping into the
+    // field (keyboard returns) closes the bottom emoji panel.
     _focus.addListener(() {
-      // Closing the keyboard also closes the inline emoji picker.
-      if (!_focus.hasFocus && _emojiOpen) _emojiOpen = false;
+      if (_focus.hasFocus) widget.onInputFocused();
       setState(() {});
     });
   }
@@ -1029,31 +1161,6 @@ class _ComposerState extends State<_Composer> {
   void dispose() {
     _focus.dispose();
     super.dispose();
-  }
-
-  // Emoji button action: toggle the inline picker. We keep the field focused so
-  // the swap state (emoji vs voice) and selection are preserved — a real,
-  // crash-free action that works on every platform without a plugin.
-  void _toggleEmoji() {
-    _focus.requestFocus();
-    setState(() => _emojiOpen = !_emojiOpen);
-  }
-
-  // Insert an emoji at the current cursor position (or append).
-  void _insertEmoji(String emoji) {
-    final c = widget.controller;
-    final sel = c.selection;
-    final text = c.text;
-    if (sel.isValid && sel.start >= 0) {
-      final newText = text.replaceRange(sel.start, sel.end, emoji);
-      c.value = TextEditingValue(
-        text: newText,
-        selection: TextSelection.collapsed(offset: sel.start + emoji.length),
-      );
-    } else {
-      c.text = text + emoji;
-      c.selection = TextSelection.collapsed(offset: c.text.length);
-    }
   }
 
   @override
@@ -1092,8 +1199,10 @@ class _ComposerState extends State<_Composer> {
     final capsuleColor = scheme.surfaceContainerHighest;
     final onCapsule = scheme.onSurface;
     final hintColor = scheme.onSurfaceVariant;
-    // Show the emoji button while the field is focused; otherwise voice.
-    final showEmoji = _focus.hasFocus;
+    // Show the emoji button while the field is focused OR the bottom emoji panel
+    // is open (so it stays reachable after the keyboard is dismissed); otherwise
+    // the voice button.
+    final showEmoji = _focus.hasFocus || widget.emojiOpen;
 
     final bar = Container(
       // A floating capsule: horizontal margin so it doesn't span edge-to-edge,
@@ -1190,14 +1299,14 @@ class _ComposerState extends State<_Composer> {
                             key: const ValueKey('emoji'),
                             tooltip: 'Emoji',
                             visualDensity: VisualDensity.compact,
-                            color: _emojiOpen
+                            color: widget.emojiOpen
                                 ? scheme.primary
                                 : scheme.onSurfaceVariant,
                             icon: const Icon(
                               Icons.emoji_emotions_outlined,
                               size: 22,
                             ),
-                            onPressed: _toggleEmoji,
+                            onPressed: widget.onEmoji,
                           )
                         : IconButton(
                             key: const ValueKey('voice'),
@@ -1232,55 +1341,446 @@ class _ComposerState extends State<_Composer> {
       ),
     );
 
-    return SafeArea(
-      top: false,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Inline emoji picker (native, no plugin) — animates open/closed.
-          AnimatedSize(
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOut,
-            alignment: Alignment.bottomCenter,
-            child: _emojiOpen
-                ? _EmojiPicker(emoji: _emoji, onPick: _insertEmoji)
-                : const SizedBox(width: double.infinity),
-          ),
-          bar,
-        ],
-      ),
-    );
+    // SafeArea bottom is applied by the emoji panel when it's open; here the bar
+    // keeps its own bottom margin.
+    return SafeArea(top: false, child: bar);
   }
 }
 
-/// Lightweight inline emoji grid — taps insert into the composer at the cursor.
-class _EmojiPicker extends StatelessWidget {
-  final List<String> emoji;
+/// C24: a bottom emoji panel (keyboard-style) — rounded top corners, theme-aware
+/// background, a recents row, category tabs, and a curated multi-category emoji
+/// set (no plugin). Taps insert at the composer's cursor; picks are remembered
+/// as recents. Works in dark/light and narrow/wide layouts (the grid reflows by
+/// available width).
+class EmojiPanel extends StatefulWidget {
   final void Function(String emoji) onPick;
-  const _EmojiPicker({required this.emoji, required this.onPick});
+  const EmojiPanel({super.key, required this.onPick});
+
+  // In-memory most-recently-used list (most recent first), shared across threads
+  // for the session. Simple + dependency-free.
+  static final List<String> _recents = <String>[];
+  static void remember(String emoji) {
+    _recents.remove(emoji);
+    _recents.insert(0, emoji);
+    if (_recents.length > 24) _recents.removeRange(24, _recents.length);
+  }
+
+  static const Map<String, List<String>> categories = {
+    'Smileys': [
+      '😀',
+      '😃',
+      '😄',
+      '😁',
+      '😆',
+      '😅',
+      '😂',
+      '🤣',
+      '🙂',
+      '🙃',
+      '😉',
+      '😊',
+      '😇',
+      '🥰',
+      '😍',
+      '🤩',
+      '😘',
+      '😗',
+      '😚',
+      '😙',
+      '😋',
+      '😛',
+      '😜',
+      '🤪',
+      '😝',
+      '🤗',
+      '🤔',
+      '🤐',
+      '😐',
+      '😴',
+      '😪',
+      '😌',
+      '😎',
+      '🥳',
+      '😏',
+      '😒',
+      '😔',
+      '😟',
+      '😕',
+      '🙁',
+      '😣',
+      '😖',
+      '😫',
+      '😩',
+      '🥺',
+      '😢',
+      '😭',
+      '😤',
+      '😠',
+      '😡',
+      '🤯',
+      '😳',
+      '🥵',
+      '🥶',
+      '😱',
+      '😨',
+      '😰',
+      '😥',
+      '🤥',
+      '🤫',
+      '😬',
+      '🙄',
+      '😯',
+      '🥱',
+    ],
+    'Gestures': [
+      '👍',
+      '👎',
+      '👏',
+      '🙌',
+      '🙏',
+      '🤝',
+      '👋',
+      '🤙',
+      '✌️',
+      '🤞',
+      '🫶',
+      '🤟',
+      '🤘',
+      '👌',
+      '🤏',
+      '👈',
+      '👉',
+      '👆',
+      '👇',
+      '✋',
+      '🖐️',
+      '🖖',
+      '💪',
+      '🦾',
+      '👀',
+      '👁️',
+      '🫡',
+      '🫠',
+      '🤌',
+      '✊',
+      '👊',
+      '🫵',
+    ],
+    'Hearts': [
+      '❤️',
+      '🧡',
+      '💛',
+      '💚',
+      '💙',
+      '💜',
+      '🖤',
+      '🤍',
+      '🤎',
+      '💔',
+      '❣️',
+      '💕',
+      '💞',
+      '💓',
+      '💗',
+      '💖',
+      '💘',
+      '💝',
+      '💟',
+      '♥️',
+      '💯',
+      '💢',
+      '💥',
+      '✨',
+      '⭐',
+      '🌟',
+      '💫',
+      '🔥',
+    ],
+    'Animals': [
+      '🐶',
+      '🐱',
+      '🐭',
+      '🐹',
+      '🐰',
+      '🦊',
+      '🐻',
+      '🐼',
+      '🐨',
+      '🐯',
+      '🦁',
+      '🐮',
+      '🐷',
+      '🐸',
+      '🐵',
+      '🐔',
+      '🐧',
+      '🐦',
+      '🐤',
+      '🦄',
+      '🐝',
+      '🦋',
+      '🐌',
+      '🐞',
+      '🐢',
+      '🐍',
+      '🐙',
+      '🦀',
+      '🐠',
+      '🐬',
+      '🐳',
+      '🐡',
+    ],
+    'Food': [
+      '🍏',
+      '🍎',
+      '🍐',
+      '🍊',
+      '🍋',
+      '🍌',
+      '🍉',
+      '🍇',
+      '🍓',
+      '🫐',
+      '🍒',
+      '🍑',
+      '🥭',
+      '🍍',
+      '🥥',
+      '🥝',
+      '🍅',
+      '🥑',
+      '🌽',
+      '🌶️',
+      '🍔',
+      '🍟',
+      '🍕',
+      '🌭',
+      '🥪',
+      '🌮',
+      '🍣',
+      '🍜',
+      '🍰',
+      '🍩',
+      '🍪',
+      '☕',
+    ],
+    'Activities': [
+      '⚽',
+      '🏀',
+      '🏈',
+      '⚾',
+      '🎾',
+      '🏐',
+      '🏉',
+      '🎱',
+      '🏓',
+      '🏸',
+      '🥅',
+      '🎯',
+      '🎮',
+      '🎲',
+      '🎸',
+      '🎧',
+      '🎉',
+      '🎊',
+      '🎁',
+      '🏆',
+      '🥇',
+      '🚗',
+      '✈️',
+      '🚀',
+      '🏝️',
+      '🎢',
+      '🎡',
+      '📷',
+      '💻',
+      '📱',
+      '⌚',
+      '💡',
+    ],
+    'Symbols': [
+      '✅',
+      '❌',
+      '⚠️',
+      '❓',
+      '❗',
+      '💤',
+      '♻️',
+      '🔔',
+      '🔕',
+      '🔒',
+      '🔑',
+      '🔗',
+      '📌',
+      '📎',
+      '✏️',
+      '📝',
+      '➡️',
+      '⬅️',
+      '⬆️',
+      '⬇️',
+      '🔄',
+      '🔝',
+      '🆗',
+      '🆕',
+      '🚫',
+      '💲',
+      '🎵',
+      '🎶',
+      '™️',
+      '©️',
+      '®️',
+      '🔆',
+    ],
+  };
+
+  @override
+  State<EmojiPanel> createState() => _EmojiPanelState();
+}
+
+class _EmojiPanelState extends State<EmojiPanel> {
+  static const double _minHeight = 240;
+  static const double _initialHeight = 280;
+  static const double _maxScreenFraction = 0.58;
+
+  String _category = EmojiPanel.categories.keys.first;
+  double _height = _initialHeight;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final maxHeight = MediaQuery.sizeOf(context).height * _maxScreenFraction;
+    final panelHeight = _height.clamp(_minHeight, maxHeight).toDouble();
+    final hasRecents = EmojiPanel._recents.isNotEmpty;
+    final emoji = _category == 'Recent'
+        ? EmojiPanel._recents
+        : (EmojiPanel.categories[_category] ?? const <String>[]);
     return Container(
-      margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      height: 132,
+      height: panelHeight,
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(18),
+          topRight: Radius.circular(18),
+        ),
       ),
-      child: GridView.count(
-        crossAxisCount: 8,
-        physics: const BouncingScrollPhysics(),
-        children: [
-          for (final e in emoji)
-            InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => onPick(e),
-              child: Center(child: Text(e, style: const TextStyle(fontSize: 22))),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragUpdate: (details) {
+                setState(() {
+                  _height = (_height - details.delta.dy)
+                      .clamp(_minHeight, maxHeight)
+                      .toDouble();
+                });
+              },
+              child: SizedBox(
+                height: 20,
+                child: Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+              ),
             ),
-        ],
+            // Category tabs (Recent first when available).
+            SizedBox(
+              height: 44,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                children: [
+                  if (hasRecents)
+                    _CategoryTab(
+                      icon: Icons.history,
+                      selected: _category == 'Recent',
+                      onTap: () => setState(() => _category = 'Recent'),
+                    ),
+                  for (final entry in EmojiPanel.categories.entries)
+                    _CategoryTab(
+                      icon: _iconFor(entry.key),
+                      selected: _category == entry.key,
+                      onTap: () => setState(() => _category = entry.key),
+                    ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: GridView.extent(
+                // Reflows by width → works in narrow + wide layouts.
+                maxCrossAxisExtent: 48,
+                padding: const EdgeInsets.all(8),
+                physics: const BouncingScrollPhysics(),
+                children: [
+                  for (final e in emoji)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => widget.onPick(e),
+                      child: Center(
+                        child: Text(e, style: const TextStyle(fontSize: 26)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _iconFor(String category) {
+    switch (category) {
+      case 'Smileys':
+        return Icons.emoji_emotions_outlined;
+      case 'Gestures':
+        return Icons.back_hand_outlined;
+      case 'Hearts':
+        return Icons.favorite_border;
+      case 'Animals':
+        return Icons.pets_outlined;
+      case 'Food':
+        return Icons.restaurant_outlined;
+      case 'Activities':
+        return Icons.sports_basketball_outlined;
+      default:
+        return Icons.tag;
+    }
+  }
+}
+
+class _CategoryTab extends StatelessWidget {
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+  const _CategoryTab({
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: IconButton(
+        onPressed: onTap,
+        visualDensity: VisualDensity.compact,
+        icon: Icon(
+          icon,
+          size: 20,
+          color: selected ? scheme.primary : scheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -1328,11 +1828,11 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     final results = q.isEmpty
         ? const <MessageModel>[]
         : (widget.messages
-                  .where((m) => (m.text ?? '').toLowerCase().contains(q))
-                  .toList(growable: false)
-              ..sort(
-                (a, b) => (b.dateCreated ?? 0).compareTo(a.dateCreated ?? 0),
-              ));
+              .where((m) => (m.text ?? '').toLowerCase().contains(q))
+              .toList(growable: false)
+            ..sort(
+              (a, b) => (b.dateCreated ?? 0).compareTo(a.dateCreated ?? 0),
+            ));
     final insets = MediaQuery.of(context).viewInsets.bottom;
 
     return Padding(
@@ -1433,8 +1933,9 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                 results.isEmpty
                     ? 'No matches'
                     : '${results.length} match${results.length == 1 ? '' : 'es'}',
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
             for (final m in results)
               ListTile(

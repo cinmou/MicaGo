@@ -85,6 +85,11 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
       final albums = await PhotoManager.getAssetPathList(
         onlyAll: true,
         type: RequestType.common, // images + videos
+        filterOption: FilterOptionGroup(
+          orders: const [
+            OrderOption(type: OrderOptionType.createDate, asc: false),
+          ],
+        ),
       );
       if (albums.isNotEmpty) {
         _recent = await albums.first.getAssetListRange(start: 0, end: 30);
@@ -186,14 +191,18 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
                     delegate: SliverChildBuilderDelegate(
                       (context, i) => _MediaTile(
                         asset: _recent[i],
-                        selected: widget.selectedAssetIds.contains(_recent[i].id),
+                        selected: widget.selectedAssetIds.contains(
+                          _recent[i].id,
+                        ),
                         onTap: () => widget.onToggleAsset(_recent[i]),
                       ),
                       childCount: _recent.length,
                     ),
                   )
                 else
-                  SliverToBoxAdapter(child: _PermissionPrompt(state: _permission)),
+                  SliverToBoxAdapter(
+                    child: _PermissionPrompt(state: _permission),
+                  ),
               ],
             ),
     );
@@ -204,7 +213,11 @@ class _ActionTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  const _ActionTile({required this.icon, required this.label, required this.onTap});
+  const _ActionTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -235,7 +248,11 @@ class _MediaTile extends StatefulWidget {
   final AssetEntity asset;
   final bool selected;
   final VoidCallback onTap;
-  const _MediaTile({required this.asset, required this.selected, required this.onTap});
+  const _MediaTile({
+    required this.asset,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   State<_MediaTile> createState() => _MediaTileState();
@@ -247,9 +264,9 @@ class _MediaTileState extends State<_MediaTile> {
   @override
   void initState() {
     super.initState();
-    widget.asset
-        .thumbnailDataWithSize(const ThumbnailSize.square(200))
-        .then((data) {
+    widget.asset.thumbnailDataWithSize(const ThumbnailSize.square(200)).then((
+      data,
+    ) {
       if (mounted) setState(() => _thumb = data);
     });
   }
@@ -276,7 +293,11 @@ class _MediaTileState extends State<_MediaTile> {
               const Positioned(
                 right: 4,
                 bottom: 4,
-                child: Icon(Icons.play_circle_fill, color: Colors.white, size: 22),
+                child: Icon(
+                  Icons.play_circle_fill,
+                  color: Colors.white,
+                  size: 22,
+                ),
               ),
             // Selected check overlay (BB-style).
             if (widget.selected)
@@ -306,7 +327,8 @@ class _PermissionPrompt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final denied = state == PermissionState.denied || state == PermissionState.restricted;
+    final denied =
+        state == PermissionState.denied || state == PermissionState.restricted;
     return SizedBox(
       width: 220,
       child: Center(
@@ -341,7 +363,11 @@ class _PermissionPrompt extends StatelessWidget {
 class StagedAttachmentStrip extends StatelessWidget {
   final List<StagedAttachment> items;
   final void Function(int index) onRemove;
-  const StagedAttachmentStrip({super.key, required this.items, required this.onRemove});
+  const StagedAttachmentStrip({
+    super.key,
+    required this.items,
+    required this.onRemove,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -360,7 +386,12 @@ class StagedAttachmentStrip extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: item.isImage
-                    ? Image.memory(item.bytes, width: 60, height: 60, fit: BoxFit.cover)
+                    ? Image.memory(
+                        item.bytes,
+                        width: 60,
+                        height: 60,
+                        fit: BoxFit.cover,
+                      )
                     : Container(
                         width: 60,
                         height: 60,

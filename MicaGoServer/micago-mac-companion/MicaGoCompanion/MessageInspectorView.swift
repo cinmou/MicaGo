@@ -28,7 +28,7 @@ struct MessageInspectorPage: View {
 
             ResultsCard(vm: vm, selected: $selected)
         }
-        .task { await vm.attach(model) }
+        .task { await vm.autoRefresh(model) }
         .sheet(item: $selected) { msg in
             MessageDetailSheet(message: msg)
         }
@@ -69,9 +69,12 @@ final class MessageInspectorModel: ObservableObject {
 
     private weak var model: AppModel?
 
-    func attach(_ model: AppModel) async {
+    func autoRefresh(_ model: AppModel) async {
         self.model = model
-        if messages.isEmpty && groups.isEmpty { await reload() }
+        while !Task.isCancelled {
+            await reload()
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
     }
 
     func reload() async {

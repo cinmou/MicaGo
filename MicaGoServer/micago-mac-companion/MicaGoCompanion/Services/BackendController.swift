@@ -49,9 +49,10 @@ final class BackendController: ObservableObject {
     // Persistence only — activation policy is applied centrally (applyActivationPolicy()).
     @Published var hideDockIcon: Bool { didSet { defaults.set(hideDockIcon, forKey: K.hideDockIcon) } }
     // Bind address for the companion-launched server, passed as `--addr host:port`.
-    // Empty = let the server use its own config/default (127.0.0.1:3000). This
-    // only affects the server the companion launches; it does not rewrite
-    // config.yaml or touch an external server.
+    // Empty used to mean "server default"; C25 normalizes old empty/loopback
+    // values to the LAN default so first launch can pair without Save/Restart.
+    // This only affects the server the companion launches; it does not touch an
+    // external server.
     @Published var bindAddress: String { didSet { defaults.set(bindAddress, forKey: K.bindAddress) } }
 
     private var process: Process?
@@ -63,6 +64,7 @@ final class BackendController: ObservableObject {
     private let backoff: [TimeInterval] = [1, 2, 5, 15, 30, 60]
     private let maxConsecutiveCrashes = 5
     private static let maxLogLines = 300
+    static let defaultLANBindAddress = "0.0.0.0:3000"
     private let defaults = UserDefaults.standard
 
     private enum K {
@@ -76,11 +78,11 @@ final class BackendController: ObservableObject {
 
     init() {
         userBinaryPath = defaults.string(forKey: K.binaryPath) ?? ""
-        autoStart = defaults.bool(forKey: K.autoStart)
+        autoStart = defaults.object(forKey: K.autoStart) as? Bool ?? true
         autoRestart = defaults.bool(forKey: K.autoRestart)
         launchHidden = defaults.bool(forKey: K.launchHidden)
         hideDockIcon = defaults.bool(forKey: K.hideDockIcon)
-        bindAddress = defaults.string(forKey: K.bindAddress) ?? ""
+        bindAddress = Self.normalizedLaunchBind(defaults.string(forKey: K.bindAddress))
         refreshInstalledState()
     }
 
@@ -254,10 +256,8 @@ final class BackendController: ObservableObject {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: resolved.path)
-        let addr = bindAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !addr.isEmpty {
-            proc.arguments = ["--addr", addr]
-        }
+        let addr = effectiveBindAddress
+        proc.arguments = ["--addr", addr]
 
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -280,8 +280,7 @@ final class BackendController: ObservableObject {
             try proc.run()
             process = proc
             processState = .running
-            let addrNote = addr.isEmpty ? "" : " --addr \(addr)"
-            appendLog("started backend (\(resolved.source)): \(resolved.path)\(addrNote)")
+            appendLog("started backend (\(resolved.source)): \(resolved.path) --addr \(addr)")
             scheduleHealthyReset()
         } catch {
             process = nil
@@ -303,6 +302,7 @@ final class BackendController: ObservableObject {
                     NSLocalizedDescriptionKey: "existing ~/.micago/config.yaml could not be read or has an empty auth.token"
                 ])
             }
+            try migrateLegacyLoopbackConfig(path: path)
             return
         }
         let token = try randomHex(byteCount: 32)
@@ -354,6 +354,49 @@ final class BackendController: ObservableObject {
         """
         try body.write(toFile: path, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+    }
+
+    var effectiveBindAddress: String {
+        Self.normalizedLaunchBind(bindAddress)
+    }
+
+    private static func normalizedLaunchBind(_ raw: String?) -> String {
+        let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch value.lowercased() {
+        case "", "127.0.0.1:3000", "localhost:3000", "[::1]:3000", "::1:3000":
+            return defaultLANBindAddress
+        default:
+            return value
+        }
+    }
+
+    private static func migrateLegacyLoopbackConfig(path: String) throws {
+        let text = try String(contentsOfFile: path, encoding: .utf8)
+        var section = ""
+        var changed = false
+        let lines = text.components(separatedBy: "\n").map { raw -> String in
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if !raw.hasPrefix(" "), trimmed.hasSuffix(":") {
+                section = String(trimmed.dropLast())
+                return raw
+            }
+            guard section == "server" else { return raw }
+            let normalized = trimmed.replacingOccurrences(of: "\"", with: "")
+            guard normalized.hasPrefix("addr:") else { return raw }
+            let value = normalized.dropFirst("addr:".count).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            switch value {
+            case "127.0.0.1:3000", "localhost:3000", "[::1]:3000", "::1:3000":
+                changed = true
+                let indent = raw.prefix { $0 == " " || $0 == "\t" }
+                return "\(indent)addr: \"\(defaultLANBindAddress)\""
+            default:
+                return raw
+            }
+        }
+        if changed {
+            try lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        }
     }
 
     private static func randomHex(byteCount: Int) throws -> String {

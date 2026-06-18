@@ -4,9 +4,8 @@ import 'package:flutter/services.dart';
 import 'message_render.dart';
 import 'models/message_model.dart';
 
-/// Bottom sheet that shows a message's **redacted** server payload — for
-/// diagnosing why a message rendered as unsupported. Never shows the bearer
-/// token or credentials (see [messageDebugMap] / [redactJson]).
+/// Message info sheet with a redacted diagnostic payload. Never shows the
+/// bearer token or credentials (see [messageDebugMap] / [redactJson]).
 Future<void> showMessageDebugSheet(BuildContext context, MessageModel m) {
   return showModalBottomSheet<void>(
     context: context,
@@ -38,10 +37,10 @@ class _MessageDebugSheet extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Icon(Icons.bug_report_outlined),
+                const Icon(Icons.info_outline),
                 const SizedBox(width: 8),
                 Text(
-                  'Message Debug',
+                  'Message Info',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const Spacer(),

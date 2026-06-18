@@ -23,18 +23,9 @@ func newURLHandlers(httpAddr string, network *NetworkController) *Handlers {
 	)
 }
 
-func TestLocalEndpointsLoopbackOnly(t *testing.T) {
-	local := localEndpoints("127.0.0.1:12345")
-	if len(local) != 1 {
-		t.Fatalf("expected 1 local endpoint, got %d", len(local))
-	}
-	if local[0].Kind != "loopback" || local[0].BaseURL != "http://127.0.0.1:12345" {
-		t.Fatalf("unexpected local endpoint: %+v", local[0])
-	}
-	if local[0].WSURL != "ws://127.0.0.1:12345/ws" {
-		t.Fatalf("unexpected ws url: %q", local[0].WSURL)
-	}
-
+// C25: a loopback bind exposes NO client-usable endpoints (Android can't reach
+// 127.0.0.1), so LAN is empty and there is no separate loopback list anymore.
+func TestLoopbackBindHasNoLanEndpoints(t *testing.T) {
 	lan := lanEndpoints("127.0.0.1:12345")
 	if len(lan) != 0 {
 		t.Fatalf("loopback bind must not expose LAN endpoints, got %d", len(lan))
@@ -71,8 +62,9 @@ func TestGetServerURLsPublicDisabled(t *testing.T) {
 	if resp.Public.Enabled {
 		t.Fatalf("expected public disabled")
 	}
-	if len(resp.Local) != 1 {
-		t.Fatalf("expected loopback local endpoint")
+	// Loopback bind → no client-usable LAN endpoints (and no loopback list).
+	if len(resp.LAN) != 0 {
+		t.Fatalf("loopback bind should expose no LAN endpoints, got %d", len(resp.LAN))
 	}
 	if resp.PreferredPairingEndpoint != "auto" {
 		t.Fatalf("expected preferred auto, got %q", resp.PreferredPairingEndpoint)
