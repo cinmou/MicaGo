@@ -15,6 +15,7 @@ MessageModel _m({
   String? expressiveSendStyleId,
   int itemType = 0,
   bool isRetracted = false,
+  String? semanticKind,
   List<AttachmentModel> attachments = const [],
   int errorCode = 0,
   LocalSendState localState = LocalSendState.confirmed,
@@ -29,6 +30,7 @@ MessageModel _m({
     threadOriginatorGuid: threadOriginatorGuid,
     expressiveSendStyleId: expressiveSendStyleId,
     itemType: itemType,
+    semanticKind: semanticKind,
     attachments: attachments,
     isRetracted: isRetracted,
     errorCode: errorCode,
@@ -131,6 +133,42 @@ void main() {
       ], const MessageDisplayPrefs());
       expect(rows.single.kind, MessageRenderableKind.retracted);
       expect(rows.single.message.attachments, isNotEmpty);
+    });
+
+    test('label uses the sender name for others', () {
+      expect(
+        retractedLabel(_m(isRetracted: true), senderName: 'Alex'),
+        'Alex unsent a message',
+      );
+      // Own messages always read "You" regardless of any provided name.
+      expect(
+        retractedLabel(_m(isRetracted: true, isFromMe: true), senderName: 'X'),
+        'You unsent a message',
+      );
+    });
+  });
+
+  // C26: unrecoverable attachment placeholders must render as an unsent-style
+  // system row, never a broken file card — even though they carry attachments.
+  group('attachment-unavailable placeholders', () {
+    test('missing_attachment_rows renders as a retracted system row', () {
+      final rows = buildDisplayRows([
+        _m(
+          guid: 'miss',
+          semanticKind: 'missing_attachment_rows',
+          attachments: const [
+            AttachmentModel(guid: 'a', downloadUrl: '', attachmentKind: 'file'),
+          ],
+        ),
+      ], const MessageDisplayPrefs());
+      expect(rows.single.kind, MessageRenderableKind.retracted);
+    });
+
+    test('empty_edited_residue renders as a retracted system row', () {
+      expect(
+        renderableKindFor(_m(semanticKind: 'empty_edited_residue')),
+        MessageRenderableKind.retracted,
+      );
     });
   });
 

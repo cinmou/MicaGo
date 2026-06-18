@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import '../../features/chats/message_render.dart' show reactionTargetGuid;
 import '../../features/chats/models/chat_summary.dart';
 import '../../features/chats/models/message_model.dart';
 
@@ -292,7 +293,7 @@ CREATE TABLE metadata (
   }
 
   Future<bool> applyReactionEvent(String chatGuid, MessageModel event) async {
-    final targetGuid = _reactionTargetGuid(event);
+    final targetGuid = reactionTargetGuid(event.associatedMessageGuid);
     if (targetGuid == null) return false;
     final db = await _ready();
     final rows = await db.query(
@@ -472,13 +473,6 @@ CREATE TABLE metadata (
     return 'Message';
   }
 
-  String? _reactionTargetGuid(MessageModel message) {
-    final raw = message.associatedMessageGuid?.trim();
-    if (raw == null || raw.isEmpty) return null;
-    return raw
-        .replaceFirst(RegExp(r'^(?:p|bp):'), '')
-        .replaceFirst(RegExp(r'^\+'), '');
-  }
 
   bool _isReactionAdd(MessageModel message) {
     final t = message.associatedMessageType;

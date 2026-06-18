@@ -121,16 +121,19 @@ void main() {
         MessageRenderableKind.unknown,
       );
     });
-    test('empty edited residue does not render as a normal bubble', () {
+    test('empty edited residue renders as an unsent system row, not a bubble', () {
       final m = _msg(
         isEdited: true,
         semanticKind: 'empty_edited_residue',
         renderRecommendation: 'system',
         unsupportedReason: 'empty_edited_residue',
       );
-      expect(renderableKindFor(m), MessageRenderableKind.unknown);
+      // C26: unrecoverable placeholders present as an unsent/retracted row
+      // (no longer a hidden "unknown"), while the diagnostic reason is retained
+      // for Message Info / Debug.
+      expect(renderableKindFor(m), MessageRenderableKind.retracted);
       final cls = classifyMessage(m);
-      expect(cls.isUnsupported, isTrue);
+      expect(cls.isUnsupported, isFalse);
       expect(cls.reason, UnsupportedReason.emptyEditedResidue);
     });
     test('normal edited text stays a normal message', () {

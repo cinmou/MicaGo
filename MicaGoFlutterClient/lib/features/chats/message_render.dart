@@ -109,8 +109,13 @@ MessageRenderableKind? _renderableKindFromServerSemantics(MessageModel m) {
       return m.hasAttachments
           ? MessageRenderableKind.attachmentOnly
           : MessageRenderableKind.unknown;
+    // C26: unrecoverable attachment placeholders (the attachment rows are gone,
+    // or an edit left empty residue). These can never render a real file card,
+    // so present them like an unsent/retracted message instead of a broken card
+    // or a cryptic "unsupported" label. Raw details stay in Message Info/Debug.
     case 'missing_attachment_rows':
     case 'empty_edited_residue':
+      return MessageRenderableKind.retracted;
     case 'sync_noise':
     case 'unknown':
       return MessageRenderableKind.unknown;
@@ -227,15 +232,20 @@ String tapbackVerb(TapbackKind kind) {
   }
 }
 
-/// Strips the `p:<part>/` or `bp:` prefix from an `associatedMessageGuid` to
-/// yield the target message GUID. Returns null when empty.
+/// The single canonical helper that resolves a reaction/tapback's target
+/// message GUID from its `associatedMessageGuid`. Strips the `p:`/`bp:` scheme,
+/// an optional `<part>/` segment, and a leading `+`, so it works for every
+/// observed format (`p:0/ABC`, `p:ABC`, `bp:ABC`, `+ABC`, bare `ABC`). C26
+/// consolidates the previously-duplicated copies in the realtime + cache paths,
+/// which each handled only some of these forms. Returns null when empty.
 String? reactionTargetGuid(String? associatedGuid) {
-  final raw = associatedGuid?.trim() ?? '';
+  var raw = associatedGuid?.trim() ?? '';
   if (raw.isEmpty) return null;
+  raw = raw.replaceFirst(RegExp(r'^(?:p|bp):'), '');
   final slash = raw.indexOf('/');
-  if (raw.startsWith('p:') && slash >= 0) return raw.substring(slash + 1);
-  if (raw.startsWith('bp:')) return raw.substring(3);
-  return raw;
+  if (slash >= 0) raw = raw.substring(slash + 1);
+  raw = raw.replaceFirst(RegExp(r'^\+'), '');
+  return raw.isEmpty ? null : raw;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,9 +294,16 @@ String? effectLabel(String? expressiveSendStyleId) {
   return _effectLabels[id] ?? 'Sent with an effect';
 }
 
-/// Label for a retracted (unsent) message, depending on direction.
-String retractedLabel(MessageModel m) =>
-    m.isFromMe ? 'You unsent a message' : 'This message was unsent';
+/// Label for a retracted/unsent (or unrecoverable-placeholder) message. Own
+/// messages read "You unsent a message"; for others we use the resolved sender
+/// name ("Alex unsent a message") when available, falling back to a neutral
+/// phrasing when it isn't.
+String retractedLabel(MessageModel m, {String? senderName}) {
+  if (m.isFromMe) return 'You unsent a message';
+  final name = senderName?.trim() ?? '';
+  if (name.isNotEmpty) return '$name unsent a message';
+  return 'This message was unsent';
+}
 
 String? editedMarker(MessageModel m) =>
     (m.isEdited || m.dateEdited != null) && !m.isRetracted ? 'Edited' : null;
@@ -376,6 +393,16 @@ class MessageClassification {
 
 MessageClassification classifyMessage(MessageModel m) {
   final kind = renderableKindFor(m);
+  // C26: unrecoverable placeholders render as an unsent row (kind == retracted)
+  // but we still surface the underlying diagnostic reason for Message Info/Debug.
+  if (m.semanticKind == 'empty_edited_residue' ||
+      m.unsupportedReason == 'empty_edited_residue') {
+    return MessageClassification(kind, UnsupportedReason.emptyEditedResidue);
+  }
+  if (m.semanticKind == 'missing_attachment_rows' ||
+      m.unsupportedReason == 'missing_attachment_rows') {
+    return MessageClassification(kind, UnsupportedReason.unsupportedAttachment);
+  }
   if (kind != MessageRenderableKind.unknown) {
     return MessageClassification(kind, UnsupportedReason.none);
   }

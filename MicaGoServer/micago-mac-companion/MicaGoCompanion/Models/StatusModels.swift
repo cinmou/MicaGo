@@ -19,9 +19,25 @@ struct ServerStatus: Codable {
     var permissions: PermissionStatus
     // Added by v0.11.x schema probing. Optional so older servers still decode.
     var capabilities: ServerCapabilities?
+    // C26: IMCore helper status for the advanced iMessage actions (edit/unsend/
+    // delete). Optional so pre-C26 servers still decode (absence → unavailable).
+    var messageActions: MessageActionsStatus?
     // C17 backend identity: which binary is actually running. Optional so
     // pre-v0.15 servers still decode — its absence itself means "stale backend".
     var backend: BackendStatus?
+}
+
+/// C26: whether the bundled IMCore helper that performs edit / unsend / delete is
+/// present and runnable. `available` is the gate; `reason` explains a missing or
+/// failing helper. Mirrors the server's `messageActions` status block.
+struct MessageActionsStatus: Codable {
+    var available: Bool
+    var edit: Bool
+    var retract: Bool
+    var delete: Bool
+    var helper: String?
+    var reason: String?
+    var requiresMessages: Bool
 }
 
 /// C17: identity of the running backend binary, from /api/server/status.

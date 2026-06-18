@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -76,6 +77,14 @@ type HelperPerformer struct {
 	Lookup  func() (string, error)
 	Runner  func(context.Context, string, helperEnvelope) (helperEnvelope, error)
 	Timeout time.Duration
+	// CacheTTL caches the capability probe result so frequent status polls (the
+	// companion polls every few seconds) don't spawn the helper subprocess each
+	// time. Zero disables caching (used by tests for deterministic behavior).
+	CacheTTL time.Duration
+
+	capMu     sync.Mutex
+	cachedCap *Capabilities
+	cachedAt  time.Time
 }
 
 type helperEnvelope struct {
@@ -91,10 +100,30 @@ type helperEnvelope struct {
 }
 
 func NewHelperPerformer(path string) *HelperPerformer {
-	return &HelperPerformer{Path: strings.TrimSpace(path), Timeout: 12 * time.Second}
+	return &HelperPerformer{Path: strings.TrimSpace(path), Timeout: 12 * time.Second, CacheTTL: 30 * time.Second}
 }
 
 func (p *HelperPerformer) Capabilities(ctx context.Context) Capabilities {
+	if p.CacheTTL > 0 {
+		p.capMu.Lock()
+		if p.cachedCap != nil && time.Since(p.cachedAt) < p.CacheTTL {
+			c := *p.cachedCap
+			p.capMu.Unlock()
+			return c
+		}
+		p.capMu.Unlock()
+	}
+	c := p.probeCapabilities(ctx)
+	if p.CacheTTL > 0 {
+		p.capMu.Lock()
+		p.cachedCap = &c
+		p.cachedAt = time.Now()
+		p.capMu.Unlock()
+	}
+	return c
+}
+
+func (p *HelperPerformer) probeCapabilities(ctx context.Context) Capabilities {
 	path, err := p.helperPath()
 	if err != nil {
 		return Capabilities{

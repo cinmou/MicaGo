@@ -157,6 +157,21 @@ func Load(opts Options) (Config, error) {
 		return Config{}, err
 	}
 
+	// C26: existing pre-C25 configs may still bind loopback-only. Loopback can't
+	// be paired from Android (no LAN endpoints are derivable from 127.0.0.1), so
+	// such a config silently breaks LAN no matter how often endpoints refresh —
+	// the user is forced to configure a Public URL. Loopback is no longer a
+	// supported pairing bind, so migrate a file-configured loopback bind up to
+	// the LAN-capable default and persist it. An explicit --addr override and
+	// --disable-auth (which legitimately requires a local bind) are respected.
+	if !firstRun && strings.TrimSpace(opts.Addr) == "" && !opts.DisableAuth &&
+		IsLocalAddress(fileCfg.Server.Addr) {
+		fileCfg.Server.Addr = defaultAddr
+		if err := os.WriteFile(cfgPath, []byte(renderConfig(fileCfg)), 0o600); err != nil {
+			return Config{}, fmt.Errorf("migrate loopback bind: %w", err)
+		}
+	}
+
 	syncInterval := defaultSyncInterval
 	if strings.TrimSpace(fileCfg.Sync.Interval) != "" {
 		syncInterval, err = time.ParseDuration(strings.TrimSpace(fileCfg.Sync.Interval))

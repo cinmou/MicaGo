@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
 	"micagoserver/internal/imessage"
+	"micagoserver/internal/store"
 )
 
 type editMessageRequest struct {
@@ -18,15 +20,38 @@ type messageActionRequest struct {
 }
 
 func (h *Handlers) GetMessageActionCapabilities(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.messageActionCapabilities(r.Context()))
+}
+
+// messageActionCapabilities is the single source of truth for IMCore-helper
+// capability detection, shared by the dedicated endpoint (which the Flutter
+// client uses to gate Edit/Unsend/Delete) and the server status payload (which
+// the companion shows). A missing/unconfigured helper reports unavailable with a
+// reason — never a fake "supported".
+func (h *Handlers) messageActionCapabilities(ctx context.Context) imessage.Capabilities {
 	if h.actions == nil {
-		writeJSON(w, http.StatusOK, imessage.Capabilities{
+		return imessage.Capabilities{
 			Available:        false,
 			RequiresMessages: true,
 			Reason:           "MicaGo IMCore helper is not configured",
-		})
-		return
+		}
 	}
-	writeJSON(w, http.StatusOK, h.actions.Capabilities(r.Context()))
+	return h.actions.Capabilities(ctx)
+}
+
+// messageActionsStatus maps the helper capabilities into the status payload
+// shape (the store layer is decoupled from the imessage package).
+func (h *Handlers) messageActionsStatus(ctx context.Context) store.ServerMessageActionsStatus {
+	c := h.messageActionCapabilities(ctx)
+	return store.ServerMessageActionsStatus{
+		Available:        c.Available,
+		Edit:             c.Edit,
+		Retract:          c.Retract,
+		Delete:           c.Delete,
+		Helper:           c.Helper,
+		Reason:           c.Reason,
+		RequiresMessages: c.RequiresMessages,
+	}
 }
 
 func (h *Handlers) EditMessage(w http.ResponseWriter, r *http.Request) {

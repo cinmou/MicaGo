@@ -37,7 +37,10 @@ final class AppModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var startupRefreshTask: Task<Void, Never>?
     private let pollInterval: UInt64 = 3 * 1_000_000_000 // 3s
-    private var didSeedPublicInput = false
+    // The server's saved Public URL we last mirrored into `publicURLInput`. Used
+    // to detect unsaved user edits so a poll doesn't clobber them, while still
+    // re-syncing the field when the saved value changes (e.g. after restart).
+    private var lastSeededPublicURL = ""
 
     init() {
         reloadConfig()
@@ -254,16 +257,23 @@ final class AppModel: ObservableObject {
             return
         }
 
+        // Each fetch has INDEPENDENT error handling so one failing call never
+        // blocks the others. Previously status/devices/urls shared one do/catch,
+        // so a status or devices error silently stopped LAN/Public endpoint
+        // discovery — and only the explicit Save path (which calls urls directly)
+        // refreshed it. Endpoint discovery now always runs when the server is
+        // up + authed, exactly like a Save does.
+        var anyError: String?
+        do { status = try await client.status() } catch { anyError = error.localizedDescription }
+        do { devices = try await client.devices() } catch { anyError = error.localizedDescription }
         do {
-            status = try await client.status()
-            devices = try await client.devices()
             let fetched = try await client.serverURLs()
             applyURLs(fetched)
-            seedNotificationsForm()
-            lastError = nil
         } catch {
-            lastError = error.localizedDescription
+            anyError = error.localizedDescription
         }
+        seedNotificationsForm()
+        lastError = anyError
     }
 
     // Seed the notifications form once from the server status (the
@@ -280,14 +290,20 @@ final class AppModel: ObservableObject {
     private func applyURLs(_ fetched: ServerURLs) {
         urls = fetched
 
-        // Seed the public URL editor once from the server's configured value.
-        if !didSeedPublicInput {
-            publicURLInput = fetched.public.baseUrl
+        // Keep the Public URL editor MIRRORING the server's saved value, unless
+        // the user is actively editing it. The old "seed once" logic captured an
+        // empty value during the brief window before the backend finished
+        // loading config, then never re-synced — so a saved Public URL looked
+        // cleared/"unknown" after a restart. We only avoid overwriting the field
+        // while the user has unsaved edits (input != the value we last seeded).
+        let serverPublic = fetched.public.baseUrl
+        if publicURLInput == lastSeededPublicURL {
+            publicURLInput = serverPublic
             publicVerifyTLS = fetched.public.verifyTls
-            didSeedPublicInput = true
         }
-        // C23 cleanup: no per-pairing LAN selection to maintain — the unified v3
-        // payload already includes every candidate.
+        lastSeededPublicURL = serverPublic
+        // No per-pairing LAN selection to maintain — the unified v3 payload
+        // already includes every LAN candidate (C23/C25).
     }
 
     // MARK: - Public endpoint actions

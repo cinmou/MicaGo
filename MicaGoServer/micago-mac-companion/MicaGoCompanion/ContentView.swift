@@ -532,6 +532,44 @@ private struct CapabilityRow: View {
     }
 }
 
+/// C26: surfaces whether the bundled IMCore helper that performs edit / unsend /
+/// delete is present and runnable. When it is missing or failing the client hides
+/// those actions; this card makes the reason visible instead of a silent gap.
+private struct MessageActionsCard: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        SectionCard(title: "Message Actions (Edit / Unsend / Delete)") {
+            if let actions = model.status?.messageActions {
+                HStack(spacing: 8) {
+                    Image(systemName: actions.available
+                        ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(actions.available ? Color.green : Color.orange)
+                    Text(actions.available
+                        ? "IMCore helper is available"
+                        : "IMCore helper unavailable — these actions are hidden in the app")
+                    Spacer()
+                }
+                if actions.available {
+                    CapabilityRow(label: "Edit", on: actions.edit)
+                    CapabilityRow(label: "Unsend / retract", on: actions.retract)
+                    CapabilityRow(label: "Delete", on: actions.delete)
+                }
+                if let reason = actions.reason, !reason.isEmpty {
+                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                }
+                if let helper = actions.helper, !helper.isEmpty {
+                    Text("Helper: \(helper)").font(.caption2).foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                }
+            } else {
+                Text("Start the server to read the message-action helper status.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 // MARK: - Connections page
 
 private struct ConnectionsPage: View {
@@ -939,6 +977,7 @@ private struct AdvancedPage: View {
         DiagnosticsSection()
         RuntimeCard()
         CapabilitiesCard()
+        MessageActionsCard()
 
         // C23 cleanup: backend/file paths only. Connection settings (preferred
         // pairing, verify TLS, public URL) live on the Connections page — not
@@ -946,6 +985,10 @@ private struct AdvancedPage: View {
         SectionCard(title: "Files & Paths") {
             LabeledRow(label: "Config file", value: "~/.micago/config.yaml")
             LabeledRow(label: "Backend source", value: backend.binarySource)
+            // Debug: the binary the Companion will launch (compare with the
+            // running server's "Executable" + version in Backend Build below to
+            // spot a stale process still running an old binary).
+            LabeledRow(label: "Launches", value: backend.resolvedBinaryPath ?? "none")
             BinaryPathRow()
         }
 

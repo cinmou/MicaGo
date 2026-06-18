@@ -65,6 +65,13 @@ class AppController extends ChangeNotifier {
   /// on real transitions, de-duplicated, so there are no noisy repeated alerts.
   final ValueNotifier<ConnectionNotice?> connectionNotice =
       ValueNotifier<ConnectionNotice?>(null);
+
+  /// C26: whether the realtime connection is currently healthy (WS connected).
+  /// The notice host clears any sticky "Reconnecting…"/offline banner the moment
+  /// this flips true, so a recovered connection never leaves a stale problem
+  /// banner on screen — independent of whether the one-shot derivation happened
+  /// to emit a transition for the connecting→connected edge.
+  final ValueNotifier<bool> connectionHealthy = ValueNotifier<bool>(false);
   ConnectionSnapshot? _lastConnectionSnapshot;
   bool _serverReachable = false;
   bool _hasCompletedFirstConnectAttempt = false;
@@ -421,6 +428,12 @@ class AppController extends ChangeNotifier {
     );
     final notice = connectionNoticeFor(_lastConnectionSnapshot, current);
     _lastConnectionSnapshot = current;
+    // Keep the healthy flag in lock-step with the live snapshot so the notice
+    // host can clear a stale "Reconnecting…" banner the instant we reconnect,
+    // even on the connecting→connected edge (which the one-shot derivation
+    // intentionally reports as null to stay quiet).
+    connectionHealthy.value =
+        current.ws == WsStatus.connected && current.serverReachable;
     if (_shouldSuppressConnectionNotice(notice)) return;
     if (notice != null) connectionNotice.value = notice;
   }
@@ -429,9 +442,18 @@ class AppController extends ChangeNotifier {
     if (notice == null) return false;
     if (_shouldSuppressStartupConnectionNotice(notice)) return true;
     if (!notice.isProblem) return false;
+    // C26: a brief reconnect after a background→resume (or a fresh activate)
+    // is expected and self-heals — don't flash "Reconnecting…" during the
+    // grace window even once we've connected before. Other problems (offline,
+    // dropped) still surface immediately.
+    final grace = _connectionNoticeGraceUntil;
+    if (notice == ConnectionNotice.reconnecting &&
+        grace != null &&
+        DateTime.now().isBefore(grace)) {
+      return true;
+    }
     if (_hasEverConnected) return false;
     if (_hasCompletedFirstConnectAttempt) return false;
-    final grace = _connectionNoticeGraceUntil;
     if (grace == null) return false;
     return DateTime.now().isBefore(grace);
   }
@@ -875,6 +897,8 @@ class AppController extends ChangeNotifier {
     ws.removeListener(_onWebSocketStatusChanged);
     ws.dispose();
     _api?.close();
+    connectionNotice.dispose();
+    connectionHealthy.dispose();
     unawaited(cache.close());
     super.dispose();
   }

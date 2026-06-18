@@ -1,4 +1,5 @@
 import '../../core/network/websocket_client.dart';
+import 'message_render.dart' as render;
 import 'models/message_model.dart';
 
 MessageModel? messageFromWsEvent(WsEvent e) {
@@ -30,13 +31,10 @@ bool isReactionAdd(MessageModel message) {
   return t < 3000;
 }
 
-String? reactionTargetGuid(MessageModel message) {
-  final raw = message.associatedMessageGuid?.trim();
-  if (raw == null || raw.isEmpty) return null;
-  return raw
-      .replaceFirst(RegExp(r'^(?:p|bp):'), '')
-      .replaceFirst(RegExp(r'^\+'), '');
-}
+// Delegates to the single canonical resolver (message_render) so the realtime
+// reaction-merge path strips the same prefixes the display path does (C26).
+String? reactionTargetGuid(MessageModel message) =>
+    render.reactionTargetGuid(message.associatedMessageGuid);
 
 String reactionType(MessageModel message) {
   final t = message.associatedMessageType ?? 2000;

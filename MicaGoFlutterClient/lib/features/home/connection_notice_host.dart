@@ -27,14 +27,26 @@ class _ConnectionNoticeHostState extends State<ConnectionNoticeHost> {
     final app = context.read<AppController>();
     if (identical(app, _app)) return;
     _app?.connectionNotice.removeListener(_onNotice);
+    _app?.connectionHealthy.removeListener(_onHealthy);
     _app = app;
     app.connectionNotice.addListener(_onNotice);
+    app.connectionHealthy.addListener(_onHealthy);
   }
 
   @override
   void dispose() {
     _app?.connectionNotice.removeListener(_onNotice);
+    _app?.connectionHealthy.removeListener(_onHealthy);
     super.dispose();
+  }
+
+  /// C26: a healthy (connected) connection must never leave a stale problem
+  /// banner up. Clearing here covers the connecting→connected edge that the
+  /// one-shot notice derivation intentionally reports as null.
+  void _onHealthy() {
+    if (_app?.connectionHealthy.value == true && _sticky != null) {
+      setState(() => _sticky = null);
+    }
   }
 
   void _onNotice() {
@@ -56,7 +68,10 @@ class _ConnectionNoticeHostState extends State<ConnectionNoticeHost> {
         );
       });
     }
-    setState(() => _sticky = notice.isProblem ? notice : null);
+    // Never raise a sticky problem banner while the connection is actually
+    // healthy — a late/stale problem notice must not override a live connection.
+    final healthy = _app?.connectionHealthy.value == true;
+    setState(() => _sticky = (notice.isProblem && !healthy) ? notice : null);
     // Consume the one-shot so the same transition isn't re-handled.
     _app?.connectionNotice.value = null;
   }

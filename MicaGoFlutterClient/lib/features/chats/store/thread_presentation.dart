@@ -165,7 +165,13 @@ class ThreadPresentationBuilder {
           message: m,
           kind: row.kind,
           isSystem: isSystem,
-          systemLabel: isSystem ? _systemLabel(row.kind, m) : null,
+          systemLabel: isSystem
+              ? _systemLabel(
+                  row.kind,
+                  m,
+                  senderName: resolveName(m.handleId),
+                )
+              : null,
           mergedSystemCount: row.mergedSystemCount,
           senderLabel: (!isSystem && !m.isFromMe && isGroup)
               ? resolveSenderLabel(
@@ -191,12 +197,18 @@ class ThreadPresentationBuilder {
     return items;
   }
 
-  static String _systemLabel(MessageRenderableKind kind, MessageModel m) {
+  static String _systemLabel(
+    MessageRenderableKind kind,
+    MessageModel m, {
+    String? senderName,
+  }) {
     switch (kind) {
       case MessageRenderableKind.service:
         return serviceEventLabel(m);
       case MessageRenderableKind.retracted:
-        return retractedLabel(m);
+        // Covers genuine unsends and the unrecoverable attachment placeholders
+        // (missing_attachment_rows / empty_edited_residue) that C26 routes here.
+        return retractedLabel(m, senderName: senderName);
       case MessageRenderableKind.reaction:
         final t = tapbackFromCode(m.associatedMessageType);
         if (t == null) return 'Reacted to a message';
@@ -207,9 +219,6 @@ class ThreadPresentationBuilder {
       default:
         if (m.semanticKind == 'deleted') return 'Message deleted';
         if (m.semanticKind == 'unavailable') return 'Message unavailable';
-        if (m.semanticKind == 'missing_attachment_rows') {
-          return 'Attachment unavailable';
-        }
         return 'Unsupported message';
     }
   }

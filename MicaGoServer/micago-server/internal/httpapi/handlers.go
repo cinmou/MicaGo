@@ -291,11 +291,12 @@ func (h *Handlers) GetServerStatus(w http.ResponseWriter, r *http.Request) {
 			LoopEnabled:     !h.cfg.DisableSyncLoop,
 			IntervalSeconds: int64(h.cfg.SyncInterval / time.Second),
 		},
-		Notifications: h.notificationStatus(),
-		Devices:       store.ServerDevicesStatus{Count: h.deviceCount(r.Context())},
-		WebSocket:     store.ServerWebSocketStatus{Clients: h.clientCount()},
-		Permissions:   h.permissionStatus(),
-		Capabilities:  store.ServerCapabilities{Schema: h.status.Capabilities},
+		Notifications:  h.notificationStatus(),
+		Devices:        store.ServerDevicesStatus{Count: h.deviceCount(r.Context())},
+		WebSocket:      store.ServerWebSocketStatus{Clients: h.clientCount()},
+		Permissions:    h.permissionStatus(),
+		Capabilities:   store.ServerCapabilities{Schema: h.status.Capabilities},
+		MessageActions: h.messageActionsStatus(r.Context()),
 	}
 
 	if h.status.SyncState != nil {

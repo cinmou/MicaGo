@@ -144,7 +144,7 @@ void main() {
     expect(retracted.systemLabel, 'You unsent a message');
   });
 
-  test('empty edited residue is a system row, not a normal bubble', () {
+  test('empty edited residue is an unsent system row, not a normal bubble', () {
     final items = _build([
       _m(
         guid: 'edited-residue',
@@ -156,10 +156,11 @@ void main() {
       ),
     ], prefs: const MessageDisplayPrefs(mergeConsecutiveSystem: false));
     final row = items.whereType<MessageViewItem>().single;
-    expect(row.kind.name, 'unknown');
+    // C26: routed to the retracted/unsent presentation, never a broken card.
+    expect(row.kind.name, 'retracted');
     expect(row.isSystem, isTrue);
     expect(row.body, isNull);
-    expect(row.systemLabel, 'Unsupported message');
+    expect(row.systemLabel, 'This message was unsent');
   });
 
   test('effect hint precomputed only when prefs enable it', () {

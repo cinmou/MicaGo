@@ -334,20 +334,35 @@ type SyncRulesResponse struct {
 // intentionally read-only and local-control oriented; it never returns the
 // bearer token or any push token.
 type ServerStatusResponse struct {
-	OK            bool                     `json:"ok"`
-	Version       string                   `json:"version"`
-	StartedAt     int64                    `json:"startedAt"`
-	UptimeSeconds int64                    `json:"uptimeSeconds"`
-	Address       ServerAddressStatus      `json:"address"`
-	Store         string                   `json:"store"`
-	Auth          ServerAuthStatus         `json:"auth"`
-	Sync          ServerSyncStatus         `json:"sync"`
-	Notifications ServerNotificationStatus `json:"notifications"`
-	Devices       ServerDevicesStatus      `json:"devices"`
-	WebSocket     ServerWebSocketStatus    `json:"websocket"`
-	Permissions   ServerPermissionStatus   `json:"permissions"`
-	Capabilities  ServerCapabilities       `json:"capabilities"`
-	Backend       *ServerBackendStatus     `json:"backend,omitempty"`
+	OK             bool                       `json:"ok"`
+	Version        string                     `json:"version"`
+	StartedAt      int64                      `json:"startedAt"`
+	UptimeSeconds  int64                      `json:"uptimeSeconds"`
+	Address        ServerAddressStatus        `json:"address"`
+	Store          string                     `json:"store"`
+	Auth           ServerAuthStatus           `json:"auth"`
+	Sync           ServerSyncStatus           `json:"sync"`
+	Notifications  ServerNotificationStatus   `json:"notifications"`
+	Devices        ServerDevicesStatus        `json:"devices"`
+	WebSocket      ServerWebSocketStatus      `json:"websocket"`
+	Permissions    ServerPermissionStatus     `json:"permissions"`
+	Capabilities   ServerCapabilities         `json:"capabilities"`
+	MessageActions ServerMessageActionsStatus `json:"messageActions"`
+	Backend        *ServerBackendStatus       `json:"backend,omitempty"`
+}
+
+// ServerMessageActionsStatus reports whether the bundled IMCore helper for the
+// advanced iMessage actions (edit / unsend / delete) is present and usable, so
+// the companion can show its status and clients can gate the actions. It mirrors
+// imessage.Capabilities without coupling the store layer to that package.
+type ServerMessageActionsStatus struct {
+	Available        bool   `json:"available"`
+	Edit             bool   `json:"edit"`
+	Retract          bool   `json:"retract"`
+	Delete           bool   `json:"delete"`
+	Helper           string `json:"helper,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	RequiresMessages bool   `json:"requiresMessages"`
 }
 
 // ServerCapabilities reports what the running chat.db schema supports, so

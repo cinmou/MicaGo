@@ -100,6 +100,17 @@ final class BackendController: ObservableObject {
     /// A skipped-stale candidate raises `staleBinaryWarning` — never silent.
     func resolveBinary() -> ResolvedBinary? {
         let fm = FileManager.default
+        // Debug override (highest priority): launch the binary named in
+        // MICAGO_BACKEND_BIN. Lets you point the Companion at a freshly-built
+        // backend without touching cache-selection logic.
+        let envOverride = (ProcessInfo.processInfo.environment["MICAGO_BACKEND_BIN"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !envOverride.isEmpty {
+            if fm.isExecutableFile(atPath: envOverride) {
+                return ResolvedBinary(path: envOverride, source: "env-override")
+            }
+            appendLog("backend: MICAGO_BACKEND_BIN set to \(envOverride) but it is not an executable file — ignoring")
+        }
         let override = userBinaryPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !override.isEmpty, fm.isExecutableFile(atPath: override) {
             return ResolvedBinary(path: override, source: "override")
@@ -245,6 +256,15 @@ final class BackendController: ObservableObject {
         // C17: record exactly which build we are about to launch, and warn if
         // it is a stale pre-version binary — never silently.
         refreshBinaryFreshness()
+
+        // Debug diagnostics: which binary, why, when it was built, and what its
+        // own --version reports. Makes a stale-binary mismatch obvious in the Log.
+        let mtime = Self.modificationDate(resolved.path)
+        appendLog("backend launch: source=\(resolved.source) path=\(resolved.path)")
+        appendLog("backend launch: modified=\(mtime) version=\(launchedVersionLine ?? "<no --version (pre-v0.15 / stale)>")")
+        if resolved.source == "env-override" {
+            appendLog("backend launch: using MICAGO_BACKEND_BIN override")
+        }
 
         do {
             try Self.ensureConfigFile()
