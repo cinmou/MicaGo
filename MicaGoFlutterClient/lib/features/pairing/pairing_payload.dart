@@ -1,6 +1,7 @@
 import 'dart:convert';
 
-import '../../core/models/connection_profile.dart';
+import '../../core/models/connection_profile.dart'
+    show ConnectionProfile, ConnectionMode, EndpointRef, connectionModeFromWire;
 import '../../core/network/endpoint_utils.dart';
 
 /// Thrown when a scanned QR code is not a valid MicaGo pairing payload.
@@ -80,6 +81,8 @@ class PairingPayload {
 
   PairingEndpoint? get lan =>
       endpoints.where((e) => e.kind == EndpointKind.lan).firstOrNull;
+  Iterable<PairingEndpoint> get lanAll =>
+      endpoints.where((e) => e.kind == EndpointKind.lan);
   PairingEndpoint? get public =>
       endpoints.where((e) => e.kind == EndpointKind.public).firstOrNull;
 
@@ -95,14 +98,22 @@ class PairingPayload {
     final lanE = lan;
     final publicE = public;
     final primary = lanE ?? _primary;
+    // C26: keep ALL advertised LAN routes so the client can switch interfaces,
+    // not just the first one.
+    final lanRoutes = [
+      for (final e in lanAll)
+        EndpointRef(
+          baseUrl: normalizeBaseUrl(e.baseUrl),
+          wsUrl: e.effectiveWsUrl,
+        ),
+    ];
     return ConnectionProfile(
       baseUrl: normalizeBaseUrl(primary?.baseUrl ?? ''),
       token: token,
       wsUrlOverride: (primary?.wsUrl?.trim().isNotEmpty ?? false)
           ? primary!.wsUrl!.trim()
           : null,
-      lanBaseUrl: lanE == null ? null : normalizeBaseUrl(lanE.baseUrl),
-      lanWsUrl: lanE?.wsUrl,
+      lanRoutes: lanRoutes.isNotEmpty ? lanRoutes : null,
       publicBaseUrl: publicE == null ? null : normalizeBaseUrl(publicE.baseUrl),
       publicWsUrl: publicE?.wsUrl,
       mode: mode,

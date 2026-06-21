@@ -22,6 +22,12 @@ final class AppModel: ObservableObject {
     @Published var publicCheckResult: PublicURLCheckResult?
     @Published var publicBusy = false
 
+    // C26: IMCore helper install flow. `helperInstalling` drives the button
+    // spinner; `helperInstallMessage` shows the result/error. The helper status
+    // itself is read from `status?.messageActions` (server capability probe).
+    @Published var helperInstalling = false
+    @Published var helperInstallMessage: String?
+
     // C23 cleanup: the per-pairing LAN selection (`selectedPairingBaseURL`),
     // the `pairingMode` (lanOnly/lanFirst), `selectedPairingTarget`, and
     // `tokenRevealed` were removed. The unified v3 payload includes every LAN
@@ -165,6 +171,13 @@ final class AppModel: ObservableObject {
     /// Quick capability flags for the Create Connection status line.
     var hasLanCandidate: Bool { pairingTargets.contains { $0.scope == .lan } }
     var hasPublicCandidate: Bool { pairingTargets.contains { $0.scope == .public } }
+
+    /// LAN endpoints that should appear in user-facing summaries (Dashboard) and
+    /// be offered for pairing — the user's hidden VPN/virtual endpoints are
+    /// excluded. The full list (with hide/unhide/reset) lives in Connections.
+    var visibleLANEndpoints: [ConnectionEndpoint] {
+        (urls?.lan ?? []).filter { !hiddenLANBaseURLs.contains($0.baseUrl) }
+    }
 
     // MARK: - Hidden LAN endpoints (pairing filter only)
 
@@ -336,6 +349,89 @@ final class AppModel: ObservableObject {
             await refresh()
         } catch {
             lastError = "Could not validate public URL: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - IMCore helper install (C26 / C28)
+
+    /// True when the server reports the advanced message-action helper as usable.
+    var helperAvailable: Bool { status?.messageActions?.available ?? false }
+
+    /// The current helper lifecycle state (missing | not_runnable |
+    /// unsupported_selectors | ready), or nil before the first status read.
+    var helperState: String? { status?.messageActions?.state }
+
+    /// Installs the bundled IMCore helper into `~/.micago/bin` (the location the
+    /// backend also scans), forces the running backend to re-scan immediately,
+    /// then reloads status — so the card flips to "ready" with no manual restart
+    /// or Save (C28). MicaGo owns this — the user never installs imsg/imsgbridge
+    /// by hand. When this build ships no helper component, it reports that
+    /// honestly instead of faking success.
+    func installIMCoreHelper() {
+        guard !helperInstalling else { return }
+        helperInstalling = true
+        helperInstallMessage = nil
+        Task { @MainActor in
+            defer { helperInstalling = false }
+            let path: String
+            do {
+                path = try IMCoreHelperInstaller.install()
+            } catch {
+                helperInstallMessage = error.localizedDescription
+                return
+            }
+            guard let baseURL else {
+                helperInstallMessage = "Installed the IMCore helper at \(path). Start the server to enable Edit, Unsend, and Delete."
+                return
+            }
+            let client = APIClient(baseURL: baseURL, token: token)
+            do {
+                // Primary path: ask the running backend to drop its cached probe
+                // and re-scan now (no restart, no TTL wait).
+                let caps = try await client.refreshMessageActions()
+                await refresh()
+                helperInstallMessage = installResultMessage(state: caps.state ?? "missing", path: path)
+            } catch {
+                // Fallback for an older backend without the refresh endpoint:
+                // restart it explicitly so the new helper is picked up, then
+                // reload status.
+                BackendController.shared.restart()
+                helperInstallMessage = "Installed the IMCore helper at \(path). Restarting the server to apply…"
+                refreshAfterBackendStart()
+            }
+        }
+    }
+
+    /// Force a fresh helper probe on the backend without re-installing, then
+    /// reload status. Used by the card's "Re-scan" button.
+    func rescanIMCoreHelper() {
+        guard !helperInstalling, let baseURL else { return }
+        helperInstalling = true
+        helperInstallMessage = nil
+        Task { @MainActor in
+            defer { helperInstalling = false }
+            let client = APIClient(baseURL: baseURL, token: token)
+            do {
+                let caps = try await client.refreshMessageActions()
+                await refresh()
+                helperInstallMessage = installResultMessage(state: caps.state ?? "missing", path: caps.helper ?? "~/.micago/bin")
+            } catch {
+                helperInstallMessage = "Could not re-scan: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// User-facing line for each post-install helper state.
+    private func installResultMessage(state: String, path: String) -> String {
+        switch state {
+        case "ready":
+            return "IMCore helper is ready. Edit, Unsend, and Delete are now available."
+        case "not_runnable":
+            return "Installed at \(path), but the helper would not run. Check that it is allowed to execute."
+        case "unsupported_selectors":
+            return "Installed, but this macOS doesn’t expose the required IMCore actions, so Edit/Unsend/Delete stay unavailable."
+        default:
+            return "Installed the IMCore helper at \(path), but the backend still reports it as unavailable."
         }
     }
 

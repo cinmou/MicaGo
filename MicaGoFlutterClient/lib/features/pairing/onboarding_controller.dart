@@ -167,8 +167,8 @@ class OnboardingController extends ChangeNotifier {
       baseUrl: active.baseUrl,
       token: payload.token,
       wsUrlOverride: active.wsUrl,
-      lanBaseUrl: base.lanBaseUrl,
-      lanWsUrl: base.lanWsUrl,
+      // C26: retain every LAN route so the user can switch interfaces later.
+      lanRoutes: base.lanRoutes.isNotEmpty ? base.lanRoutes : null,
       publicBaseUrl: base.publicBaseUrl,
       publicWsUrl: base.publicWsUrl,
       mode: mode,

@@ -116,20 +116,23 @@ final class BackendController: ObservableObject {
             return ResolvedBinary(path: override, source: "override")
         }
 
-        var candidates: [(ResolvedBinary, Date)] = []
-        let def = (NSHomeDirectory() as NSString).appendingPathComponent(".micago/bin/micago")
-        if fm.isExecutableFile(atPath: def) {
-            candidates.append((ResolvedBinary(path: def, source: "default"), Self.modificationDate(def)))
-        }
+        // C27: the bundled backend ships with the app and is the exact version
+        // the Companion is built against, so it is ALWAYS preferred over the
+        // cached `~/.micago/bin/micago` dev build. The previous "newest mtime
+        // wins" could silently launch a stale cached binary (an old build with a
+        // recent mtime), producing inconsistent versions across status /
+        // --version / the Companion. For local backend development, point at a
+        // fresh build explicitly with MICAGO_BACKEND_BIN or the binary-path
+        // override above — neither of which is affected by this.
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("micago").path,
            fm.isExecutableFile(atPath: bundled) {
-            candidates.append((ResolvedBinary(path: bundled, source: "bundled"), Self.modificationDate(bundled)))
+            return ResolvedBinary(path: bundled, source: "bundled")
         }
-        // Newest build wins; tie goes to the bundled binary (ships with the app).
-        return candidates.sorted { a, b in
-            if a.1 != b.1 { return a.1 > b.1 }
-            return a.0.source == "bundled"
-        }.first?.0
+        let def = (NSHomeDirectory() as NSString).appendingPathComponent(".micago/bin/micago")
+        if fm.isExecutableFile(atPath: def) {
+            return ResolvedBinary(path: def, source: "default")
+        }
+        return nil
     }
 
     private static func modificationDate(_ path: String) -> Date {

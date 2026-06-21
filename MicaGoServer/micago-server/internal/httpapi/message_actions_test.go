@@ -17,14 +17,23 @@ import (
 )
 
 type stubMessageActions struct {
-	caps       imessage.Capabilities
-	editReq    imessage.Request
-	retractReq imessage.Request
-	deleteReq  imessage.Request
-	err        error
+	caps        imessage.Capabilities
+	invalidated int
+	editReq     imessage.Request
+	retractReq  imessage.Request
+	deleteReq   imessage.Request
+	err         error
 }
 
-func (s *stubMessageActions) Capabilities(context.Context) imessage.Capabilities { return s.caps }
+// invalidated counts InvalidateCapabilities calls; when >0 the stub flips to a
+// "ready" capability set, simulating a freshly-installed helper.
+func (s *stubMessageActions) Capabilities(context.Context) imessage.Capabilities {
+	if s.invalidated > 0 {
+		return imessage.Capabilities{Available: true, State: imessage.HelperStateReady, Edit: true, Retract: true, Delete: true, RequiresMessages: true}
+	}
+	return s.caps
+}
+func (s *stubMessageActions) InvalidateCapabilities() { s.invalidated++ }
 func (s *stubMessageActions) Edit(_ context.Context, req imessage.Request) error {
 	s.editReq = req
 	return s.err
@@ -64,6 +73,35 @@ func TestMessageActionCapabilitiesUnsupportedWithoutHelper(t *testing.T) {
 	}
 	if caps.Available || caps.Edit || caps.Retract || caps.Delete {
 		t.Fatalf("expected unavailable caps, got %+v", caps)
+	}
+}
+
+// The refresh endpoint must invalidate the cache and return the freshly-probed
+// (now "ready") capabilities — the install→rescan chain.
+func TestRefreshMessageActionCapabilities(t *testing.T) {
+	actions := &stubMessageActions{caps: imessage.Capabilities{Available: false, State: imessage.HelperStateMissing}}
+	h, _ := newActionHandlers(actions)
+
+	// Before refresh: missing.
+	if c := h.messageActionCapabilities(context.Background()); c.Available {
+		t.Fatal("expected unavailable before refresh")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/messages/actions/refresh", nil)
+	rec := httptest.NewRecorder()
+	h.RefreshMessageActionCapabilities(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if actions.invalidated != 1 {
+		t.Fatalf("expected cache invalidation, got %d", actions.invalidated)
+	}
+	var caps imessage.Capabilities
+	if err := json.Unmarshal(rec.Body.Bytes(), &caps); err != nil {
+		t.Fatal(err)
+	}
+	if !caps.Available || caps.State != imessage.HelperStateReady {
+		t.Fatalf("expected ready after refresh, got %+v", caps)
 	}
 }
 

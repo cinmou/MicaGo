@@ -32,6 +32,9 @@ struct ServerStatus: Codable {
 /// failing helper. Mirrors the server's `messageActions` status block.
 struct MessageActionsStatus: Codable {
     var available: Bool
+    /// missing | not_runnable | unsupported_selectors | ready. Optional so a
+    /// pre-C28 server (no `state`) still decodes.
+    var state: String?
     var edit: Bool
     var retract: Bool
     var delete: Bool

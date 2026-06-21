@@ -71,6 +71,15 @@ struct APIClient {
         return try JSONDecoder().decode(DeviceListResponse.self, from: data).data
     }
 
+    /// C28: force the backend to drop its cached IMCore-helper probe and re-scan,
+    /// returning the fresh capability state. Called right after a helper install.
+    @discardableResult
+    func refreshMessageActions() async throws -> MessageActionsStatus {
+        let (data, response) = try await Self.session().data(for: request("api/messages/actions/refresh", method: "POST"))
+        try Self.validate(response)
+        return try JSONDecoder().decode(MessageActionsStatus.self, from: data)
+    }
+
     // MARK: - Connection endpoints (v0.11)
 
     func serverURLs() async throws -> ServerURLs {

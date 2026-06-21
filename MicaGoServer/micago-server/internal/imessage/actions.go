@@ -22,11 +22,22 @@ const (
 	ActionDelete  Action = "delete"
 )
 
+// Helper lifecycle states surfaced to the UI so it can show exactly where the
+// IMCore helper is: not present, present but won't run, runs but lacks the
+// required selectors, or fully usable.
+const (
+	HelperStateMissing     = "missing"               // no helper binary found
+	HelperStateNotRunnable = "not_runnable"          // found, but it failed to run
+	HelperStateUnsupported = "unsupported_selectors" // ran, but no usable actions
+	HelperStateReady       = "ready"                 // usable
+)
+
 type Capabilities struct {
 	Edit             bool   `json:"edit"`
 	Retract          bool   `json:"retract"`
 	Delete           bool   `json:"delete"`
 	Available        bool   `json:"available"`
+	State            string `json:"state"`
 	Helper           string `json:"helper,omitempty"`
 	Reason           string `json:"reason,omitempty"`
 	RequiresMessages bool   `json:"requiresMessages"`
@@ -123,11 +134,29 @@ func (p *HelperPerformer) Capabilities(ctx context.Context) Capabilities {
 	return c
 }
 
+// InvalidateCapabilities drops the cached probe result so the next
+// Capabilities() call re-scans the disk + re-runs the helper. Called right after
+// a helper install so a freshly-installed helper is reported immediately rather
+// than after the cache TTL expires.
+func (p *HelperPerformer) InvalidateCapabilities() {
+	p.capMu.Lock()
+	p.cachedCap = nil
+	p.cachedAt = time.Time{}
+	p.capMu.Unlock()
+}
+
 func (p *HelperPerformer) probeCapabilities(ctx context.Context) Capabilities {
 	path, err := p.helperPath()
 	if err != nil {
+		// No usable path. Distinguish "nothing installed" from "found but not
+		// executable" so the UI can tell the user what to do.
+		state := HelperStateMissing
+		if strings.Contains(strings.ToLower(err.Error()), "not executable") {
+			state = HelperStateNotRunnable
+		}
 		return Capabilities{
 			Available:        false,
+			State:            state,
 			Reason:           err.Error(),
 			RequiresMessages: true,
 		}
@@ -136,18 +165,32 @@ func (p *HelperPerformer) probeCapabilities(ctx context.Context) Capabilities {
 	if err != nil {
 		return Capabilities{
 			Available:        false,
+			State:            HelperStateNotRunnable,
 			Helper:           path,
 			Reason:           err.Error(),
 			RequiresMessages: true,
 		}
 	}
 	caps := env.Capabilities
+	edit, retract, del := caps["edit"], caps["retract"], caps["delete"]
+	if !edit && !retract && !del {
+		// The helper ran but reports none of the required selectors (e.g. a macOS
+		// where the private IMCore API changed). Not usable.
+		return Capabilities{
+			Available:        false,
+			State:            HelperStateUnsupported,
+			Helper:           path,
+			Reason:           "the IMCore helper ran but none of edit/unsend/delete are supported on this macOS",
+			RequiresMessages: true,
+		}
+	}
 	return Capabilities{
 		Available:        true,
+		State:            HelperStateReady,
 		Helper:           path,
-		Edit:             caps["edit"],
-		Retract:          caps["retract"],
-		Delete:           caps["delete"],
+		Edit:             edit,
+		Retract:          retract,
+		Delete:           del,
 		RequiresMessages: true,
 	}
 }
@@ -236,7 +279,27 @@ func (p *HelperPerformer) helperPath() (string, error) {
 			}
 		}
 	}
-	return "", errors.New("MicaGo IMCore helper is not bundled with this backend build")
+	// C26: the stable install location the Companion's "Install" action targets,
+	// so a helper MicaGo installs is picked up without re-bundling the backend.
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, name := range []string{"micago-imcore-helper", "MicaGoIMCoreHelper"} {
+			candidate := filepath.Join(home, ".micago", "bin", name)
+			if isExecutable(candidate) {
+				return candidate, nil
+			}
+		}
+	}
+	return "", errors.New("MicaGo IMCore helper is not installed")
+}
+
+// HelperInstallDir is the stable location the Companion installs the IMCore
+// helper into; the backend also looks here (see helperPath).
+func HelperInstallDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".micago", "bin"), nil
 }
 
 func (p *HelperPerformer) run(ctx context.Context, path string, env helperEnvelope) (helperEnvelope, error) {

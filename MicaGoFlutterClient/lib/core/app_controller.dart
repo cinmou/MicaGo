@@ -7,6 +7,7 @@ import 'models/server_urls.dart';
 import 'network/api_client.dart';
 import 'network/connection_candidate.dart';
 import 'network/connection_notice.dart';
+import 'network/endpoint_utils.dart';
 import 'network/device_identity.dart';
 import 'network/refresh_coordinator.dart';
 import 'network/websocket_client.dart';
@@ -223,26 +224,67 @@ class AppController extends ChangeNotifier {
     // unchanged (same revision) and we already have candidates stored.
     if (urls.connectionRevision.isNotEmpty &&
         urls.connectionRevision == profile.configRevision &&
-        (profile.lanBaseUrl != null || profile.publicBaseUrl != null)) {
+        (profile.lanRoutes.isNotEmpty || profile.publicBaseUrl != null)) {
       return;
     }
-    final lan = urls.lan.isNotEmpty ? urls.lan.first : null;
+    // C26: keep EVERY advertised LAN route, not just the first interface, so the
+    // user can switch between them.
+    final lanRoutes = [
+      for (final e in urls.lan)
+        if (e.baseUrl.trim().isNotEmpty)
+          EndpointRef(baseUrl: e.baseUrl, wsUrl: e.wsUrl),
+    ];
     final pub = urls.public?.enabled == true ? urls.public : null;
+    // C26: a manual route pin must survive refresh. Keep the selection if its
+    // URL still exists in the new candidate set; otherwise drop it (auto).
+    final usableUrls = {
+      for (final r in lanRoutes) r.baseUrl,
+      if (pub != null) pub.baseUrl,
+    };
+    final keptSelection =
+        (profile.selectedBaseUrl != null &&
+            usableUrls.contains(profile.selectedBaseUrl))
+        ? profile.selectedBaseUrl
+        : null;
     final next = ConnectionProfile(
       baseUrl: profile.baseUrl,
       token: profile.token,
       wsUrlOverride: profile.wsUrlOverride,
-      lanBaseUrl: lan?.baseUrl,
-      lanWsUrl: lan?.wsUrl,
+      lanRoutes: lanRoutes.isNotEmpty ? lanRoutes : null,
+      selectedBaseUrl: keptSelection,
       publicBaseUrl: pub?.baseUrl,
       publicWsUrl: pub?.wsUrl,
       mode: profile.mode,
       configRevision: urls.connectionRevision,
     );
     _profile = next;
+    // Keep the active candidate if it still exists; only reset when it's gone so
+    // the displayed/used endpoint doesn't silently jump on a routine refresh.
+    final active = _activeCandidate;
+    if (active != null && !usableUrls.contains(active.baseUrl)) {
+      _activeCandidate = null;
+    }
+    await store.saveProfile(next);
+    _rebuildApi();
+  }
+
+  /// C26: pin a specific candidate (LAN interface or Public) as the route to use,
+  /// persist it, and immediately reconnect through it. Passing null clears the
+  /// pin and returns to automatic LAN-first selection.
+  Future<void> selectRoute(String? baseUrl) async {
+    final profile = _profile;
+    if (profile == null) return;
+    final normalized = baseUrl == null || baseUrl.trim().isEmpty
+        ? null
+        : normalizeBaseUrl(baseUrl);
+    final next = profile.copyWith(selectedBaseUrl: normalized);
+    _profile = next;
     _activeCandidate = null;
     await store.saveProfile(next);
     _rebuildApi();
+    _logConnectionSelection('manual route selected: ${normalized ?? 'auto'}');
+    notifyListeners();
+    await selectReachableCandidate(reason: 'manual-route');
   }
 
   /// Opens the realtime WebSocket using the active profile.
@@ -601,6 +643,32 @@ class AppController extends ChangeNotifier {
     _pushToken = token;
     _pushEnabled = enabled;
     await _registerDeviceIfPossible();
+    notifyListeners();
+  }
+
+  // C27: push status surfaced to the Settings → Notifications card.
+  String get pushProvider => _pushProvider;
+  bool get pushEnabled => _pushEnabled;
+  bool get pushConfigured => _pushEnabled && (_pushToken?.isNotEmpty ?? false);
+
+  /// C27: ask the server to deliver a test notification to THIS device. Returns
+  /// null on success, or a user-facing error message. Requires a registered push
+  /// token (Firebase configured + permission granted).
+  Future<String?> sendTestPush() async {
+    final api = _api;
+    if (api == null) return 'Not connected to the server.';
+    if (!pushConfigured) {
+      return 'Push is not configured on this device yet.';
+    }
+    try {
+      final id = await _ensureDeviceId();
+      await api.sendTestPush(id);
+      return null;
+    } on ApiException catch (e) {
+      return e.friendly;
+    } catch (e) {
+      return 'Could not send a test notification.';
+    }
   }
 
   /// C22: a chat GUID requested via a notification tap. The shell listens and

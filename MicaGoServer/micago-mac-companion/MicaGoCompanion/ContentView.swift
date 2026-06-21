@@ -280,8 +280,16 @@ private struct ServerRemoteCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            if let lan = model.urls?.lan.first {
-                LabeledRow(label: "LAN address", value: lan.baseUrl)
+            // C27: show every VISIBLE LAN address (not just the first interface,
+            // and excluding endpoints the user hid in Connections). The first
+            // discovered interface isn't necessarily the right route.
+            let visibleLANs = model.visibleLANEndpoints
+            if !visibleLANs.isEmpty {
+                ForEach(Array(visibleLANs.enumerated()), id: \.element.id) { index, lan in
+                    LabeledRow(
+                        label: index == 0 ? "LAN address" : "",
+                        value: lan.baseUrl)
+                }
             }
             if case .failed(let reason) = backend.processState {
                 Text(reason).font(.callout).foregroundStyle(.orange)
@@ -322,15 +330,9 @@ private struct ServerRemoteCard: View {
                     Button { tunnel.restart() } label: { Label("Restart", systemImage: "arrow.clockwise") }
                         .disabled(!tunnel.installed || !tunnel.configFound)
                     Spacer()
-                    Button("Validate") { Task { await model.validatePublicURL() } }
-                        .disabled(model.publicBusy || !hasPublic)
-                    if model.publicBusy { ProgressView().controlSize(.small) }
                 }
-                if let v = validationText {
-                    Label(v.text, systemImage: v.ok ? "checkmark.circle" : "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(v.ok ? .green : .orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // C27: Public URL config + validation is the single source of
+                // truth under Connections → Public — not duplicated here.
                 Toggle("Start tunnel with the server", isOn: $tunnel.startWithServer)
                     .font(.caption)
                 Toggle("Stop tunnel when the server stops", isOn: $tunnel.stopWithServer)
@@ -359,24 +361,6 @@ private struct ServerRemoteCard: View {
         return HStack(spacing: 8) {
             Circle().fill(color).frame(width: 10, height: 10)
             Text(label).font(.headline)
-        }
-    }
-
-    /// Plain-language result of the last public-URL validation, mapping the
-    /// tunnel-specific statuses (530 / 502 / 401). Never shows the token.
-    private var validationText: (text: String, ok: Bool)? {
-        guard let r = model.publicCheckResult else { return nil }
-        if r.ok { return ("Remote access is ready.", true) }
-        if !r.reachable { return ("Cloudflare is configured, but no tunnel connector is running.", false) }
-        switch r.status {
-        case 530:
-            return ("Cloudflare is configured, but no tunnel connector is running.", false)
-        case 502, 503, 504:
-            return ("Tunnel is running, but MicaGoServer is not reachable on this Mac.", false)
-        case 401, 403:
-            return ("The URL reached a server, but the token was rejected.", false)
-        default:
-            return (r.message.isEmpty ? "Validation failed (HTTP \(r.status))." : r.message, false)
         }
     }
 
@@ -541,13 +525,15 @@ private struct MessageActionsCard: View {
     var body: some View {
         SectionCard(title: "Message Actions (Edit / Unsend / Delete)") {
             if let actions = model.status?.messageActions {
+                let state = HelperUIState(actions)
                 HStack(spacing: 8) {
-                    Image(systemName: actions.available
-                        ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(actions.available ? Color.green : Color.orange)
-                    Text(actions.available
-                        ? "IMCore helper is available"
-                        : "IMCore helper unavailable — these actions are hidden in the app")
+                    if model.helperInstalling {
+                        ProgressView().controlSize(.small)
+                        Text("Installing…")
+                    } else {
+                        Image(systemName: state.icon).foregroundStyle(state.color)
+                        Text(state.headline)
+                    }
                     Spacer()
                 }
                 if actions.available {
@@ -562,10 +548,63 @@ private struct MessageActionsCard: View {
                     Text("Helper: \(helper)").font(.caption2).foregroundStyle(.tertiary)
                         .textSelection(.enabled)
                 }
+                if !actions.available {
+                    HStack(spacing: 8) {
+                        Button {
+                            model.installIMCoreHelper()
+                        } label: {
+                            if model.helperInstalling {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Label("Install helper", systemImage: "arrow.down.circle")
+                            }
+                        }
+                        .disabled(model.helperInstalling)
+                        // Manual re-scan: force a fresh probe without re-installing
+                        // (e.g. after manually placing the helper).
+                        Button {
+                            model.rescanIMCoreHelper()
+                        } label: {
+                            Label("Re-scan", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(model.helperInstalling)
+                        Spacer()
+                    }
+                    .padding(.top, 2)
+                }
+                if let msg = model.helperInstallMessage, !msg.isEmpty {
+                    Text(msg).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else {
                 Text("Start the server to read the message-action helper status.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+/// Maps the helper state to a clear icon/colour/headline (C28): missing,
+/// installed-but-not-runnable, runnable-but-unsupported, or ready.
+private struct HelperUIState {
+    let icon: String
+    let color: Color
+    let headline: String
+
+    init(_ actions: MessageActionsStatus) {
+        switch actions.state {
+        case "ready":
+            icon = "checkmark.circle.fill"; color = .green
+            headline = "IMCore helper is ready"
+        case "not_runnable":
+            icon = "exclamationmark.octagon.fill"; color = .orange
+            headline = "Helper installed but not runnable"
+        case "unsupported_selectors":
+            icon = "exclamationmark.triangle.fill"; color = .orange
+            headline = "Helper runs, but these actions aren’t supported on this macOS"
+        default: // missing or unknown
+            icon = "arrow.down.circle"; color = .secondary
+            headline = "IMCore helper not installed — these actions are hidden in the app"
         }
     }
 }
@@ -710,11 +749,8 @@ private struct BinaryPathRow: View {
             Text(resolvedDescription)
                 .font(.caption2).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
-            if let warning = backend.staleBinaryWarning {
-                Label(warning, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption2).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // C27: the stale-binary warning lives once, in the Backend Build card
+            // below — not duplicated here.
         }
         .padding(.top, 4)
     }
@@ -984,11 +1020,9 @@ private struct AdvancedPage: View {
         // duplicated here.
         SectionCard(title: "Files & Paths") {
             LabeledRow(label: "Config file", value: "~/.micago/config.yaml")
-            LabeledRow(label: "Backend source", value: backend.binarySource)
-            // Debug: the binary the Companion will launch (compare with the
-            // running server's "Executable" + version in Backend Build below to
-            // spot a stale process still running an old binary).
-            LabeledRow(label: "Launches", value: backend.resolvedBinaryPath ?? "none")
+            // C27: the backend binary's source/path/version is shown once, in the
+            // Backend Build card below (Executable + Selected binary). Here we
+            // only keep the editable override picker.
             BinaryPathRow()
         }
 
@@ -1195,13 +1229,19 @@ private struct PublicURLEditor: View {
                 }
             }
 
-            HStack(spacing: 6) {
-                Text("Public status:").font(.caption).foregroundStyle(.secondary)
-                Text(reachabilityState).font(.caption).fontWeight(.medium)
-                    .foregroundStyle(reachabilityColor)
-                if let pub = model.urls?.public, pub.enabled,
-                   let hint = pub.providerHint, hint != "custom" {
-                    Text("· \(providerLabel(hint))").font(.caption).foregroundStyle(.secondary)
+            // C27: ONE Public-URL status line — the single source of truth. It
+            // prefers the detailed last-validation result, falling back to the
+            // server's cached reachability when nothing has been validated yet.
+            if let status = publicStatusLine {
+                HStack(spacing: 6) {
+                    Text("Public status:").font(.caption).foregroundStyle(.secondary)
+                    Label(status.text, systemImage: status.system)
+                        .font(.caption).foregroundStyle(status.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let pub = model.urls?.public, pub.enabled,
+                       let hint = pub.providerHint, hint != "custom" {
+                        Text("· \(providerLabel(hint))").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -1210,25 +1250,26 @@ private struct PublicURLEditor: View {
                     .lineLimit(1).truncationMode(.middle)
             }
 
-            if let diag = publicDiagnostic {
-                Label(diag.text, systemImage: diag.ok ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(diag.ok ? .green : .orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
             Text("Optional extra endpoint. Local and LAN stay active without it.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private var reachabilityState: String {
-        guard let pub = model.urls?.public, pub.enabled else { return "Not configured" }
+    /// The single Public-URL status line: the detailed last-validation result
+    /// when present, else the server's cached reachability.
+    private var publicStatusLine: (text: String, color: Color, system: String)? {
+        if let d = publicDiagnostic {
+            return (d.text, d.ok ? .green : .orange,
+                    d.ok ? "checkmark.circle" : "exclamationmark.triangle")
+        }
+        guard let pub = model.urls?.public, pub.enabled else {
+            return ("Not configured", .secondary, "minus.circle")
+        }
         switch pub.reachable {
-        case .yes: return "Reachable"
-        case .no: return "Failed"
-        case .unknown: return "Unknown"
+        case .yes: return ("Reachable", .green, "checkmark.circle")
+        case .no: return ("Not reachable — Validate to see why", .orange, "exclamationmark.triangle")
+        case .unknown: return ("Not validated yet", .secondary, "questionmark.circle")
         }
     }
 
@@ -1249,15 +1290,6 @@ private struct PublicURLEditor: View {
             return ("The public URL reached the tunnel, but no server answered behind it (\(r.status)). Make sure MicaGo is running and the tunnel forwards to its port.", false)
         default:
             return (r.message.isEmpty ? "Validation failed (HTTP \(r.status))." : r.message, false)
-        }
-    }
-
-    private var reachabilityColor: Color {
-        guard let pub = model.urls?.public, pub.enabled else { return .secondary }
-        switch pub.reachable {
-        case .yes: return .green
-        case .no: return .orange
-        case .unknown: return .secondary
         }
     }
 
@@ -1349,16 +1381,6 @@ private struct CreateConnectionCard: View {
                     Label("Copy connection JSON", systemImage: "doc.on.doc")
                 }
                 .controlSize(.small)
-
-                // Per-endpoint detail is opt-in only (kept out of the main view).
-                DisclosureGroup("Connection detail (token hidden)") {
-                    Text(model.pairingPayloadRedacted)
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 4)
-                }
-                .font(.subheadline)
             }
         }
     }

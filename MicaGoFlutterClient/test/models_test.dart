@@ -6,7 +6,7 @@ import 'package:mica_go/core/network/connection_candidate.dart';
 void main() {
   group('ConnectionProfile', () {
     test('effectiveWsUrl derives from baseUrl when no override', () {
-      const p = ConnectionProfile(
+      final p = ConnectionProfile(
         baseUrl: 'https://mica.example.com',
         token: 'secret',
       );
@@ -14,7 +14,7 @@ void main() {
     });
 
     test('effectiveWsUrl honors override', () {
-      const p = ConnectionProfile(
+      final p = ConnectionProfile(
         baseUrl: 'https://mica.example.com',
         token: 'secret',
         wsUrlOverride: 'wss://ws.example.com/ws',
@@ -23,7 +23,7 @@ void main() {
     });
 
     test('json round-trip', () {
-      const p = ConnectionProfile(
+      final p = ConnectionProfile(
         baseUrl: 'http://127.0.0.1:3000',
         token: 'tok',
         wsUrlOverride: null,
@@ -35,7 +35,7 @@ void main() {
     });
 
     test('candidate list and token survive json round-trip', () {
-      const p = ConnectionProfile(
+      final p = ConnectionProfile(
         baseUrl: 'http://192.168.1.5:3000',
         token: 'tok',
         lanBaseUrl: 'http://192.168.1.5:3000',
@@ -59,8 +59,58 @@ void main() {
       ]);
     });
 
+    test('multiple LAN routes survive round-trip and all become candidates', () {
+      final p = ConnectionProfile(
+        baseUrl: 'http://192.168.1.5:3000',
+        token: 'tok',
+        lanRoutes: const [
+          EndpointRef(baseUrl: 'http://192.168.1.5:3000', wsUrl: 'ws://192.168.1.5:3000/ws'),
+          EndpointRef(baseUrl: 'http://10.0.0.9:3000', wsUrl: 'ws://10.0.0.9:3000/ws'),
+        ],
+        mode: ConnectionMode.lanFirst,
+      );
+      final back = ConnectionProfile.fromJson(p.toJson());
+      final candidates = connectionCandidatesForProfile(back);
+      expect(candidates.length, 2);
+      expect(candidates.map((e) => e.baseUrl), [
+        'http://192.168.1.5:3000',
+        'http://10.0.0.9:3000',
+      ]);
+    });
+
+    test('a pinned route is tried first; clearing it restores order', () {
+      final base = ConnectionProfile(
+        baseUrl: 'http://192.168.1.5:3000',
+        token: 'tok',
+        lanRoutes: const [
+          EndpointRef(baseUrl: 'http://192.168.1.5:3000', wsUrl: 'ws://192.168.1.5:3000/ws'),
+          EndpointRef(baseUrl: 'http://10.0.0.9:3000', wsUrl: 'ws://10.0.0.9:3000/ws'),
+        ],
+      );
+      final pinned = base.copyWith(selectedBaseUrl: 'http://10.0.0.9:3000');
+      expect(connectionCandidatesForProfile(pinned).first.baseUrl,
+          'http://10.0.0.9:3000');
+      expect(pinned.lanBaseUrl, 'http://10.0.0.9:3000');
+
+      final cleared = pinned.copyWith(selectedBaseUrl: null);
+      expect(connectionCandidatesForProfile(cleared).first.baseUrl,
+          'http://192.168.1.5:3000');
+    });
+
+    test('a stale pin falls back to the first real route', () {
+      final p = ConnectionProfile(
+        baseUrl: 'http://192.168.1.5:3000',
+        token: 'tok',
+        lanRoutes: const [
+          EndpointRef(baseUrl: 'http://192.168.1.5:3000', wsUrl: 'ws://192.168.1.5:3000/ws'),
+        ],
+        selectedBaseUrl: 'http://10.0.0.9:3000',
+      );
+      expect(p.lanBaseUrl, 'http://192.168.1.5:3000');
+    });
+
     test('toString never leaks the token', () {
-      const p = ConnectionProfile(baseUrl: 'http://x', token: 'topsecret');
+      final p = ConnectionProfile(baseUrl: 'http://x', token: 'topsecret');
       expect(p.toString().contains('topsecret'), isFalse);
       expect(p.toString().contains('redacted'), isTrue);
     });

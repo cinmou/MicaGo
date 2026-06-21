@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
+import '../../core/models/connection_profile.dart';
+import '../../core/network/connection_candidate.dart';
 import '../../core/theme_controller.dart';
 import '../../core/ui/top_banner.dart';
 import '../contacts/people_screen.dart';
@@ -41,6 +43,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Text('Messaging', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
         _SmsSendingCard(app: app),
+        const SizedBox(height: 20),
+        Text('Notifications', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        _NotificationsCard(app: app),
         const SizedBox(height: 20),
         Text('More', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
@@ -121,19 +127,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 20),
         Text('Connection', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
+        if (profile != null) _RouteSwitcher(app: app, profile: profile),
+        const SizedBox(height: 8),
         Card(
           child: Column(
             children: [
               ListTile(
                 leading: const Icon(Icons.dns_outlined),
-                title: const Text('Server URL'),
-                subtitle: SelectableText(profile?.baseUrl ?? '—'),
+                title: const Text('Active server URL'),
+                subtitle: SelectableText(
+                  app.activeCandidate?.baseUrl ??
+                      profile?.effectiveBaseUrl ??
+                      '—',
+                ),
               ),
               const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.cable_outlined),
                 title: const Text('WebSocket URL'),
-                subtitle: SelectableText(profile?.effectiveWsUrl ?? '—'),
+                subtitle: SelectableText(
+                  app.activeCandidate?.wsUrl ?? profile?.effectiveWsUrl ?? '—',
+                ),
               ),
               const Divider(height: 1),
               ListTile(
@@ -227,6 +241,138 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await app.signOut();
       if (context.mounted) context.go(Routes.connection);
     }
+  }
+}
+
+/// C26: when the server advertises more than one route (multiple LAN interfaces,
+/// or LAN + Public), let the user pick which one to use. "Automatic" keeps the
+/// LAN-first behaviour; picking a specific route pins it (persisted) and the app
+/// reconnects through it. Hidden when there is only one candidate.
+class _RouteSwitcher extends StatelessWidget {
+  final AppController app;
+  final ConnectionProfile profile;
+  const _RouteSwitcher({required this.app, required this.profile});
+
+  @override
+  Widget build(BuildContext context) {
+    final candidates = app.connectionCandidates;
+    if (candidates.length < 2) return const SizedBox.shrink();
+    final activeBase = app.activeCandidate?.baseUrl;
+    final pinned = profile.selectedBaseUrl;
+    final scheme = Theme.of(context).colorScheme;
+
+    String labelFor(ConnectionCandidate c) {
+      final host = Uri.tryParse(c.baseUrl)?.host ?? c.baseUrl;
+      return '${c.label} · $host';
+    }
+
+    return Card(
+      child: RadioGroup<String?>(
+        groupValue: pinned,
+        onChanged: (v) => app.selectRoute(v),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(
+                'Server route',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            const RadioListTile<String?>(
+              value: null,
+              title: Text('Automatic (LAN-first)'),
+              subtitle: Text('Pick the best reachable route'),
+              dense: true,
+            ),
+            for (final c in candidates)
+              RadioListTile<String?>(
+                value: c.baseUrl,
+                title: Text(labelFor(c)),
+                subtitle: c.baseUrl == activeBase
+                    ? Text('Connected', style: TextStyle(color: scheme.primary))
+                    : Text(c.baseUrl),
+                secondary: c.baseUrl == activeBase
+                    ? Icon(Icons.check_circle, color: scheme.primary, size: 20)
+                    : null,
+                dense: true,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// C27: push notification status + a "Send test notification" action. Push is
+/// optional (BlueBubbles user-owned Firebase): when it isn't configured the card
+/// explains that the app stays on its live socket + catch-up sync, which still
+/// delivers messages while open.
+class _NotificationsCard extends StatefulWidget {
+  final AppController app;
+  const _NotificationsCard({required this.app});
+
+  @override
+  State<_NotificationsCard> createState() => _NotificationsCardState();
+}
+
+class _NotificationsCardState extends State<_NotificationsCard> {
+  bool _busy = false;
+
+  Future<void> _sendTest() async {
+    setState(() => _busy = true);
+    final error = await widget.app.sendTestPush();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final msg = error ?? 'Test notification sent.';
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppController>();
+    final configured = app.pushConfigured;
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: Icon(
+              configured
+                  ? Icons.notifications_active_outlined
+                  : Icons.notifications_off_outlined,
+              color: configured ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            title: Text(configured
+                ? 'Push notifications enabled'
+                : 'Push notifications not configured'),
+            subtitle: Text(configured
+                ? 'This device can be woken for new messages (${app.pushProvider.toUpperCase()}).'
+                : 'Optional. Set up your own Firebase project on the Mac to enable background pushes. Messages still arrive while the app is open.'),
+            isThreeLine: true,
+          ),
+          if (configured) ...[
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.send_outlined),
+              title: const Text('Send test notification'),
+              subtitle: const Text('Delivers a test push to this device'),
+              trailing: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _busy ? null : _sendTest,
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 

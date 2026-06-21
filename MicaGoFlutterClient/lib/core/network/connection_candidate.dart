@@ -23,15 +23,16 @@ class ConnectionCandidate {
 List<ConnectionCandidate> connectionCandidatesForProfile(
   ConnectionProfile profile,
 ) {
-  ConnectionCandidate? lan;
-  final lanBase = _nonEmpty(profile.lanBaseUrl);
-  if (lanBase != null) {
-    lan = ConnectionCandidate(
-      kind: ConnectionCandidateKind.lan,
-      baseUrl: normalizeBaseUrl(lanBase),
-      wsUrl: _nonEmpty(profile.lanWsUrl) ?? deriveWebSocketUrl(lanBase),
-    );
-  }
+  // All advertised LAN routes (C26 multi-LAN), not just the first interface.
+  final lanCandidates = <ConnectionCandidate>[
+    for (final r in profile.lanRoutes)
+      if (r.baseUrl.trim().isNotEmpty)
+        ConnectionCandidate(
+          kind: ConnectionCandidateKind.lan,
+          baseUrl: normalizeBaseUrl(r.baseUrl),
+          wsUrl: _nonEmpty(r.wsUrl) ?? deriveWebSocketUrl(r.baseUrl),
+        ),
+  ];
 
   ConnectionCandidate? pub;
   final publicBase = _nonEmpty(profile.publicBaseUrl);
@@ -55,18 +56,29 @@ List<ConnectionCandidate> connectionCandidatesForProfile(
   final out = <ConnectionCandidate>[];
   switch (profile.mode) {
     case ConnectionMode.lanOnly:
-      if (lan != null) out.add(lan);
+      out.addAll(lanCandidates);
       break;
     case ConnectionMode.publicOnly:
       if (pub != null) out.add(pub);
       break;
     case ConnectionMode.lanFirst:
     case ConnectionMode.auto:
-      if (lan != null) out.add(lan);
+      out.addAll(lanCandidates);
       if (pub != null) out.add(pub);
       break;
   }
   if (out.isEmpty && fallback.baseUrl.isNotEmpty) out.add(fallback);
+  // Honour a manual route pin: move the selected candidate to the front so it
+  // is tried first on connect/reconnect, while keeping the others as fallbacks.
+  final selected = _nonEmpty(profile.selectedBaseUrl);
+  if (selected != null) {
+    final normSelected = normalizeBaseUrl(selected);
+    final idx = out.indexWhere((c) => c.baseUrl == normSelected);
+    if (idx > 0) {
+      final pick = out.removeAt(idx);
+      out.insert(0, pick);
+    }
+  }
   return _dedupe(out);
 }
 

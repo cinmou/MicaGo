@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"micagoserver/internal/imessage"
+	"micagoserver/internal/realtime"
 	"micagoserver/internal/store"
 )
 
@@ -23,6 +24,29 @@ func (h *Handlers) GetMessageActionCapabilities(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, h.messageActionCapabilities(r.Context()))
 }
 
+// capabilityRefresher is the optional cache-invalidation hook a Performer can
+// expose so a freshly-installed helper is detected immediately (no TTL wait).
+type capabilityRefresher interface{ InvalidateCapabilities() }
+
+// RefreshMessageActionCapabilities drops any cached helper probe, re-scans, and
+// returns the fresh capabilities. The Companion calls this right after a helper
+// install so /api/server/status + the dedicated capability endpoint report the
+// new state without a backend restart. It also broadcasts connection:updated so
+// connected clients re-check their gating.
+func (h *Handlers) RefreshMessageActionCapabilities(w http.ResponseWriter, r *http.Request) {
+	if rf, ok := h.actions.(capabilityRefresher); ok {
+		rf.InvalidateCapabilities()
+	}
+	caps := h.messageActionCapabilities(r.Context())
+	if h.send != nil && h.send.Events != nil {
+		_ = h.send.Events.Broadcast(r.Context(), realtime.Event{
+			Type: "capabilities:updated",
+			Data: map[string]any{"messageActions": caps.State},
+		})
+	}
+	writeJSON(w, http.StatusOK, caps)
+}
+
 // messageActionCapabilities is the single source of truth for IMCore-helper
 // capability detection, shared by the dedicated endpoint (which the Flutter
 // client uses to gate Edit/Unsend/Delete) and the server status payload (which
@@ -32,6 +56,7 @@ func (h *Handlers) messageActionCapabilities(ctx context.Context) imessage.Capab
 	if h.actions == nil {
 		return imessage.Capabilities{
 			Available:        false,
+			State:            imessage.HelperStateMissing,
 			RequiresMessages: true,
 			Reason:           "MicaGo IMCore helper is not configured",
 		}
@@ -45,6 +70,7 @@ func (h *Handlers) messageActionsStatus(ctx context.Context) store.ServerMessage
 	c := h.messageActionCapabilities(ctx)
 	return store.ServerMessageActionsStatus{
 		Available:        c.Available,
+		State:            c.State,
 		Edit:             c.Edit,
 		Retract:          c.Retract,
 		Delete:           c.Delete,

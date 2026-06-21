@@ -356,7 +356,9 @@ type ServerStatusResponse struct {
 // the companion can show its status and clients can gate the actions. It mirrors
 // imessage.Capabilities without coupling the store layer to that package.
 type ServerMessageActionsStatus struct {
-	Available        bool   `json:"available"`
+	Available bool `json:"available"`
+	// State is one of missing | not_runnable | unsupported_selectors | ready.
+	State            string `json:"state"`
 	Edit             bool   `json:"edit"`
 	Retract          bool   `json:"retract"`
 	Delete           bool   `json:"delete"`

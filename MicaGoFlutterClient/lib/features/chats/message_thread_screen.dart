@@ -911,7 +911,16 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final body = widget.body;
     final bigEmoji =
         body != null && !hasMedia && widget.reply == null && isBigEmoji(body);
-    final bubbleColor = bigEmoji
+    // C27: a media-only message (renderable images/stickers, no text or reply)
+    // renders as a clean media bubble — no colored chat bubble wrapping it,
+    // matching BlueBubbles. Mixed media + text keeps the normal bubble.
+    final cleanMediaOnly = hasMedia &&
+        widget.body == null &&
+        widget.reply == null &&
+        message.attachments.isNotEmpty &&
+        message.attachments.every((a) => a.canRenderInlineImage);
+    final stripBubble = bigEmoji || cleanMediaOnly;
+    final bubbleColor = stripBubble
         ? Colors.transparent
         : (fromMe ? scheme.primaryContainer : scheme.surfaceContainerHighest);
     final textColor = fromMe ? scheme.onPrimaryContainer : scheme.onSurface;
@@ -926,10 +935,14 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     final bubble = Container(
       margin: const EdgeInsets.symmetric(vertical: 2),
-      padding: EdgeInsets.symmetric(
-        horizontal: 12,
-        vertical: hasMedia && bodyText == null ? 6 : 8,
-      ),
+      // No inner padding when the bubble is stripped (clean media / big emoji) —
+      // the media clips its own rounded corners and shouldn't sit in a padded box.
+      padding: stripBubble
+          ? EdgeInsets.zero
+          : EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: hasMedia && bodyText == null ? 6 : 8,
+            ),
       decoration: BoxDecoration(
         color: bubbleColor,
         borderRadius: BorderRadius.only(

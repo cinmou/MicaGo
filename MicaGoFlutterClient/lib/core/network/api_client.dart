@@ -529,6 +529,20 @@ class ApiClient {
     }
   }
 
+  /// `POST /api/devices/{id}/test-push` — ask the server to deliver a test
+  /// notification to this device (C27). Throws [ApiException] on non-2xx, e.g.
+  /// when notifications aren't configured or this device has no push token.
+  Future<void> sendTestPush(String deviceId) async {
+    await _send(
+      () => _http
+          .post(
+            _uri('/api/devices/${Uri.encodeComponent(deviceId)}/test-push'),
+            headers: _authHeaders,
+          )
+          .timeout(const Duration(seconds: 15)),
+    );
+  }
+
   /// `POST /api/chats/{guid}/send-attachment` — send a file to an iMessage chat
   /// (C19). multipart/form-data with `file` + `tempGuid`. The server replies
   /// 202 optimistically; the real attachment row arrives via sync/WS. Throws
