@@ -20,6 +20,11 @@
         android:maxSdkVersion="32"/>
     <!-- C22: show FCM-driven message notifications on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- C29: optional "Keep MicaGo running" foreground service that holds the
+         WebSocket open in the background. Off by default; only started when the
+         user enables it in advanced settings. dataSync = keep a sync connection. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <application
         android:label="MicaGo"
         android:name="${applicationName}"
@@ -49,6 +54,11 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- C29: optional keep-alive foreground service (off by default). -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

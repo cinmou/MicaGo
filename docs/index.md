@@ -14,13 +14,14 @@ cloud service: your messages stay between your Mac and the devices you connect.
 - **[Remote Access with Cloudflare Tunnel](remote-access-cloudflare.md)** — how
   to reach your Mac from outside your home using your own domain. Cloudflare
   Tunnel is **external and optional**; MicaGo does not bundle or manage it.
-- **[Android Client Connection](android-client-connection.md)** — how to use the
-  current Android app (an early "C0" build) and what it can and cannot do yet.
-- **[C18 Client Connection Fallback](c18-client-connection-fallback.md)** —
-  implementation notes for LAN/Public candidate storage, fallback, and
-  diagnostics.
+- **[Android Client Connection](android-client-connection.md)** — pairing the
+  Android app over LAN or a public URL, and what it supports.
 - **[Manual Test Flow](manual-test-flow.md)** — a step‑by‑step checklist you can
   run from zero to confirm local, LAN, public, and client connectivity.
+
+For the full development history (per-cycle change notes), see the
+[CHANGELOG](../CHANGELOG.md). For the overall project overview and build
+instructions, see the [root README](../README.md).
 
 ## Security notes
 
@@ -33,18 +34,18 @@ cloud service: your messages stay between your Mac and the devices you connect.
 - If you think your token has leaked, generate a new one in the Mac app and
   reconnect your devices.
 
-## Current limitations (early stage)
+## Current state
 
-MicaGo is still early. At this stage:
-
-- The **Mac app** runs the server and shows your local, LAN, and (optional)
-  public connection details. You set up remote access yourself.
-- The **Android app** is a **C0 foundation build**. It can save your server URL
-  and token, test the REST connection, and open the realtime WebSocket. It does
-  **not** yet show chats, open message threads, send messages, handle
-  attachments, or receive push notifications.
+- The **Mac Companion** runs the server and shows your LAN and optional public
+  connection details, paired devices, and diagnostics. You set up remote access
+  yourself.
+- The **Android app** pairs over LAN (same Wi‑Fi) or an optional public URL, syncs
+  chats and messages, sends text + attachments (iMessage; SMS when you enable it
+  on the Mac), renders reactions/replies/effects/media, and optionally receives
+  push notifications.
 - **Remote access** uses your own domain + Cloudflare Tunnel (or another
   reverse proxy/tunnel you choose). MicaGo does not provide a tunnel for you.
 
-See each guide for the details, and the
-[Manual Test Flow](manual-test-flow.md) for how to verify everything works.
+See each guide for details, the [Manual Test Flow](manual-test-flow.md) to verify
+everything works, and the [root README](../README.md) for build instructions and
+the full feature list.

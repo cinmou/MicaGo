@@ -1109,12 +1109,29 @@ func (h *Handlers) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 
 	var req deviceRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("device register: invalid JSON body from %s: %v", r.RemoteAddr, err)
+		}
 		writeBadRequest(w, "invalid JSON body")
 		return
 	}
 
+	// C29c: log every incoming registration BEFORE validation so a failing
+	// Android client is visible in the backend log (auth already passed here —
+	// a bad token is rejected upstream and never reaches this handler).
+	if h.logger != nil {
+		h.logger.Printf("device register request from %s: id=%q platform=%q clientType=%q pushProvider=%q pushEnabled=%t background=%t",
+			r.RemoteAddr, req.ID, req.Platform, req.ClientType, req.PushProvider, req.PushEnabled, req.Background)
+	}
+
 	device, err := h.buildDeviceRecord(req)
 	if err != nil {
+		// C29b: log the rejection so a failing client registration is visible in
+		// the backend log instead of being a silent 400.
+		if h.logger != nil {
+			h.logger.Printf("device register rejected: %v (platform=%q clientType=%q pushProvider=%q)",
+				err, req.Platform, req.ClientType, req.PushProvider)
+		}
 		writeBadRequest(w, err.Error())
 		return
 	}
@@ -1126,6 +1143,10 @@ func (h *Handlers) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.logger != nil {
+		h.logger.Printf("device registered: id=%s platform=%s client=%s push=%s pushEnabled=%t background=%t",
+			saved.ID, saved.Platform, saved.ClientType, saved.PushProvider, saved.PushEnabled, saved.Background)
+	}
 	writeJSON(w, http.StatusOK, store.DeviceResponse{Data: deviceToJSON(*saved)})
 }
 

@@ -9,16 +9,22 @@ path is to **scan the pairing QR code** shown in the Mac app.
   Android's encrypted storage and never shown in logs.
 - **Test the REST connection** and **connect the realtime WebSocket**.
 - **Show the chat list** and open a **message thread** (history).
-- **Send text messages** (with a sending → sent/failed state).
-- **Display attachments** — images, voice/audio, and files.
+- **Send text and attachments** (with a sending → sent/failed state) over
+  iMessage; SMS sending when you enable it on the Mac.
+- **Display reactions, replies, effects, stickers, and media** — images,
+  voice/audio, video, and files, with a full-screen media viewer.
 - **Match local device contacts** (read-only, opt-in) to show names instead of
   raw phone numbers/emails.
+- **Receive push notifications** (optional — requires your own Firebase project)
+  and an opt-in keep-alive background mode.
 
-## What it cannot do yet
+## Limitations
 
-- **Push notifications** (planned next).
-- **Sending attachments/media** — the server has no media-send endpoint yet, so
-  the composer's attachment button is disabled.
+- **Edit / Unsend / Delete** require the optional IMCore helper and your Mac
+  granting it access; otherwise those actions are hidden.
+- **Reliable notifications while the app is fully killed** work best with your own
+  `google-services.json` and/or the keep-alive mode; otherwise messages still
+  arrive over the socket + catch-up sync when the app is open.
 
 ## Step 1 — Install the app
 

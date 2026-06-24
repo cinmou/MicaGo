@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -111,6 +112,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       app: context.read<AppController>(),
                     ),
                   ),
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.devices_other_outlined),
+                title: const Text('Paired device debug'),
+                subtitle: const Text('Register now + registration diagnostics'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _push(
+                  context,
+                  'Device Registration',
+                  const _DeviceRegisterDebug(),
                 ),
               ),
               const Divider(height: 1),
@@ -309,6 +322,93 @@ class _RouteSwitcher extends StatelessWidget {
 /// optional (BlueBubbles user-owned Firebase): when it isn't configured the card
 /// explains that the app stays on its live socket + catch-up sync, which still
 /// delivers messages while open.
+/// C29c: device-registration diagnostics + a "Register device now" button so a
+/// failing registration can be debugged on-device instead of guessed.
+class _DeviceRegisterDebug extends StatefulWidget {
+  const _DeviceRegisterDebug();
+
+  @override
+  State<_DeviceRegisterDebug> createState() => _DeviceRegisterDebugState();
+}
+
+class _DeviceRegisterDebugState extends State<_DeviceRegisterDebug> {
+  String _diagnostics = 'Loading…';
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    final text = await context.read<AppController>().connectionDiagnostics();
+    if (mounted) setState(() => _diagnostics = text);
+  }
+
+  Future<void> _registerNow() async {
+    setState(() => _busy = true);
+    final result = await context.read<AppController>().registerDeviceNow();
+    await _refresh();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(result)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          children: [
+            FilledButton.icon(
+              onPressed: _busy ? null : _registerNow,
+              icon: _busy
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cloud_upload_outlined),
+              label: const Text('Register device now'),
+            ),
+            const SizedBox(width: 12),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _refresh,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: SelectableText(
+              _diagnostics,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                height: 1.5,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Tap "Register device now", then check the Mac server log and '
+          'curl <baseUrl>/api/devices. The result line above shows the exact '
+          'HTTP status / error (401 = token, 0 = unreachable, 400 = rejected).',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    );
+  }
+}
+
 class _NotificationsCard extends StatefulWidget {
   final AppController app;
   const _NotificationsCard({required this.app});
@@ -368,6 +468,23 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                     )
                   : const Icon(Icons.chevron_right),
               onTap: _busy ? null : _sendTest,
+            ),
+          ],
+          // C29: advanced opt-in keep-alive (Android only). Default off. Works
+          // even without Firebase — a foreground service holds the connection.
+          if (defaultTargetPlatform == TargetPlatform.android && !kIsWeb) ...[
+            const Divider(height: 1),
+            SwitchListTile(
+              secondary: const Icon(Icons.bolt_outlined),
+              title: const Text('Keep MicaGo running in background'),
+              subtitle: const Text(
+                'Advanced. Shows a persistent notification and keeps the '
+                'connection alive in the background, even without Firebase. '
+                'Uses more battery.',
+              ),
+              isThreeLine: true,
+              value: app.keepAliveEnabled,
+              onChanged: (v) => app.setKeepAliveEnabled(v),
             ),
           ],
         ],

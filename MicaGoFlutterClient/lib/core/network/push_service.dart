@@ -1,12 +1,44 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../app_controller.dart';
 import 'push_logic.dart';
+
+/// Storage key for the user-owned Firebase client options. C28: MicaGo bakes no
+/// google-services.json, so the FCM **background isolate** (a fresh process when
+/// the app was killed) has no default Firebase app to attach to. We persist the
+/// runtime options here when the foreground initializes Firebase, and the
+/// background handler reads them to `Firebase.initializeApp(options:)` — without
+/// this, the killed-app background handler can't init Firebase and shows nothing.
+const String fcmOptionsStorageKey = 'micago.fcm_options.v1';
+
+/// Pure: the minimal Firebase options map persisted for the background isolate.
+Map<String, String> fcmOptionsStorageMap(Map<String, dynamic> cfg) => {
+  'apiKey': (cfg['apiKey'] ?? '') as String,
+  'appId': (cfg['appId'] ?? '') as String,
+  'messagingSenderId': (cfg['messagingSenderId'] ?? '') as String,
+  'projectId': (cfg['projectId'] ?? '') as String,
+  'storageBucket': (cfg['storageBucket'] ?? '') as String,
+};
+
+/// Pure: build [FirebaseOptions] from a persisted/config map. An empty
+/// storageBucket maps to null (the field is optional).
+FirebaseOptions firebaseOptionsFromMap(Map<String, dynamic> m) {
+  final bucket = (m['storageBucket'] as String?)?.trim() ?? '';
+  return FirebaseOptions(
+    apiKey: (m['apiKey'] ?? '') as String,
+    appId: (m['appId'] ?? '') as String,
+    messagingSenderId: (m['messagingSenderId'] ?? '') as String,
+    projectId: (m['projectId'] ?? '') as String,
+    storageBucket: bucket.isEmpty ? null : bucket,
+  );
+}
 
 /// C22 — BlueBubbles-style FCM wake layered on top of WebSocket + delta sync.
 ///
@@ -51,19 +83,13 @@ class PushService {
     }
 
     // 2) Initialize Firebase at runtime from that config (no google-services
-    //    baked into the APK — BlueBubbles' user-owned-project model).
+    //    baked into the APK — BlueBubbles' user-owned-project model). Persist the
+    //    options FIRST so the background isolate (a fresh process after a kill)
+    //    can re-init Firebase the same way — otherwise killed-app pushes can't
+    //    show a notification.
+    await _persistOptions(cfg);
     try {
-      await Firebase.initializeApp(
-        options: FirebaseOptions(
-          apiKey: (cfg['apiKey'] ?? '') as String,
-          appId: (cfg['appId'] ?? '') as String,
-          messagingSenderId: (cfg['messagingSenderId'] ?? '') as String,
-          projectId: (cfg['projectId'] ?? '') as String,
-          storageBucket: (cfg['storageBucket'] as String?)?.isEmpty ?? true
-              ? null
-              : cfg['storageBucket'] as String,
-        ),
-      );
+      await Firebase.initializeApp(options: firebaseOptionsFromMap(cfg));
     } catch (e) {
       // Already-initialized is fine; any other failure → degrade to WS/delta.
       if (e is! FirebaseException || e.code != 'duplicate-app') {
@@ -102,6 +128,18 @@ class PushService {
     FirebaseMessaging.onMessageOpenedApp.listen(_onNotificationTap);
     final initial = await messaging.getInitialMessage();
     if (initial != null) _onNotificationTap(initial);
+  }
+
+  Future<void> _persistOptions(Map<String, dynamic> cfg) async {
+    try {
+      await app.store.writeValue(
+        fcmOptionsStorageKey,
+        jsonEncode(fcmOptionsStorageMap(cfg)),
+      );
+    } catch (_) {
+      // Best-effort; the foreground init still proceeds. The background isolate
+      // will fall back to a default-app init.
+    }
   }
 
   Future<void> _registerToken() async {
@@ -161,26 +199,52 @@ class PushService {
 /// running app so it works without a live AppController.
 @pragma('vm:entry-point')
 Future<void> micaGoFirebaseBackgroundHandler(RemoteMessage message) async {
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {
-    // If the default app can't init here we simply skip the local notification;
-    // catch-up still runs when the user opens the app.
+  if (!await ensureBackgroundFirebase()) {
+    // Firebase couldn't init here; skip the local notification. The missed
+    // message is still delivered by delta catch-up on the next resume.
     return;
   }
   await showPushNotification(message);
+}
+
+/// Initializes Firebase inside the FCM background isolate. MicaGo bakes no
+/// google-services.json, so a killed-app push runs in a fresh process with NO
+/// default Firebase app — `Firebase.initializeApp()` (no options) would throw.
+/// We prefer the persisted runtime options (written by the foreground), then
+/// fall back to any existing/default app. Returns false when Firebase can't be
+/// initialized at all.
+@pragma('vm:entry-point')
+Future<bool> ensureBackgroundFirebase() async {
+  if (Firebase.apps.isNotEmpty) return true;
+  try {
+    final raw = await const FlutterSecureStorage().read(key: fcmOptionsStorageKey);
+    if (raw != null && raw.isNotEmpty) {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        await Firebase.initializeApp(options: firebaseOptionsFromMap(decoded));
+        return true;
+      }
+    }
+  } catch (_) {
+    // Fall through to a best-effort default init.
+  }
+  try {
+    await Firebase.initializeApp();
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /// Shared local-notification display used by the background handler. Deduped by
 /// the message GUID as the notification id so the same event can't stack.
 Future<void> showPushNotification(RemoteMessage message) async {
   final data = message.data;
-  if ((data['type'] ?? '') == 'test') return;
+  // Single source of truth for "is there anything to show" (test pushes and
+  // preview-disabled empty pushes are skipped) — shared with the pure logic test.
+  if (!pushShouldNotify(data)) return;
   final title = (data['title'] as String?)?.trim();
   final body = (data['body'] as String?)?.trim();
-  if ((title == null || title.isEmpty) && (body == null || body.isEmpty)) {
-    return; // preview disabled → nothing useful to show
-  }
 
   final plugin = FlutterLocalNotificationsPlugin();
   await plugin.initialize(

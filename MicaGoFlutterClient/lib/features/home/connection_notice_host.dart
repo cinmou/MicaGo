@@ -21,6 +21,8 @@ class _ConnectionNoticeHostState extends State<ConnectionNoticeHost> {
   AppController? _app;
   ConnectionNotice? _sticky;
 
+  bool _cannotConnectDialogOpen = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -28,16 +30,63 @@ class _ConnectionNoticeHostState extends State<ConnectionNoticeHost> {
     if (identical(app, _app)) return;
     _app?.connectionNotice.removeListener(_onNotice);
     _app?.connectionHealthy.removeListener(_onHealthy);
+    _app?.initialConnectFailed.removeListener(_onInitialConnectFailed);
     _app = app;
     app.connectionNotice.addListener(_onNotice);
     app.connectionHealthy.addListener(_onHealthy);
+    app.initialConnectFailed.addListener(_onInitialConnectFailed);
   }
 
   @override
   void dispose() {
     _app?.connectionNotice.removeListener(_onNotice);
     _app?.connectionHealthy.removeListener(_onHealthy);
+    _app?.initialConnectFailed.removeListener(_onInitialConnectFailed);
     super.dispose();
+  }
+
+  /// C29b: when the initial connection can't reach any server in 10s, show ONE
+  /// clear dialog explaining the failure (not an endless "Reconnecting…"). If the
+  /// connection later succeeds the flag clears and we auto-dismiss the dialog.
+  void _onInitialConnectFailed() {
+    final failed = _app?.initialConnectFailed.value ?? false;
+    if (failed && !_cannotConnectDialogOpen) {
+      _showCannotConnectDialog();
+    } else if (!failed && _cannotConnectDialogOpen) {
+      if (mounted) Navigator.of(context, rootNavigator: true).maybePop();
+    }
+  }
+
+  Future<void> _showCannotConnectDialog() async {
+    _cannotConnectDialogOpen = true;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.cloud_off),
+        title: const Text('Can’t reach your MicaGo server'),
+        content: const Text(
+          'The app couldn’t connect to your Mac server within 10 seconds.\n\n'
+          '• Check that the MicaGo server is running on your Mac.\n'
+          '• Make sure your phone is on the same Wi‑Fi (for LAN), or that the '
+          'Public URL is correct.\n'
+          '• Verify the server address in Settings → Connection.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Dismiss'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _app?.retryInitialConnect();
+            },
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+    _cannotConnectDialogOpen = false;
   }
 
   /// C26: a healthy (connected) connection must never leave a stale problem

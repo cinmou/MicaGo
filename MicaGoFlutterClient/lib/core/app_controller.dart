@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'models/connection_profile.dart';
 import 'models/server_urls.dart';
@@ -171,6 +172,8 @@ class AppController extends ChangeNotifier {
       );
     }
     _rebuildApi();
+    // C29: restore the keep-alive setting (and re-arm the service if it was on).
+    await _loadKeepAlive();
     _bootstrapped = true;
     notifyListeners();
   }
@@ -204,6 +207,8 @@ class AppController extends ChangeNotifier {
       'candidates: ${connectionCandidatesForProfile(profile).join(' | ')}',
     );
     _rebuildApi();
+    // C29b: pairing is a user-visible connect — arm the 10s cannot-connect error.
+    _armInitialConnectWatchdog();
     notifyListeners();
     unawaited(selectReachableCandidate(reason: 'profile'));
   }
@@ -313,9 +318,41 @@ class AppController extends ChangeNotifier {
         const Duration(seconds: 10),
       );
       _hasSuppressedStartupConnectionNotice = false;
+      // C29b: this is a user-visible connect attempt — arm the 10s watchdog so
+      // the user gets a clear "can't reach the server" error instead of being
+      // stuck on "Reconnecting…" forever.
+      _armInitialConnectWatchdog();
     }
     return selectReachableCandidate(reason: reason);
   }
+
+  /// C29b: surfaces a clear, user-visible error when the INITIAL connection
+  /// attempt (startup or just after pairing) can't reach any server candidate
+  /// within 10s. Cleared the moment a connection succeeds. Background reconnects
+  /// never arm this, so it can't spam.
+  final ValueNotifier<bool> initialConnectFailed = ValueNotifier<bool>(false);
+  Timer? _initialConnectWatchdog;
+
+  void _armInitialConnectWatchdog() {
+    _initialConnectWatchdog?.cancel();
+    initialConnectFailed.value = false;
+    if (ws.status == WsStatus.connected || _serverReachable) return;
+    _initialConnectWatchdog = Timer(const Duration(seconds: 10), () {
+      if (ws.status != WsStatus.connected && !_serverReachable) {
+        _logConnectionSelection('initial connect watchdog: no server in 10s');
+        initialConnectFailed.value = true;
+      }
+    });
+  }
+
+  void _clearInitialConnectWatchdog() {
+    _initialConnectWatchdog?.cancel();
+    _initialConnectWatchdog = null;
+    if (initialConnectFailed.value) initialConnectFailed.value = false;
+  }
+
+  /// Manual retry from the cannot-connect dialog.
+  Future<bool> retryInitialConnect() => connectForeground(reason: 'retry');
 
   Future<bool> selectReachableCandidate({
     required String reason,
@@ -353,6 +390,12 @@ class AppController extends ChangeNotifier {
           _logConnectionSelection('${candidate.label} health=true auth=true');
           _logConnectionSelection('selected ${candidate.label}');
           _rebuildApi();
+          // C29b: reached the server → clear any pending cannot-connect error.
+          _clearInitialConnectWatchdog();
+          // C29: register this device as soon as the server is reachable over
+          // REST — not only when the WebSocket connects. A flaky/slow WS must not
+          // keep a working device out of the Companion's Paired Devices list.
+          unawaited(_registerDeviceIfPossible());
           // Surface a LAN↔Public fallback switch before the WS reconnects.
           _emitConnectionNotice();
           notifyListeners();
@@ -526,6 +569,7 @@ class AppController extends ChangeNotifier {
       _hasEverConnected = true;
       _hasCompletedFirstConnectAttempt = true;
       _connectionNoticeGraceUntil = null;
+      _clearInitialConnectWatchdog(); // C29b: connected → clear the 10s error
     }
     // Surface a user-visible notice for any status transition (connect, lost,
     // reconnecting, disconnect). De-dup is handled in the pure derivation.
@@ -602,27 +646,128 @@ class AppController extends ChangeNotifier {
   /// (memoized below) on every reconnect so the server upserts the same row
   /// rather than creating duplicates. Also reports the app version, the active
   /// connection mode (LAN vs LAN+Public), and the push capability.
-  Future<void> _registerDeviceIfPossible() async {
-    final api = _api;
-    if (api == null) return;
-    final id = await _ensureDeviceId();
-    final mode = _activeCandidate?.kind == ConnectionCandidateKind.public
-        ? 'lan_public'
-        : 'lan';
-    final body = buildDeviceRegistration(
-      name: 'MicaGo on ${defaultTargetPlatform.name}',
-      platform: serverPlatformFor(defaultTargetPlatform, isWeb: kIsWeb),
-      id: id,
-      mode: mode,
-      // C22: include the push capability the PushService discovered (FCM token
-      // when Firebase is configured; 'none' otherwise — fully optional).
-      pushProvider: _pushProvider,
-      pushToken: _pushToken,
-      pushEnabled: _pushEnabled,
-      background: _pushEnabled,
-    );
-    await api.registerDevice(body);
-    _startDeviceHeartbeat(id);
+  bool _registerInFlight = false;
+  String? _lastRegisterResult;
+
+  /// Human-readable summary of the last device-registration attempt (for the
+  /// debug diagnostics panel). Never contains the token.
+  String? get lastRegisterResult => _lastRegisterResult;
+
+  String _recordRegister(String summary) {
+    _lastRegisterResult = '${DateTime.now().toIso8601String()} $summary';
+    _logConnectionSelection('device register: $summary');
+    notifyListeners();
+    return _lastRegisterResult!;
+  }
+
+  /// Registers this device (C29c: fully instrumented + hardened). Returns a
+  /// result summary; never throws and never swallows a failure silently.
+  /// [force] bypasses the in-flight guard (used by the debug "Register now").
+  Future<String> _registerDeviceIfPossible({bool force = false}) async {
+    if (_registerInFlight && !force) {
+      return _lastRegisterResult ?? 'in flight';
+    }
+    final profile = _profile;
+    if (profile == null || profile.token.trim().isEmpty) {
+      return _recordRegister('skipped: no profile or empty token');
+    }
+    // Fall back to the first candidate so a transiently-null _activeCandidate
+    // (e.g. just nulled by an endpoint refresh) never blocks registration.
+    final candidate =
+        _activeCandidate ?? connectionCandidatesForProfile(profile).firstOrNull;
+    if (candidate == null || candidate.baseUrl.trim().isEmpty) {
+      return _recordRegister('skipped: no candidate base URL');
+    }
+
+    _registerInFlight = true;
+    try {
+      final String id;
+      try {
+        id = await _ensureDeviceId();
+      } catch (e) {
+        return _recordRegister('FAILED: could not load device id: $e');
+      }
+      if (id.isEmpty) {
+        return _recordRegister('FAILED: empty device id');
+      }
+      final mode = candidate.kind == ConnectionCandidateKind.public
+          ? 'lan_public'
+          : 'lan';
+      final background = _pushEnabled || _keepAliveEnabled;
+      final body = buildDeviceRegistration(
+        name: 'MicaGo on ${defaultTargetPlatform.name}',
+        platform: serverPlatformFor(defaultTargetPlatform, isWeb: kIsWeb),
+        id: id,
+        mode: mode,
+        pushProvider: _pushProvider,
+        pushToken: _pushToken,
+        pushEnabled: _pushEnabled,
+        background: background,
+      );
+      _logConnectionSelection(
+        'device register → POST ${candidate.baseUrl}/api/devices/register '
+        'id=$id mode=$mode tokenLen=${profile.token.trim().length} '
+        'provider=$_pushProvider bg=$background',
+      );
+      // DEDICATED short-lived client: the shared _api can be closed by a
+      // concurrent _rebuildApi() (endpoint refresh), aborting the POST. Retry so
+      // a transient/close failure doesn't leave the device unregistered (C29b).
+      final client = ApiClient(
+        baseUrl: candidate.baseUrl,
+        token: profile.token,
+      );
+      try {
+        ({String? id, int status, String? error}) result = (
+          id: null,
+          status: 0,
+          error: 'not attempted',
+        );
+        for (var attempt = 1; attempt <= 3; attempt++) {
+          result = await client.registerDevice(body);
+          if (result.status == 200) {
+            _startDeviceHeartbeat(id);
+            return _recordRegister('OK id=$id status=200 at ${candidate.baseUrl}');
+          }
+          _recordRegister(
+            'FAILED attempt $attempt/3 status=${result.status} '
+            '${result.error ?? ''} at ${candidate.baseUrl}',
+          );
+          if (attempt < 3) {
+            await Future<void>.delayed(const Duration(seconds: 2));
+          }
+        }
+        return _lastRegisterResult ??
+            'FAILED status=${result.status} ${result.error ?? ''}';
+      } finally {
+        client.close();
+      }
+    } finally {
+      _registerInFlight = false;
+    }
+  }
+
+  /// Debug: force a registration attempt now and return its result summary.
+  Future<String> registerDeviceNow() => _registerDeviceIfPossible(force: true);
+
+  /// Debug: a redacted connection/registration diagnostics snapshot.
+  Future<String> connectionDiagnostics() async {
+    final profile = _profile;
+    String deviceId = '(unavailable)';
+    try {
+      deviceId = await _ensureDeviceId();
+    } catch (_) {}
+    return [
+      'profile: ${profile == null ? "none" : "set"}',
+      'token: ${(profile?.token.trim().isNotEmpty ?? false) ? "present (${profile!.token.trim().length} chars)" : "MISSING"}',
+      'deviceId: $deviceId',
+      'activeBaseUrl: ${_activeCandidate?.baseUrl ?? "(none)"}',
+      'apiBaseUrl: ${_api?.baseUrl ?? "(none)"}',
+      'ws: ${ws.status.name}',
+      'serverReachable: $_serverReachable',
+      'candidates: ${connectionCandidates.map((c) => c.baseUrl).join(", ")}',
+      'pushProvider: $_pushProvider  pushEnabled: $_pushEnabled  keepAlive: $_keepAliveEnabled',
+      'lastRegister: ${_lastRegisterResult ?? "(never attempted)"}',
+    ].join('\n');
   }
 
   // C22: push capability reported on registration, set by PushService once it
@@ -631,6 +776,39 @@ class AppController extends ChangeNotifier {
   String _pushProvider = 'none';
   String? _pushToken;
   bool _pushEnabled = false;
+
+  // C29: optional Android keep-alive foreground service. Persisted; default off.
+  // When on, the device reports `background: true` and a foreground service keeps
+  // the WebSocket alive. Firebase is NOT required for this.
+  static const MethodChannel _keepAliveChannel =
+      MethodChannel('micago/keepalive');
+  static const String _keepAlivePrefKey = 'micago.keepalive.v1';
+  bool _keepAliveEnabled = false;
+  bool get keepAliveEnabled => _keepAliveEnabled;
+
+  /// Turn the keep-alive foreground service on/off, persist the choice, and
+  /// re-register so the Companion shows the updated background status.
+  Future<void> setKeepAliveEnabled(bool enabled) async {
+    _keepAliveEnabled = enabled;
+    await store.writeValue(_keepAlivePrefKey, enabled ? '1' : '0');
+    await _applyKeepAlive(enabled);
+    notifyListeners();
+    unawaited(_registerDeviceIfPossible());
+  }
+
+  Future<void> _loadKeepAlive() async {
+    _keepAliveEnabled = (await store.readValue(_keepAlivePrefKey)) == '1';
+    if (_keepAliveEnabled) await _applyKeepAlive(true);
+  }
+
+  Future<void> _applyKeepAlive(bool enabled) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _keepAliveChannel.invokeMethod(enabled ? 'start' : 'stop');
+    } catch (_) {
+      // Platform channel unavailable (non-Android / older build) → no-op.
+    }
+  }
 
   /// Called by [PushService] when the FCM token is obtained, refreshed, or
   /// cleared. Re-registers this device so the server can wake it (C22).
@@ -959,6 +1137,7 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     _heartbeatTimer?.cancel();
+    _initialConnectWatchdog?.cancel();
     unawaited(_connSub?.cancel());
     _refresh.dispose();
     unawaited(_deltaController.close());
@@ -967,6 +1146,7 @@ class AppController extends ChangeNotifier {
     _api?.close();
     connectionNotice.dispose();
     connectionHealthy.dispose();
+    initialConnectFailed.dispose();
     unawaited(cache.close());
     super.dispose();
   }

@@ -1,24 +1,32 @@
 # MicaGo Android client (Flutter)
 
-Android-first Flutter client for a **MicaGo** relay server. This is the **Phase
-C0 foundation**: connect to a server, test REST connectivity, open the realtime
-WebSocket, and show connection/debug status. Chat list, message threads,
-sending, attachments, push, and settings come in later phases.
+Android-first Flutter client for a **MicaGo** relay server. Pair with your Mac
+over LAN or an optional public URL, sync chats and messages, send text and
+attachments, and (optionally) receive push notifications.
 
-## What works in C0
+See the [root README](../README.md) for the project overview and the
+[CHANGELOG](../CHANGELOG.md) for the development history.
 
-- **App shell** — Material 3, light/dark (system), MicaGo branding, go_router routes.
-- **Connection setup** — server URL, bearer token, optional WebSocket URL
-  (auto-derived from the base URL when blank). Saved locally; token in
-  `flutter_secure_storage` (Android Keystore-backed). **Test connection** runs
-  `GET /api/health` → `POST /api/auth/check`.
-- **REST client** — bearer auth, `GET /api/server/urls`, structured error
-  envelope (`{"error":{"code","message"}}`) parsing.
-- **WebSocket client** — derives `ws://`/`wss://` + `/ws`, connects with
-  `?token=`, shows connecting/connected/failed, logs received event `type`s in a
-  debug panel.
-- **Home** — connection status card, server endpoint summary, placeholder
-  sections (Chats / Messages / Contacts / Settings), and the debug panel.
+## Features
+
+- **Pairing** — scan the Companion's QR code or paste its connection JSON;
+  multiple LAN candidates with auto-select + a manual route switcher. The bearer
+  token is stored in `flutter_secure_storage` (Android Keystore-backed) and never
+  logged.
+- **Chats & threads** — conversation list, message threads, reactions/tapbacks,
+  replies, send effects, stickers, and inline image/video media with a
+  full-screen viewer.
+- **Sending** — text + attachments over iMessage; SMS when the server allows it.
+- **Realtime + catch-up** — WebSocket events plus cursor-based delta sync to fill
+  gaps after the app was closed.
+- **Contacts matching** — opt-in, on-device name resolution (the address book is
+  never uploaded).
+- **Notifications (optional)** — Firebase/FCM push using your own project; a
+  thin wake signal, with content arriving over the socket. Works without it.
+- **Keep-alive (optional, advanced)** — a foreground service that keeps the
+  connection alive in the background. Default off.
+- **Diagnostics** — Settings → Paired device debug (registration + connection
+  diagnostics, "Register device now") and a realtime-event debug log.
 
 ## Architecture
 
@@ -27,14 +35,19 @@ lib/
   main.dart
   app/        mica_go_app.dart · router.dart · theme.dart
   core/
-    app_controller.dart            # app-wide state (profile, clients, urls)
-    network/  api_client.dart · websocket_client.dart · endpoint_utils.dart
-    storage/  secure_store.dart
+    app_controller.dart            # app-wide state (profile, clients, urls, registration)
+    network/  api_client.dart · websocket_client.dart · connection_candidate.dart
+              push_service.dart · push_logic.dart · device_identity.dart · …
+    storage/  secure_store.dart · local_cache_store.dart (sqflite)
     models/   connection_profile.dart · server_urls.dart
   features/
-    connection/  connection_screen.dart · connection_controller.dart
-    home/        home_screen.dart
-    debug/       debug_log_panel.dart
+    pairing/    QR scan + paste-JSON onboarding
+    connection/ advanced manual setup + diagnostics
+    chats/      thread, message render, attachments, media viewer, composer
+    contacts/   on-device contact matching
+    home/       app shell + connection notices
+    settings/   appearance, SMS toggle, notifications, keep-alive, debug
+    debug/       realtime event log
 ```
 
 State: `ChangeNotifier` + `provider`. Routing: `go_router` (guards force the
@@ -42,10 +55,10 @@ connection screen until a complete profile exists).
 
 ## Server compatibility
 
-Targets the documented MicaGo API (see `MicaGoServer/docs/`):
-`spec-v0.9.0-client-api-contract.md` (auth, error envelope, `/ws`),
-`spec-v0.11.0-connection-endpoints.md` (`/api/server/urls`). Auth is a shared
-bearer token (`Authorization: Bearer …`; the WebSocket also accepts `?token=`).
+Targets the MicaGo relay API: a shared **bearer token**
+(`Authorization: Bearer …`; the WebSocket also accepts `?token=`), the
+connection-endpoints payload (`/api/server/urls`), chats/messages/delta, device
+registry, message actions, and the optional FCM client config (`/api/fcm/client`).
 
 ## Run
 
@@ -56,10 +69,10 @@ flutter test
 flutter build apk --debug      # or: flutter run -d <android-device>
 ```
 
-## Notes / TODO
+## Notes
 
 - `android:usesCleartextTraffic="true"` is enabled so the client can reach
-  `http://` local/LAN servers; public access should use `https` via the tunnel.
+  `http://` local/LAN servers; public access should use `https` via your tunnel.
 - The bearer token is stored securely and never written to logs or `toString()`.
-- Not yet implemented (by design): chats, threads, sending, attachments, push /
-  Firebase, QR scanner, BlueBubbles compatibility mode, full settings.
+- Firebase, the keep-alive service, and the IMCore message actions are all
+  optional and off by default.

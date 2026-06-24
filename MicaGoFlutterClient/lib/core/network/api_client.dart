@@ -471,7 +471,11 @@ class ApiClient {
   /// can show a connected device (C19). [body] is a small identity built by
   /// `buildDeviceRegistration`. Returns the server-assigned device id (echoed in
   /// `data.id`), or null on any failure (registration is best-effort).
-  Future<String?> registerDevice(Map<String, Object?> body) async {
+  /// Registers this device. Returns the outcome ([status] 200 = ok; 0 = network
+  /// error) so the caller can LOG failures rather than swallow them (C29b).
+  Future<({String? id, int status, String? error})> registerDevice(
+    Map<String, Object?> body,
+  ) async {
     try {
       final res = await _send(
         () => _http
@@ -482,12 +486,24 @@ class ApiClient {
             )
             .timeout(const Duration(seconds: 10)),
       );
-      if (res.statusCode != 200) return null;
+      if (res.statusCode != 200) {
+        final snippet = res.body.trim();
+        return (
+          id: null,
+          status: res.statusCode,
+          error: snippet.isEmpty ? 'HTTP ${res.statusCode}' : snippet,
+        );
+      }
       final data = _decodeObject(res)['data'];
-      if (data is Map<String, dynamic>) return data['id'] as String?;
-      return null;
-    } catch (_) {
-      return null;
+      return (
+        id: data is Map<String, dynamic> ? data['id'] as String? : null,
+        status: 200,
+        error: null,
+      );
+    } on ApiException catch (e) {
+      return (id: null, status: e.statusCode ?? 0, error: e.message);
+    } catch (e) {
+      return (id: null, status: 0, error: '$e');
     }
   }
 
