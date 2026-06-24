@@ -19,9 +19,8 @@ Messaging (FCM)** and, optionally, publish your **public server URL** to your ow
 
 ## Other platforms
 
-- **Windows**: uses the WebSocket (`/ws`) + local notifications while the client
-  is running. **No Windows push (WNS) and no Firebase needed for Windows.**
-- **Huawei / HarmonyOS Push Kit**: **deferred** (not implemented).
+- The current first-party mobile client is Android.
+- **Huawei / HarmonyOS Push Kit**: deferred (not implemented).
 - **iOS push**: out of scope.
 
 ## Setup order

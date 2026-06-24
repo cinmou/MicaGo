@@ -2,8 +2,7 @@
 
 A lightweight Go-based **iMessage relay server**. It runs on a Mac with access
 to the local Messages database and exposes a small, stable, **Mica-native**
-HTTP + WebSocket API for future **Windows (Tauri), Android, Linux, and Flutter**
-clients.
+HTTP + WebSocket API. The current first-party client is the Flutter Android app.
 
 The data flow is one-directional and simple:
 
@@ -55,7 +54,6 @@ Useful flags (all optional; config file values are used otherwise):
 | `--sync-interval` | Override periodic sync interval |
 | `--disable-sync-loop` | Disable the periodic sync loop |
 | `--sync-once` | Run one relay sync and exit |
-| `--api-store` | Backing store: `relaydb` (default) or `chatdb` |
 
 ## Configuration and token
 
@@ -113,8 +111,9 @@ of truth for behavior and wire format:
 - [`docs/spec-v0.10.0-mac-companion.md`](docs/spec-v0.10.0-mac-companion.md) — native macOS companion app + `GET /api/server/status`
 - [`docs/spec-v0.11.0-connection-endpoints.md`](docs/spec-v0.11.0-connection-endpoints.md) — aggregated connection endpoints (local/LAN/public) + `GET /api/server/urls`
 
-Current implementation status against the v0.9.0 contract is tracked in
-[`docs/v0.9.0-gap-analysis.md`](docs/v0.9.0-gap-analysis.md).
+Historical implementation notes are kept in
+[`docs/v0.9.0-gap-analysis.md`](docs/v0.9.0-gap-analysis.md); the live behavior
+is the current code and the public README/user guides.
 
 ## macOS companion app
 

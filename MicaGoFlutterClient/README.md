@@ -22,9 +22,11 @@ See the [root README](../README.md) for the project overview and the
 - **Contacts matching** — opt-in, on-device name resolution (the address book is
   never uploaded).
 - **Notifications (optional)** — Firebase/FCM push using your own project; a
-  thin wake signal, with content arriving over the socket. Works without it.
+  thin wake signal, with message data refreshed over the socket/delta path.
+  Works without it.
 - **Keep-alive (optional, advanced)** — a foreground service that keeps the
-  connection alive in the background. Default off.
+  connection alive in the background. Default off; Android/OEM battery policy can
+  still throttle it.
 - **Diagnostics** — Settings → Paired device debug (registration + connection
   diagnostics, "Register device now") and a realtime-event debug log.
 
@@ -75,4 +77,5 @@ flutter build apk --debug      # or: flutter run -d <android-device>
   `http://` local/LAN servers; public access should use `https` via your tunnel.
 - The bearer token is stored securely and never written to logs or `toString()`.
 - Firebase, the keep-alive service, and the IMCore message actions are all
-  optional and off by default.
+  optional and off by default. IMCore actions appear only when the Mac/helper
+  reports them supported.

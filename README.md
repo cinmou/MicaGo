@@ -1,6 +1,6 @@
 # MicaGo
 
-**Use your own iMessage from your own Android phone — through your own Mac. No cloud, no account, no third‑party relay.**
+**Use your own iMessage from your own Android phone — through your own Mac. No MicaGo cloud, no MicaGo account, no MicaGo relay.**
 
 MicaGo is a self‑hosted iMessage bridge. A small Go server runs on your Mac and
 reads its local Messages database; a macOS menu‑bar **Companion** manages that
@@ -63,8 +63,8 @@ travels between **your** Mac and **your** devices.
 
 ## Features
 
-- **Self‑hosted, no cloud.** No MicaGo account or server; nothing is relayed
-  through a third party.
+- **Self‑hosted.** No MicaGo account or hosted relay; optional push and remote
+  access use services you own/configure.
 - **Chats & messages.** Conversation list, threads, reactions/tapbacks, replies,
   send effects, stickers, and inline image/video media with a full‑screen viewer.
 - **Send.** Text and attachments over iMessage; SMS sending is **off by default**
@@ -170,15 +170,15 @@ Background push uses **your own** Firebase project (no `google-services.json` is
 baked into the app). Point the server at your `google-services.json` and it serves
 the client config at `GET /api/fcm/client`; the app initializes Firebase at
 runtime and registers a token. Push is a thin **wake** signal — message content
-always arrives over the socket / delta sync. With nothing configured, the app runs
-on WebSocket + delta sync. See `docs/setup/firebase/`.
+arrives over WebSocket / delta sync after the wake. With nothing configured, the
+app runs on WebSocket + delta sync. See `docs/setup/firebase/`.
 
 ### Keep‑alive background service (Android)
 
 An advanced, opt‑in toggle ("Keep MicaGo running in background") starts a native
 foreground service with a minimal persistent notification, keeping the connection
 alive in the background without Firebase. Default off; OEM battery managers may
-still throttle it.
+still throttle or kill it.
 
 ### Edit / Unsend / Delete (IMCore helper)
 
@@ -186,7 +186,8 @@ These use a small bundled helper (`micago-imcore-helper`) that calls private
 macOS IMCore APIs. The Companion's **Install helper** button copies it to
 `~/.micago/bin`; the backend detects it and the client only shows the actions when
 the helper reports them usable. If your Mac doesn't grant IMCore access, it
-reports *unsupported* — never a fake success.
+reports *unsupported* — never a fake success. Availability depends on macOS,
+Messages.app state, permissions, and Apple's private API behavior.
 
 ### Remote access
 
@@ -203,9 +204,9 @@ Companion. MicaGo does not provide or manage a tunnel. See
   issues. Regenerate it (and re‑pair) if it leaks.
 - **Local‑first.** The default bind is your LAN. Public exposure is opt‑in and
   your responsibility; prefer HTTPS for anything leaving your network.
-- **Your data stays yours.** No cloud relay. Contacts are matched on‑device and
-  never uploaded. Push payloads (if you enable FCM) carry only a small wake
-  preview, never your message history or tokens.
+- **Your data stays yours.** No MicaGo cloud relay. Contacts are matched
+  on‑device and never uploaded. Push payloads (if you enable FCM) carry only a
+  small wake/preview payload, never your message history or tokens.
 - **Private APIs.** The optional IMCore helper uses Apple private frameworks for
   edit/unsend/delete and is gated behind capability checks.
 

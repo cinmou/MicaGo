@@ -7,8 +7,9 @@ control.
 
 > **Push is optional.** MicaGo works without it. While the Android app is open
 > it receives messages in real time over WebSocket, and it catches up via delta
-> sync whenever you reopen it. Firebase adds the ability to **wake the app and
-> notify you when it's in the background or closed**. If you skip this guide,
+> sync whenever you reopen it. Firebase adds a best-effort way to **wake the app
+> and show a notification** when Android allows background delivery. OEM battery
+> policy can still delay or suppress delivery. If you skip this guide,
 > everything else still works.
 
 It takes about 10–15 minutes and uses only Firebase's free tier (Cloud
@@ -207,7 +208,6 @@ source of message content.
 
 ### A note on automated setup
 
-A future MicaGo release may offer a one-click "Sign in with Google" flow that
-creates and configures this Firebase project for you. Until then, the manual
-steps above are the supported way to enable push, and they remain fully
-self-hosted and optional.
+The manual steps above are the supported way to enable push. They remain fully
+self-hosted and optional: you bring the Firebase project, and MicaGo does not
+create or operate one for you.

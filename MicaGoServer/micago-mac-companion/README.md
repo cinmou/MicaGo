@@ -40,13 +40,16 @@ The path is editable in-app and persisted. The first server run creates
 Start/stop/restart · running status · **Connection Endpoints** (local, LAN, and
 an optional public URL with validate/save) · bearer token (reveal/copy + pairing
 QR for a selected endpoint) · registered devices · notification provider status ·
-permission diagnostics (Full Disk Access, Automation) · Launch at Login.
+permission diagnostics (Full Disk Access, Automation) · optional IMCore helper
+install/status · Launch at Login.
 
 Local and LAN endpoints are always active; the public URL is an optional extra,
 not a mode. See [`../docs/spec-v0.11.0-connection-endpoints.md`](../docs/spec-v0.11.0-connection-endpoints.md).
 
 ## Not included (by design)
 
-No chat UI, no WebUI, no Socket.IO, no Firebase, no cloud bootstrap, no
-BlueBubbles compatibility, no private-API helpers. Not sandboxed and not
-intended for the App Store — it is a local companion/control app.
+No chat UI, no WebUI, no Socket.IO, no MicaGo cloud bootstrap, and no
+BlueBubbles compatibility. Firebase/FCM is optional and user-owned. The IMCore
+helper is optional, private-API based, and only enabled when the helper and macOS
+environment report support. Not sandboxed and not intended for the App Store —
+it is a local companion/control app.

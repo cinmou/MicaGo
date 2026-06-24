@@ -3,36 +3,13 @@
 This folder is the documentation home for **MicaGoServer**, a lightweight,
 Mica-native, Go iMessage relay server plus a native macOS SwiftUI companion app.
 
-If you are a future Claude/Codex session, **start here**, then read
-[`PROJECT_STATUS.md`](PROJECT_STATUS.md) and [`CURRENT_PLAN.md`](CURRENT_PLAN.md)
-before touching code.
-
-> ⚠️ **Workspace-instruction conflict (read this first).**
-> [`CLAUDE.md`](CLAUDE.md) and [`AGENTS.md`](AGENTS.md) in this folder are
-> generic "Workspace" templates describing a **gVisor/Ubuntu web container** with
-> a *"create checkpoint.md, commit, and push after every step"* workflow and
-> internet-via-proxy notes. **That does not match how this project is actually
-> being worked on**, which is a **local macOS** checkout where:
-> - changes are reviewed locally and **committed only when the user asks**
->   (nothing here is auto-committed/pushed);
-> - the Go tests run with a repo-local `GOCACHE` (`.gocache/`), and the SwiftUI
->   app is built with the **real local Xcode** (`xcodebuild`);
-> - there is no gVisor container, proxy, or DoH requirement.
->
-> Treat `CLAUDE.md`/`AGENTS.md` as **stale/non-authoritative** for environment
-> and git workflow. Follow the user's actual instructions and this index
-> instead. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) → "Docs & process notes"
-> for the suggested fix.
-
-## Recommended reading order (for a new agent)
+## Recommended reading order
 
 1. **[`README.md`](README.md)** (this file) — what each doc is and where things live.
-2. **[`PROJECT_STATUS.md`](PROJECT_STATUS.md)** — the dynamic per-version status table: what's Done / In validation / Planned / Deferred.
-3. **[`CURRENT_PLAN.md`](CURRENT_PLAN.md)** — the current direction and the next implementation phase.
-4. **[`../README.md`](../README.md)** — the server's top-level README (how to run, config, auth, smoke scripts).
-5. **[`spec-v0.9.0-client-api-contract.md`](spec-v0.9.0-client-api-contract.md)** — the **canonical client-facing API contract** (the single best reference for request/response shapes).
-6. The specific **`spec-v0.*`** doc(s) for the area you are about to change.
-7. **[`micago-feature-decision-matrix.md`](micago-feature-decision-matrix.md)** — the guardrails: what MicaGoServer deliberately keeps vs. skips vs. defers.
+2. **[`../README.md`](../README.md)** — the server's top-level README (how to run, config, auth, smoke scripts).
+3. **[`spec-v0.9.0-client-api-contract.md`](spec-v0.9.0-client-api-contract.md)** — the canonical client-facing API contract.
+4. The specific **`spec-v0.*`** doc(s) for the area you are changing.
+5. **[`micago-feature-decision-matrix.md`](micago-feature-decision-matrix.md)** — the guardrails: what MicaGoServer deliberately keeps vs. skips vs. defers.
 
 ## What each document is for
 
@@ -41,8 +18,6 @@ before touching code.
 | Document | Purpose |
 | --- | --- |
 | [`README.md`](README.md) | This documentation index. |
-| [`PROJECT_STATUS.md`](PROJECT_STATUS.md) | Dynamic status table across all versions/areas. Update it whenever a milestone changes state. |
-| [`CURRENT_PLAN.md`](CURRENT_PLAN.md) | Current direction + next phase (today: validate v0.11, then v0.12 Firebase self-host). |
 | [`../README.md`](../README.md) | Server top-level README: run/config/auth/smoke. |
 | [`../micago-mac-companion/README.md`](../micago-mac-companion/README.md) | Companion app README: open/build in Xcode. |
 
@@ -82,10 +57,6 @@ individual feature specs add detail and rationale.
 
 ### Roadmap specs (planned / deferred phases)
 
-Productization roadmap after v0.11.x. Build order:
-v0.11.2 → v0.11.3 → v0.11.4 → v0.12 → v0.13. See
-[`CURRENT_PLAN.md`](CURRENT_PLAN.md).
-
 | Document | Phase |
 | --- | --- |
 | [`spec-v0.11.2-companion-runtime-deployment.md`](spec-v0.11.2-companion-runtime-deployment.md) | **Planned:** bundle the Go backend in the app; companion-owned lifecycle (start/stop/restart, crash + backoff auto-restart), launch-at-login/auto-start/silent launch, menu-bar item, clear Full Disk Access failure surfacing. |
@@ -119,13 +90,6 @@ specs and should not be treated as requirements. MicaGoServer is intentionally
 | [`analysis/04-message-text-extraction.md`](analysis/04-message-text-extraction.md) | `attributedBody` text extraction analysis. |
 | [`analysis/05-realtime-sync-socket.md`](analysis/05-realtime-sync-socket.md) | Realtime/sync/socket analysis. |
 
-### Agent instructions (see conflict note above)
-
-| Document | Purpose |
-| --- | --- |
-| [`CLAUDE.md`](CLAUDE.md) | Generic Claude "Workspace" template. **Stale for this project's env/workflow.** |
-| [`AGENTS.md`](AGENTS.md) | Generic Codex "Workspace" template. **Stale for this project's env/workflow.** |
-
 ## Where things live (repository map)
 
 ```
@@ -138,29 +102,9 @@ MicaGoServer/
     CHANGELOG.md             # currently only tracks v0.1.1 (stale; see PROJECT_STATUS)
   micago-mac-companion/      # native macOS SwiftUI controller (Xcode project)
   docs/                      # you are here
-    README.md  PROJECT_STATUS.md  CURRENT_PLAN.md
+    README.md
     spec-v*.md               # server + companion specs
     v0.9.0-gap-analysis.md  v0.1.1-live-test-report.md
     micago-feature-decision-matrix.md  bluebubbles-full-audit.md
     analysis/                # BlueBubbles reference analysis
-```
-
-## Proposed future folder organization (NOT yet applied)
-
-To reduce clutter, a future pass could reorganize `docs/` as below. **This has
-not been done** because moving files safely requires updating every cross-link
-(this index, the specs that reference each other, both READMEs, and the
-gap-analysis). Do it as a dedicated, link-checked pass — see
-[`PROJECT_STATUS.md`](PROJECT_STATUS.md) → "Docs & process notes".
-
-```
-docs/
-  README.md
-  PROJECT_STATUS.md
-  CURRENT_PLAN.md
-  specs/      # spec-v*.md (server + companion)
-  audits/     # bluebubbles-full-audit.md, micago-feature-decision-matrix.md
-  reports/    # v0.9.0-gap-analysis.md, v0.1.1-live-test-report.md
-  agents/     # CLAUDE.md, AGENTS.md (after de-staling)
-  analysis/   # already exists
 ```

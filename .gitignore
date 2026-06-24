@@ -131,4 +131,14 @@ coverage/
 /MicaGoFlutterClient/Ref
 # Reference projects (BlueBubbles, Mategram, etc.) — study only, never committed.
 Ref/
+ref/
+refs/
 /.claude
+
+# Local Firebase / Google credentials. Example/template files may be tracked.
+google-services.json
+GoogleService-Info.plist
+*service-account*.json
+firebase-service-account*.json
+!*.example.json
+!**/*.example.json
