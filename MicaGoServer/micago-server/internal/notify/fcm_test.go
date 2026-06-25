@@ -74,7 +74,8 @@ func TestSignedAssertionHasThreeSegments(t *testing.T) {
 func TestFCMMessagePayloadIsMinimalStringData(t *testing.T) {
 	n := Notification{
 		Type: "message:new", MessageGUID: "g1", ChatGUID: "c1",
-		Title: "Jane", Body: "hi", PreviewMode: "sender_and_text", CreatedAt: 123,
+		Title: "Jane", Body: "hi", Handle: "+15550001",
+		PreviewMode: "sender_and_text", CreatedAt: 123,
 	}
 	msg := fcmMessage("dev-token", n, 24*time.Hour)
 	inner := msg["message"].(map[string]any)
@@ -85,14 +86,20 @@ func TestFCMMessagePayloadIsMinimalStringData(t *testing.T) {
 	if data["title"] != "Jane" || data["body"] != "hi" || data["chatGuid"] != "c1" {
 		t.Fatalf("unexpected data payload: %+v", data)
 	}
+	// C31: the raw sender handle is carried so the client can fall back to it and
+	// resolve it on-device (the handle is already part of the message API).
+	if data["handle"] != "+15550001" {
+		t.Fatalf("expected handle in payload, got %q", data["handle"])
+	}
 	android := inner["android"].(map[string]any)
 	if android["ttl"] != "86400s" {
 		t.Fatalf("expected 24h ttl, got %v", android["ttl"])
 	}
-	// No contact/handle/token fields leak into the payload.
+	// Only the intentional, minimal string fields are present — no tokens, no
+	// contact book, no message history.
 	for k := range data {
 		switch k {
-		case "type", "messageGuid", "chatGuid", "sourceRowId", "title", "body", "previewMode", "createdAt":
+		case "type", "messageGuid", "chatGuid", "sourceRowId", "title", "body", "handle", "previewMode", "createdAt":
 		default:
 			t.Fatalf("unexpected data key %q", k)
 		}

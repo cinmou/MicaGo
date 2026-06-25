@@ -207,7 +207,7 @@ func (d *Dispatcher) SendTest(ctx context.Context, device store.DeviceRecord) er
 	}
 	return provider.Send(ctx, device, Notification{
 		Type:        "test",
-		Title:       "MicaGoServer test notification",
+		Title:       "micaGO Server test notification",
 		Body:        "Notifications are configured for this device",
 		PreviewMode: previewMode,
 		CreatedAt:   time.Now().UnixMilli(),
@@ -215,21 +215,30 @@ func (d *Dispatcher) SendTest(ctx context.Context, device store.DeviceRecord) er
 }
 
 func buildNotification(event relaydb.NotificationEvent, previewMode string) Notification {
-	title := "New iMessage"
-	body := ""
+	// C31: "title = who, body = what" (mature messaging-app layout). The sender is
+	// the chat's best-known name (display name, else the handle); the body carries
+	// the text only when the preview mode allows it. We never put a GUID or an
+	// empty string in the title.
 	sender := event.ChatLabel()
+	handle := ""
+	if event.Message.Handle != nil {
+		handle = event.Message.Handle.ID
+	}
 
+	title := "New message"
+	body := ""
 	switch previewMode {
-	case "sender":
-		body = sender
+	case "none":
+		// Privacy: no sender, no text — just a generic wake.
 	case "sender_and_text":
 		if sender != "" {
 			title = sender
 		}
 		body = strings.TrimSpace(stringValue(event.Message.Text))
-	case "none":
-	default:
-		body = sender
+	default: // "sender" (and any unknown value): show who, not what.
+		if sender != "" {
+			title = sender
+		}
 	}
 
 	var sourceRowID int64
@@ -244,6 +253,7 @@ func buildNotification(event relaydb.NotificationEvent, previewMode string) Noti
 		SourceRowID: sourceRowID,
 		Title:       title,
 		Body:        body,
+		Handle:      handle,
 		PreviewMode: previewMode,
 		CreatedAt:   time.Now().UnixMilli(),
 	}

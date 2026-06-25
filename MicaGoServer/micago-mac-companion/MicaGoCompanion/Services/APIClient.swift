@@ -123,7 +123,7 @@ struct APIClient {
 
     func syncSettings() async throws -> SyncSettings {
         let (data, response) = try await Self.session().data(for: request("api/sync/settings"))
-        try Self.validate(response)
+        try Self.validate(response, body: data)
         return try JSONDecoder().decode(SyncSettings.self, from: data)
     }
 
@@ -142,7 +142,7 @@ struct APIClient {
 
     func syncRules() async throws -> SyncRulesResponse {
         let (data, response) = try await Self.session().data(for: request("api/sync/rules"))
-        try Self.validate(response)
+        try Self.validate(response, body: data)
         return try JSONDecoder().decode(SyncRulesResponse.self, from: data)
     }
 
@@ -184,7 +184,7 @@ struct APIClient {
             "api/messages/recent",
             query: [URLQueryItem(name: "limit", value: "\(limit)"),
                     URLQueryItem(name: "service", value: "all")]))
-        try Self.validate(response)
+        try Self.validate(response, body: data)
         return try JSONDecoder().decode(RecentMessagesResponse.self, from: data).data
     }
 
@@ -229,7 +229,7 @@ struct APIClient {
             query: [URLQueryItem(name: "service", value: "all"),
                     URLQueryItem(name: "withArchived", value: "true"),
                     URLQueryItem(name: "limit", value: "500")]))
-        try Self.validate(response)
+        try Self.validate(response, body: data)
         return try JSONDecoder().decode(ChatListResponse.self, from: data).data
     }
 
@@ -286,6 +286,23 @@ struct APIClient {
             throw APIError.badResponse
         }
         guard (200..<300).contains(http.statusCode) else {
+            throw APIError.status(http.statusCode)
+        }
+    }
+
+    /// Like `validate`, but on a non-2xx it surfaces the server's structured
+    /// error message (the `{error:{code,message}}` envelope) so callers can show
+    /// *why* the request failed — e.g. "sync settings are not available" —
+    /// instead of a bare status code.
+    private static func validate(_ response: URLResponse, body data: Data) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.badResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data),
+               !env.error.message.isEmpty {
+                throw APIError.message("HTTP \(http.statusCode): \(env.error.message)")
+            }
             throw APIError.status(http.statusCode)
         }
     }

@@ -107,7 +107,7 @@ void main() {
     expect(c.status.phase, OnboardingPhase.done);
   });
 
-  test('sync failure blocks onboarding and shows retry state', () async {
+  test('sync failure does not block pairing', () async {
     final c = OnboardingController(
       prober: (_, _) async => true,
       runInitialSync: (_, _) async => throw Exception('network blip'),
@@ -116,8 +116,8 @@ void main() {
       _payload(ConnectionMode.lanFirst),
       ConnectionMode.lanFirst,
     );
-    expect(profile, isNull);
-    expect(c.status.phase, OnboardingPhase.failed);
-    expect(c.status.message, contains('bootstrap failed'));
+    expect(profile, isNotNull);
+    expect(c.status.phase, OnboardingPhase.done);
+    expect(c.status.message, contains('retry in the background'));
   });
 }

@@ -13,6 +13,7 @@ import (
 // probe report the helper as ready — without waiting for the TTL. This is the
 // core of the "installed but still shows unavailable" fix.
 func TestCapabilitiesRescanAfterInstall(t *testing.T) {
+	withMacOSVersion(t, "14.0")
 	installed := false
 	p := &HelperPerformer{
 		CacheTTL: 30 * time.Second,
@@ -48,6 +49,7 @@ func TestCapabilitiesRescanAfterInstall(t *testing.T) {
 
 // A helper that runs but reports no usable selectors is "unsupported", not ready.
 func TestCapabilitiesUnsupportedSelectors(t *testing.T) {
+	withMacOSVersion(t, "14.0")
 	p := &HelperPerformer{
 		Lookup: func() (string, error) { return "/tmp/h", nil },
 		Runner: func(_ context.Context, _ string, _ helperEnvelope) (helperEnvelope, error) {
@@ -102,4 +104,47 @@ func TestHelperInstallDir(t *testing.T) {
 	if want := filepath.Join(home, ".micago", "bin"); dir != want {
 		t.Fatalf("HelperInstallDir = %q, want %q", dir, want)
 	}
+}
+
+func TestCapabilitiesRejectsPreVenturaBeforeHelperInstall(t *testing.T) {
+	withMacOSVersion(t, "12.7")
+	p := &HelperPerformer{
+		Lookup: func() (string, error) {
+			t.Fatal("helper lookup should not run on unsupported macOS")
+			return "", nil
+		},
+	}
+	c := p.Capabilities(context.Background())
+	if c.Available || c.PlatformSupported || c.State != HelperStateUnsupported {
+		t.Fatalf("got %+v, want unsupported platform", c)
+	}
+	if c.MinimumMacOS != "13.0" || c.Reason == "" {
+		t.Fatalf("missing support metadata: %+v", c)
+	}
+}
+
+func TestCapabilitiesWarnsForTahoe(t *testing.T) {
+	withMacOSVersion(t, "26.0")
+	p := &HelperPerformer{
+		Lookup: func() (string, error) { return "/tmp/h", nil },
+		Runner: func(_ context.Context, _ string, _ helperEnvelope) (helperEnvelope, error) {
+			return helperEnvelope{Capabilities: map[string]bool{"edit": true}}, nil
+		},
+	}
+	c := p.Capabilities(context.Background())
+	if !c.Available || c.PlatformWarning == "" {
+		t.Fatalf("got %+v, want ready with Tahoe warning", c)
+	}
+}
+
+func withMacOSVersion(t *testing.T, version string) {
+	t.Helper()
+	old := detectMacOSProductVersion
+	oldGOOS := currentGOOS
+	detectMacOSProductVersion = func() string { return version }
+	currentGOOS = "darwin"
+	t.Cleanup(func() {
+		detectMacOSProductVersion = old
+		currentGOOS = oldGOOS
+	})
 }

@@ -70,29 +70,6 @@ class MessageDisplayPage extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         Text(
-          'Recent messages per chat',
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'How many recent messages to fetch per chat during initial sync.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: [
-              for (final n in const [50, 100, 200])
-                _ChoiceTile(
-                  label: '$n messages',
-                  selected: p.messagesPerChat == n,
-                  onTap: () => set(p.copyWith(messagesPerChat: n)),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text(
           'Delivery & read labels',
           style: Theme.of(context).textTheme.titleSmall,
         ),

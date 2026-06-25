@@ -1,5 +1,6 @@
 import Foundation
 import Contacts
+import AppKit
 
 /// One contact's display info (name + the addresses it can be matched on).
 /// Read-only, name + phones/emails only — never notes/addresses/birthdays.
@@ -61,6 +62,16 @@ final class ContactsStore: ObservableObject {
                 self?.refreshStatus()
                 if granted { await self?.load() }
             }
+        }
+    }
+
+    /// Opens System Settings → Privacy & Security → Contacts. macOS only lets an
+    /// app present the permission prompt itself once (while status is
+    /// `.notDetermined`); once denied/restricted the user must toggle access
+    /// here, so the UI routes here rather than offering a dead "Allow" button.
+    func openSystemSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
+            NSWorkspace.shared.open(url)
         }
     }
 

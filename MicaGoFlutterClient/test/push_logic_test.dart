@@ -58,4 +58,78 @@ void main() {
       expect(pushShouldNotify({'type': 'test', 'title': 'x'}), isFalse);
     });
   });
+
+  group('C30 notification formatting + reply', () {
+    test('title falls back to a generic label when sender is absent', () {
+      expect(notificationTitle({'title': 'Jane'}), 'Jane');
+      expect(notificationTitle({'title': ''}), 'New message');
+      expect(notificationTitle({}), 'New message');
+    });
+
+    test('body is null when preview is off', () {
+      expect(notificationBody({'body': 'hello'}), 'hello');
+      expect(notificationBody({'body': ''}), isNull);
+      expect(notificationBody({}), isNull);
+    });
+
+    test('reply text is trimmed and empty input rejected', () {
+      expect(cleanReplyText('  hi  '), 'hi');
+      expect(cleanReplyText(''), isNull);
+      expect(cleanReplyText('   '), isNull);
+      expect(cleanReplyText(null), isNull);
+    });
+  });
+
+  group('C31 notification title + preview', () {
+    test('prefers an on-device contact name over everything', () {
+      expect(
+        messageNotificationTitle(
+          contactName: 'Mom',
+          serverTitle: '+15550001',
+          handle: '+15550001',
+        ),
+        'Mom',
+      );
+    });
+
+    test('uses the server sender name when it is not a generic placeholder', () {
+      expect(
+        messageNotificationTitle(serverTitle: 'Jane', handle: '+15550001'),
+        'Jane',
+      );
+      // Generic server titles fall through to the handle.
+      expect(
+        messageNotificationTitle(
+          serverTitle: 'New message',
+          handle: '+15550001',
+        ),
+        '+15550001',
+      );
+      expect(
+        messageNotificationTitle(
+          serverTitle: 'New iMessage',
+          handle: 'a@b.com',
+        ),
+        'a@b.com',
+      );
+    });
+
+    test('falls back to the handle, then a generic label — never empty', () {
+      expect(messageNotificationTitle(handle: '+15550001'), '+15550001');
+      expect(messageNotificationTitle(), 'New message');
+      expect(
+        messageNotificationTitle(serverTitle: 'New message'),
+        'New message',
+      );
+      expect(messageNotificationTitle(contactName: '   '), 'New message');
+    });
+
+    test('local body honors the preview mode (matches FCM privacy)', () {
+      expect(localNotificationBody('hello', 'sender_and_text'), 'hello');
+      expect(localNotificationBody('hello', 'sender'), isNull);
+      expect(localNotificationBody('hello', 'none'), isNull);
+      expect(localNotificationBody('   ', 'sender_and_text'), isNull);
+      expect(localNotificationBody(null, 'sender_and_text'), isNull);
+    });
+  });
 }

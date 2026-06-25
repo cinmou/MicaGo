@@ -358,13 +358,16 @@ type ServerStatusResponse struct {
 type ServerMessageActionsStatus struct {
 	Available bool `json:"available"`
 	// State is one of missing | not_runnable | unsupported_selectors | ready.
-	State            string `json:"state"`
-	Edit             bool   `json:"edit"`
-	Retract          bool   `json:"retract"`
-	Delete           bool   `json:"delete"`
-	Helper           string `json:"helper,omitempty"`
-	Reason           string `json:"reason,omitempty"`
-	RequiresMessages bool   `json:"requiresMessages"`
+	State             string `json:"state"`
+	Edit              bool   `json:"edit"`
+	Retract           bool   `json:"retract"`
+	Delete            bool   `json:"delete"`
+	Helper            string `json:"helper,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+	RequiresMessages  bool   `json:"requiresMessages"`
+	MinimumMacOS      string `json:"minimumMacOS,omitempty"`
+	PlatformSupported bool   `json:"platformSupported"`
+	PlatformWarning   string `json:"platformWarning,omitempty"`
 }
 
 // ServerCapabilities reports what the running chat.db schema supports, so

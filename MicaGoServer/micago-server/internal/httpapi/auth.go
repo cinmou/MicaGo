@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"crypto/subtle"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -9,6 +10,7 @@ import (
 type AuthConfig struct {
 	Enabled bool
 	Token   string
+	Logger  *log.Logger
 }
 
 func (c AuthConfig) Wrap(next http.Handler) http.Handler {
@@ -17,6 +19,10 @@ func (c AuthConfig) Wrap(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validBearerToken(r, c.Token) {
+			if c.Logger != nil {
+				c.Logger.Printf("auth rejected %s %s from %s: missing or invalid bearer token",
+					r.Method, r.URL.Path, r.RemoteAddr)
+			}
 			writeUnauthorized(w)
 			return
 		}

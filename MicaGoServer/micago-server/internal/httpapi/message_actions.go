@@ -69,14 +69,17 @@ func (h *Handlers) messageActionCapabilities(ctx context.Context) imessage.Capab
 func (h *Handlers) messageActionsStatus(ctx context.Context) store.ServerMessageActionsStatus {
 	c := h.messageActionCapabilities(ctx)
 	return store.ServerMessageActionsStatus{
-		Available:        c.Available,
-		State:            c.State,
-		Edit:             c.Edit,
-		Retract:          c.Retract,
-		Delete:           c.Delete,
-		Helper:           c.Helper,
-		Reason:           c.Reason,
-		RequiresMessages: c.RequiresMessages,
+		Available:         c.Available,
+		State:             c.State,
+		Edit:              c.Edit,
+		Retract:           c.Retract,
+		Delete:            c.Delete,
+		Helper:            c.Helper,
+		Reason:            c.Reason,
+		RequiresMessages:  c.RequiresMessages,
+		MinimumMacOS:      c.MinimumMacOS,
+		PlatformSupported: c.PlatformSupported,
+		PlatformWarning:   c.PlatformWarning,
 	}
 }
 

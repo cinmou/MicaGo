@@ -28,6 +28,10 @@ struct SyncControlPage: View {
                 }
             }
 
+            if let err = model.syncControlError {
+                SyncControlErrorCard(message: err)
+            }
+
             ContactsCard()
             DefaultPolicyCard()
             BackfillSettingsCard()
@@ -44,6 +48,39 @@ struct SyncControlPage: View {
             RuleEditorSheet(target: target)
                 .environmentObject(model)
                 .environmentObject(contacts)
+        }
+    }
+}
+
+// MARK: - Load-error state (Retry + Copy diagnostics)
+
+/// Shown when one or more Sync Control requests fail to load. Replaces the old
+/// single-line "Server returned HTTP 500" inline note with an actionable card
+/// that names which request failed and offers Retry + Copy diagnostics.
+private struct SyncControlErrorCard: View {
+    @EnvironmentObject var model: AppModel
+    let message: String
+
+    var body: some View {
+        SectionCard(title: "Couldn't load Sync Control") {
+            Text(message)
+                .font(.callout).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("The server is reachable but a Sync Control request failed. If the backend was just updated, fully quit and relaunch it (migrations run on start). Then retry, or copy diagnostics to share.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button { Task { await model.loadSyncControl() } } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(model.syncControlDiagnosticsText, forType: .string)
+                } label: {
+                    Label("Copy diagnostics", systemImage: "doc.on.doc")
+                }
+                Spacer()
+            }
         }
     }
 }
@@ -141,12 +178,11 @@ private struct ContactsCard: View {
                 }
                 Spacer()
                 if !contacts.isAuthorized {
-                    Button("Allow Contacts access") { contacts.requestAccess() }
-                        .disabled(contacts.status == .denied || contacts.status == .restricted)
+                    Button("Open System Settings") { contacts.openSystemSettings() }
                 }
             }
-            if contacts.status == .denied || contacts.status == .restricted {
-                Text("Contacts access is off. The app still works with raw handles. Enable it in System Settings → Privacy & Security → Contacts.")
+            if !contacts.isAuthorized {
+                Text("Contacts permission is managed by macOS and can't be granted from this window. Open System Settings → Privacy & Security → Contacts and enable MicaGo Companion. Without it, contact names and photos may be unavailable — the app still works using the raw phone/email handles where supported.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -168,7 +204,7 @@ private struct ContactSearchCard: View {
     var body: some View {
         SectionCard(title: "Find a Contact") {
             if !contacts.isAuthorized {
-                Text("Allow Contacts access above to search for people and create handle rules.")
+                Text("Enable Contacts access (see above) to search for people and create handle rules.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 TextField("Search name, phone, or email", text: $query)

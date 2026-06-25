@@ -29,38 +29,164 @@ struct MicaGoCompanionApp: App {
             CommandGroup(replacing: .newItem) {}
         }
 
-        MenuBarExtra {
-            MenuBarContent()
-                .environmentObject(model)
-                .environmentObject(runtime)
-                .environmentObject(backend)
-        } label: {
-            Image(menuBarAsset)
-                .renderingMode(.template)
-                .opacity(menuBarOpacity)
-        }
+    }
+}
+
+/// AppKit owns the menu-bar item because SwiftUI `MenuBarExtra` does not
+/// reliably apply label modifiers to the actual NSStatusBarButton.
+@MainActor
+final class MenuBarStatusItemController: NSObject, NSMenuDelegate {
+    private struct Appearance {
+        var assetName: String
+        var appearsDisabled: Bool
+        var helpText: String
     }
 
-    /// Resolved user-facing state (process lifecycle + reachability).
-    private var menuBarState: ServerDisplayState {
+    private let model: AppModel
+    private let runtime: RuntimeMonitor
+    private let backend: BackendController
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let menu = NSMenu()
+    private var cancellables = Set<AnyCancellable>()
+
+    init(model: AppModel, runtime: RuntimeMonitor, backend: BackendController) {
+        self.model = model
+        self.runtime = runtime
+        self.backend = backend
+        super.init()
+
+        menu.autoenablesItems = false
+        menu.delegate = self
+
+        if let button = statusItem.button {
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleProportionallyDown
+        }
+        statusItem.menu = menu
+        updateStatusItem()
+
+        backend.$processState
+            .combineLatest(model.$reachable)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in self?.updateStatusItem() }
+            .store(in: &cancellables)
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        rebuildMenu(menu)
+    }
+
+    private var displayState: ServerDisplayState {
         serverDisplayState(process: backend.processState, reachable: model.reachable)
     }
 
-    /// Custom menu-bar asset: `mica.error` for error states, `mica` otherwise.
-    private var menuBarAsset: String {
-        switch menuBarState {
-        case .crashed: return "mica.error"
-        default: return "mica"
+    private var appearance: Appearance {
+        switch displayState {
+        case .running:
+            return Appearance(
+                assetName: "mica",
+                appearsDisabled: false,
+                helpText: L10n.tr("menu.running")
+            )
+        case .externalUnmanaged:
+            return Appearance(
+                assetName: "mica",
+                appearsDisabled: false,
+                helpText: L10n.tr("menu.external")
+            )
+        case .stopped, .starting, .stopping:
+            return Appearance(
+                assetName: "mica",
+                appearsDisabled: true,
+                helpText: L10n.tr("menu.notRunning")
+            )
+        case .notInstalled, .startingUnreachable, .crashed:
+            return Appearance(
+                assetName: "mica.error",
+                appearsDisabled: false,
+                helpText: L10n.tr("menu.notRunning")
+            )
         }
     }
 
-    /// Full opacity for running / external / error; weakened (gray) for the
-    /// non-running states (stopped, starting, stopping, not installed).
-    private var menuBarOpacity: Double {
-        switch menuBarState {
-        case .running, .externalUnmanaged, .crashed: return 1.0
-        default: return 0.4
+    private func updateStatusItem() {
+        guard let button = statusItem.button else { return }
+        let current = appearance
+        let image = NSImage(named: current.assetName)
+        image?.isTemplate = true
+        button.image = image
+        button.appearsDisabled = current.appearsDisabled
+        button.toolTip = current.helpText
+    }
+
+    private func rebuildMenu(_ menu: NSMenu) {
+        let state = displayState
+        menu.removeAllItems()
+
+        let title = NSMenuItem(title: "micaGO — \(state.label)", action: nil, keyEquivalent: "")
+        title.isEnabled = false
+        menu.addItem(title)
+        menu.addItem(.separator())
+
+        menu.addItem(item(L10n.tr("menu.openDashboard"), action: #selector(openDashboard)))
+
+        let start = item(L10n.tr("menu.startServer"), action: #selector(startServer))
+        start.isEnabled = canStart(state)
+        menu.addItem(start)
+
+        let stop = item(L10n.tr("menu.stopServer"), action: #selector(stopServer))
+        stop.isEnabled = canStop
+        menu.addItem(stop)
+
+        let keepAwake = item(L10n.tr("menu.keepAwake"), action: #selector(toggleKeepAwake))
+        keepAwake.state = runtime.keepAwakeActive ? .on : .off
+        menu.addItem(keepAwake)
+
+        menu.addItem(.separator())
+        menu.addItem(item(L10n.tr("menu.quit"), action: #selector(quit)))
+    }
+
+    private func item(_ title: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    private func canStart(_ state: ServerDisplayState) -> Bool {
+        guard backend.binaryExists else { return false }
+        if state == .externalUnmanaged { return false }
+        switch backend.processState {
+        case .stopped, .exited, .failed, .notInstalled: return true
+        default: return false
         }
+    }
+
+    private var canStop: Bool {
+        switch backend.processState {
+        case .running, .starting: return true
+        default: return false
+        }
+    }
+
+    @objc private func openDashboard() {
+        presentDashboardFromAppKit()
+    }
+
+    @objc private func startServer() {
+        backend.start()
+    }
+
+    @objc private func stopServer() {
+        backend.stop()
+    }
+
+    @objc private func toggleKeepAwake() {
+        runtime.setKeepAwake(!runtime.keepAwakeActive)
+    }
+
+    @objc private func quit() {
+        backend.shutdownForQuit()
+        NSApp.terminate(nil)
     }
 }
 
@@ -68,8 +194,15 @@ struct MicaGoCompanionApp: App {
 /// launched silently with no window) and clean shutdown of the child backend.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
+    private var menuBarStatusItem: MenuBarStatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        menuBarStatusItem = MenuBarStatusItemController(
+            model: AppModel.shared,
+            runtime: RuntimeMonitor.shared,
+            backend: BackendController.shared
+        )
+
         let hidden = UserDefaults.standard.bool(forKey: "launchHidden")
         if hidden {
             // Silent launch: close the window opened by the WindowGroup.
@@ -153,6 +286,47 @@ func hasVisibleDashboardWindow() -> Bool {
     NSApp.windows.contains { $0.isVisible && $0.styleMask.contains(.titled) }
 }
 
+private func existingDashboardWindow() -> NSWindow? {
+    NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) }
+}
+
+@MainActor
+private final class DashboardWindowPresenter {
+    static let shared = DashboardWindowPresenter()
+    private var window: NSWindow?
+
+    func show() {
+        if let existing = existingDashboardWindow() ?? window {
+            existing.deminiaturize(nil)
+            existing.makeKeyAndOrderFront(nil)
+            applyActivationPolicy()
+            return
+        }
+
+        let root = ContentView()
+            .environmentObject(AppModel.shared)
+            .environmentObject(RuntimeMonitor.shared)
+            .environmentObject(BackendController.shared)
+            .environmentObject(ContactsStore())
+            .environmentObject(TunnelController.shared)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "micaGO"
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: root)
+        window.center()
+        window.setFrameAutosaveName("MicaGoDashboard")
+        window.makeKeyAndOrderFront(nil)
+        self.window = window
+        applyActivationPolicy()
+    }
+}
+
 /// Single source of truth for the app's Dock presence. Accessory (no Dock icon)
 /// only when the user enabled "Hide Dock icon" AND no Dashboard window is open;
 /// otherwise regular. The menu-bar item is unaffected by activation policy.
@@ -172,4 +346,11 @@ func presentDashboard(openWindow: OpenWindowAction) {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
     openWindow(id: "dashboard")
+}
+
+@MainActor
+func presentDashboardFromAppKit() {
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+    DashboardWindowPresenter.shared.show()
 }

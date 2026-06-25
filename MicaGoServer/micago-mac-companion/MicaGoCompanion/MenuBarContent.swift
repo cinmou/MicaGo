@@ -13,14 +13,7 @@ struct MenuBarContent: View {
     var body: some View {
         let state = serverDisplayState(process: backend.processState, reachable: model.reachable)
 
-        Text("MicaGo — \(state.label)")
-
-        if let lan = lanURL {
-            Text("LAN: \(lan)")
-        }
-        if let pub = publicURL {
-            Text("Public: \(pub)")
-        }
+        Text("micaGO — \(state.label)")
 
         Divider()
 
@@ -31,11 +24,6 @@ struct MenuBarContent: View {
         Button("Stop Server") { backend.stop() }
             .disabled(!canStop)
 
-        Button(runtime.messagesRunning ? "Messages.app is running" : "Open Messages") {
-            runtime.openMessages()
-        }
-        .disabled(runtime.messagesRunning)
-
         Toggle("Keep Awake", isOn: Binding(
             get: { runtime.keepAwakeActive },
             set: { runtime.setKeepAwake($0) }
@@ -43,20 +31,10 @@ struct MenuBarContent: View {
 
         Divider()
 
-        Button("Quit MicaGo Companion") {
+        Button("Quit micaGO Companion") {
             backend.shutdownForQuit()
             NSApp.terminate(nil)
         }
-    }
-
-    // C25: show the Android-usable LAN address (loopback is no longer surfaced).
-    private var lanURL: String? {
-        model.urls?.lan.first?.baseUrl
-    }
-
-    private var publicURL: String? {
-        guard let pub = model.urls?.public, pub.enabled, !pub.baseUrl.isEmpty else { return nil }
-        return pub.baseUrl
     }
 
     private func canStart(_ state: ServerDisplayState) -> Bool {

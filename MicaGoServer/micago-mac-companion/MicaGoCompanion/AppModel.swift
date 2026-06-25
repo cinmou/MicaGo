@@ -72,6 +72,9 @@ final class AppModel: ObservableObject {
     @Published var recentCount: Int = 50
     @Published var syncBusy = false
     @Published var syncSettings: SyncSettings = .defaults
+    /// Non-nil when `loadSyncControl` failed; drives the Sync Control error card
+    /// (Retry + Copy diagnostics) instead of a bare inline HTTP-status line.
+    @Published var syncControlError: String?
 
     // C11 live sync monitor
     @Published var syncNowBusy = false
@@ -438,21 +441,41 @@ final class AppModel: ObservableObject {
     // MARK: - Sync control actions (v0.11.3)
 
     func loadSyncControl() async {
-        guard let baseURL else { return }
-        let client = APIClient(baseURL: baseURL, token: token)
-        do {
-            async let rules = client.syncRules()
-            async let settings = client.syncSettings()
-            async let chats = client.chats()
-            async let recent = client.recentMessages(limit: recentCount)
-            syncRules = try await rules
-            syncSettings = try await settings
-            chatsList = try await chats
-            recentMessages = try await recent
-            lastError = nil
-        } catch {
-            lastError = "Sync control: \(error.localizedDescription)"
+        guard let baseURL else {
+            syncControlError = "Not connected to a server yet."
+            return
         }
+        let client = APIClient(baseURL: baseURL, token: token)
+        // Load each endpoint independently so one failing request doesn't blank
+        // the whole page, and so the error names exactly which call failed (the
+        // page previously collapsed every failure into one opaque HTTP status).
+        var failures: [String] = []
+        do { syncRules = try await client.syncRules() }
+        catch { failures.append("sync rules — \(error.localizedDescription)") }
+        do { syncSettings = try await client.syncSettings() }
+        catch { failures.append("sync settings — \(error.localizedDescription)") }
+        do { chatsList = try await client.chats() }
+        catch { failures.append("chats — \(error.localizedDescription)") }
+        do { recentMessages = try await client.recentMessages(limit: recentCount) }
+        catch { failures.append("recent messages — \(error.localizedDescription)") }
+
+        if failures.isEmpty {
+            syncControlError = nil
+            lastError = nil
+        } else {
+            syncControlError = "These requests failed:\n" + failures.map { "• \($0)" }.joined(separator: "\n")
+        }
+    }
+
+    /// Redaction-safe diagnostics for the Sync Control error card (no token, no
+    /// message text) — what the Copy diagnostics button puts on the pasteboard.
+    var syncControlDiagnosticsText: String {
+        var lines = ["MicaGo Sync Control diagnostics"]
+        lines.append("server: \(baseURL?.absoluteString ?? "—")")
+        lines.append("reachable: \(reachable)  authValid: \(authValid)")
+        lines.append("loaded: chats \(chatsList.count) · recent \(recentMessages.count) · rules \(syncRules?.rules.count ?? 0)")
+        lines.append("error: \(syncControlError ?? "none")")
+        return lines.joined(separator: "\n")
     }
 
     func setRecentCount(_ count: Int) async {

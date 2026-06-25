@@ -62,8 +62,9 @@ func TestDispatcherBuildsNotificationPreview(t *testing.T) {
 		ChatGUID:       "chat-1",
 		ChatIdentifier: ptr("chat@example.com"),
 		Message: store.MessageJSON{
-			GUID: "msg-1",
-			Text: &text,
+			GUID:   "msg-1",
+			Text:   &text,
+			Handle: &store.HandleJSON{ID: "+15550001"},
 		},
 	}
 	notification := buildNotification(event, "sender_and_text")
@@ -72,6 +73,29 @@ func TestDispatcherBuildsNotificationPreview(t *testing.T) {
 	}
 	if notification.Body != "hello" {
 		t.Fatalf("expected text body, got %q", notification.Body)
+	}
+	// C31: the raw handle is carried so the client can fall back / resolve it.
+	if notification.Handle != "+15550001" {
+		t.Fatalf("expected handle, got %q", notification.Handle)
+	}
+}
+
+func TestBuildNotificationPreviewModes(t *testing.T) {
+	text := "secret text"
+	event := relaydb.NotificationEvent{
+		ChatGUID:       "chat-1",
+		ChatIdentifier: ptr("+15550001"),
+		Message:        store.MessageJSON{GUID: "msg-1", Text: &text},
+	}
+	// "none": a generic title, no sender, no text (privacy).
+	none := buildNotification(event, "none")
+	if none.Title != "New message" || none.Body != "" {
+		t.Fatalf("none mode leaked content: %+v", none)
+	}
+	// "sender": who, not what.
+	sender := buildNotification(event, "sender")
+	if sender.Title != "+15550001" || sender.Body != "" {
+		t.Fatalf("sender mode: title=%q body=%q", sender.Title, sender.Body)
 	}
 }
 

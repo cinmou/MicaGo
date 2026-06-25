@@ -33,14 +33,17 @@ const (
 )
 
 type Capabilities struct {
-	Edit             bool   `json:"edit"`
-	Retract          bool   `json:"retract"`
-	Delete           bool   `json:"delete"`
-	Available        bool   `json:"available"`
-	State            string `json:"state"`
-	Helper           string `json:"helper,omitempty"`
-	Reason           string `json:"reason,omitempty"`
-	RequiresMessages bool   `json:"requiresMessages"`
+	Edit              bool   `json:"edit"`
+	Retract           bool   `json:"retract"`
+	Delete            bool   `json:"delete"`
+	Available         bool   `json:"available"`
+	State             string `json:"state"`
+	Helper            string `json:"helper,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+	RequiresMessages  bool   `json:"requiresMessages"`
+	MinimumMacOS      string `json:"minimumMacOS,omitempty"`
+	PlatformSupported bool   `json:"platformSupported"`
+	PlatformWarning   string `json:"platformWarning,omitempty"`
 }
 
 type Request struct {
@@ -146,6 +149,15 @@ func (p *HelperPerformer) InvalidateCapabilities() {
 }
 
 func (p *HelperPerformer) probeCapabilities(ctx context.Context) Capabilities {
+	platform := ActionPlatformSupport()
+	if !platform.Supported {
+		return platform.apply(Capabilities{
+			Available:        false,
+			State:            HelperStateUnsupported,
+			Reason:           platform.Reason,
+			RequiresMessages: true,
+		})
+	}
 	path, err := p.helperPath()
 	if err != nil {
 		// No usable path. Distinguish "nothing installed" from "found but not
@@ -154,37 +166,37 @@ func (p *HelperPerformer) probeCapabilities(ctx context.Context) Capabilities {
 		if strings.Contains(strings.ToLower(err.Error()), "not executable") {
 			state = HelperStateNotRunnable
 		}
-		return Capabilities{
+		return platform.apply(Capabilities{
 			Available:        false,
 			State:            state,
 			Reason:           err.Error(),
 			RequiresMessages: true,
-		}
+		})
 	}
 	env, err := p.run(ctx, path, helperEnvelope{Action: "status"})
 	if err != nil {
-		return Capabilities{
+		return platform.apply(Capabilities{
 			Available:        false,
 			State:            HelperStateNotRunnable,
 			Helper:           path,
 			Reason:           err.Error(),
 			RequiresMessages: true,
-		}
+		})
 	}
 	caps := env.Capabilities
 	edit, retract, del := caps["edit"], caps["retract"], caps["delete"]
 	if !edit && !retract && !del {
 		// The helper ran but reports none of the required selectors (e.g. a macOS
 		// where the private IMCore API changed). Not usable.
-		return Capabilities{
+		return platform.apply(Capabilities{
 			Available:        false,
 			State:            HelperStateUnsupported,
 			Helper:           path,
 			Reason:           "the IMCore helper ran but none of edit/unsend/delete are supported on this macOS",
 			RequiresMessages: true,
-		}
+		})
 	}
-	return Capabilities{
+	return platform.apply(Capabilities{
 		Available:        true,
 		State:            HelperStateReady,
 		Helper:           path,
@@ -192,7 +204,7 @@ func (p *HelperPerformer) probeCapabilities(ctx context.Context) Capabilities {
 		Retract:          retract,
 		Delete:           del,
 		RequiresMessages: true,
-	}
+	})
 }
 
 func (p *HelperPerformer) Edit(ctx context.Context, req Request) error {

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../core/app_controller.dart';
+import '../core/l10n/app_localizations.dart';
 import '../core/theme_controller.dart';
 import '../features/contacts/contacts_service.dart';
 import '../features/settings/message_display_controller.dart';
@@ -61,16 +62,19 @@ class _MicaGoAppState extends State<MicaGoApp> {
                     );
 
               return MaterialApp.router(
-                title: 'MicaGo',
+                title: 'micaGO',
                 debugShowCheckedModeBanner: false,
                 theme: MicaGoTheme.fromScheme(lightScheme),
                 darkTheme: MicaGoTheme.fromScheme(darkScheme),
                 themeMode: theme.themeMode,
-                // Locale architecture is wired; app strings are not yet
-                // translated (only built-in Material widgets localize).
                 locale: theme.locale,
-                supportedLocales: const [Locale('en'), Locale('zh')],
+                supportedLocales: const [
+                  Locale('en'),
+                  Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
+                  Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
+                ],
                 localizationsDelegates: const [
+                  MicaLocalizations.delegate,
                   GlobalMaterialLocalizations.delegate,
                   GlobalWidgetsLocalizations.delegate,
                   GlobalCupertinoLocalizations.delegate,

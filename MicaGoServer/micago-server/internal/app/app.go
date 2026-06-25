@@ -384,7 +384,11 @@ func Run(options Options) error {
 	handler := httpapi.NewRouter(
 		handlers,
 		hub,
-		httpapi.AuthConfig{Enabled: !cfg.AuthDisabled, Token: cfg.AuthToken},
+		httpapi.AuthConfig{
+			Enabled: !cfg.AuthDisabled,
+			Token:   cfg.AuthToken,
+			Logger:  log.Default(),
+		},
 	)
 
 	srv := &http.Server{

@@ -1,10 +1,13 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
+import '../../core/network/notification_display.dart';
+import '../../core/l10n/app_localizations.dart';
 import '../../core/models/connection_profile.dart';
 import '../../core/network/connection_candidate.dart';
 import '../../core/theme_controller.dart';
@@ -12,7 +15,7 @@ import '../../core/ui/top_banner.dart';
 import '../contacts/people_screen.dart';
 import '../debug/debug_log_panel.dart';
 import '../home/connection_status_view.dart';
-import 'diagnostics_page.dart';
+import 'message_display_controller.dart';
 import 'message_display_page.dart';
 
 /// Settings tab: shows the current connection (token masked), and lets the user
@@ -25,168 +28,100 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _revealToken = false;
-
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppController>();
     final profile = app.profile;
-
     final theme = context.watch<ThemeController>();
+    final strings = MicaLocalizations.of(context);
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('Appearance', style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          strings.t('settings.appearance'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: 8),
         _AppearanceCard(theme: theme),
         const SizedBox(height: 20),
-        Text('Messaging', style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          strings.t('settings.messaging'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: 8),
         _SmsSendingCard(app: app),
         const SizedBox(height: 20),
-        Text('Notifications', style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          strings.t('settings.notifications'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: 8),
         _NotificationsCard(app: app),
         const SizedBox(height: 20),
-        Text('More', style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          strings.t('settings.more'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: 8),
         Card(
           child: Column(
             children: [
               ListTile(
-                leading: const Icon(Icons.contacts_outlined),
-                title: const Text('Contacts matching'),
-                subtitle: const Text('Use local contacts to show names'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _push(context, 'Contacts', const PeopleScreen()),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.lan_outlined),
-                title: const Text('Connection diagnostics'),
-                subtitle: const Text('REST/WebSocket status & endpoints'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () =>
-                    _push(context, 'Connection', const ConnectionStatusView()),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.chat_bubble_outline),
-                title: const Text('Message display'),
-                subtitle: const Text(
-                  'Reactions, replies, effects, hide/merge rows',
-                ),
+                leading: _leadingIcon(Icons.contacts_outlined),
+                title: Text(strings.t('settings.contacts')),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _push(
                   context,
-                  'Message Display',
+                  strings.t('settings.contacts'),
+                  const PeopleScreen(),
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: _leadingIcon(Icons.chat_bubble_outline),
+                title: Text(strings.t('settings.messageDisplay')),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _push(
+                  context,
+                  strings.t('settings.messageDisplay'),
                   const MessageDisplayPage(),
                 ),
               ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.insights_outlined),
-                title: const Text('Message compatibility diagnostics'),
-                subtitle: const Text('Why messages render as unsupported'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _push(
-                  context,
-                  'Message Diagnostics',
-                  const DiagnosticsPage(),
-                ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.terminal),
-                title: const Text('Debug — realtime events'),
-                subtitle: const Text('Recent WebSocket event log'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _push(
-                  context,
-                  'Debug',
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: DebugLogPanel(
-                      ws: context.read<AppController>().ws,
-                      app: context.read<AppController>(),
-                    ),
+              if (kDebugMode) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: _leadingIcon(Icons.bug_report_outlined),
+                  title: Text(strings.t('settings.debugTools')),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _push(
+                    context,
+                    strings.t('settings.debugTools'),
+                    const _DebugToolsBody(),
                   ),
                 ),
-              ),
+              ],
               const Divider(height: 1),
               ListTile(
-                leading: const Icon(Icons.devices_other_outlined),
-                title: const Text('Paired device debug'),
-                subtitle: const Text('Register now + registration diagnostics'),
+                leading: _leadingIcon(Icons.info_outline),
+                title: Text(strings.t('settings.about')),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _push(
                   context,
-                  'Device Registration',
-                  const _DeviceRegisterDebug(),
+                  strings.t('settings.about'),
+                  const _AboutBody(),
                 ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('About'),
-                subtitle: const Text('MicaGo Android client'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _push(context, 'About', const _AboutBody()),
               ),
             ],
           ),
         ),
         const SizedBox(height: 20),
-        Text('Connection', style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 8),
         if (profile != null) _RouteSwitcher(app: app, profile: profile),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.dns_outlined),
-                title: const Text('Active server URL'),
-                subtitle: SelectableText(
-                  app.activeCandidate?.baseUrl ??
-                      profile?.effectiveBaseUrl ??
-                      '—',
-                ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.cable_outlined),
-                title: const Text('WebSocket URL'),
-                subtitle: SelectableText(
-                  app.activeCandidate?.wsUrl ?? profile?.effectiveWsUrl ?? '—',
-                ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.key_outlined),
-                title: const Text('Bearer token'),
-                subtitle: Text(_tokenText(profile?.token ?? '')),
-                trailing: IconButton(
-                  tooltip: _revealToken ? 'Hide' : 'Reveal',
-                  icon: Icon(
-                    _revealToken
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined,
-                  ),
-                  onPressed: (profile?.token.isEmpty ?? true)
-                      ? null
-                      : () => setState(() => _revealToken = !_revealToken),
-                ),
-              ),
-            ],
-          ),
-        ),
         const SizedBox(height: 16),
         OutlinedButton.icon(
           onPressed: () => context.go(Routes.connection),
           icon: const Icon(Icons.edit_outlined),
-          label: const Text('Edit connection'),
+          label: Text(strings.t('settings.editConnection')),
         ),
         const SizedBox(height: 8),
         OutlinedButton.icon(
@@ -195,24 +130,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           onPressed: () => _confirmDisconnect(context, app),
           icon: const Icon(Icons.logout),
-          label: const Text('Disconnect'),
+          label: Text(strings.t('settings.disconnect')),
         ),
         const SizedBox(height: 24),
         Center(
           child: Text(
-            'MicaGo · C1 foundation',
+            'micaGO · C1 foundation',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
       ],
     );
-  }
-
-  String _tokenText(String token) {
-    if (token.isEmpty) return '—';
-    if (_revealToken) return token;
-    final head = token.length <= 4 ? token : token.substring(0, 4);
-    return '$head••••••••';
   }
 
   /// Pushes a Settings sub-page wrapped in its own Scaffold (title + back).
@@ -234,18 +162,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Disconnect?'),
-        content: const Text(
-          'This removes the saved server and token from this device.',
+        title: Text(
+          MicaLocalizations.of(context).t('settings.disconnectTitle'),
+        ),
+        content: Text(
+          MicaLocalizations.of(context).t('settings.disconnectBody'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(MicaLocalizations.of(context).t('settings.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Disconnect'),
+            child: Text(MicaLocalizations.of(context).t('settings.disconnect')),
           ),
         ],
       ),
@@ -256,6 +186,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 }
+
+Widget _leadingIcon(IconData icon, {Color? color}) => SizedBox(
+  width: 40,
+  child: Center(child: Icon(icon, color: color)),
+);
 
 /// C26: when the server advertises more than one route (multiple LAN interfaces,
 /// or LAN + Public), let the user pick which one to use. "Automatic" keeps the
@@ -409,6 +344,81 @@ class _DeviceRegisterDebugState extends State<_DeviceRegisterDebug> {
   }
 }
 
+class _DebugToolsBody extends StatelessWidget {
+  const _DebugToolsBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
+    final app = context.read<AppController>();
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+          child: Column(
+            children: [
+              ListTile(
+                leading: _leadingIcon(Icons.lan_outlined),
+                title: Text(strings.t('settings.connectionDiagnostics')),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(
+                        title: Text(
+                          strings.t('settings.connectionDiagnostics'),
+                        ),
+                      ),
+                      body: const SafeArea(child: ConnectionStatusView()),
+                    ),
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: _leadingIcon(Icons.terminal),
+                title: Text(strings.t('settings.realtimeEvents')),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(
+                        title: Text(strings.t('settings.realtimeEvents')),
+                      ),
+                      body: SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: DebugLogPanel(ws: app.ws, app: app),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: _leadingIcon(Icons.devices_other_outlined),
+                title: Text(strings.t('settings.deviceRegistration')),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(
+                        title: Text(strings.t('settings.deviceRegistration')),
+                      ),
+                      body: const SafeArea(child: _DeviceRegisterDebug()),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _NotificationsCard extends StatefulWidget {
   final AppController app;
   const _NotificationsCard({required this.app});
@@ -431,6 +441,24 @@ class _NotificationsCardState extends State<_NotificationsCard> {
       ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<void> _enableNotifications() async {
+    final granted = await requestSystemNotificationPermission();
+    widget.app.noteNotificationPermission(granted);
+    if (!mounted) return;
+    if (granted == false) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Notifications are blocked. Enable them in Android Settings → '
+              'Apps → micaGO → Notifications.',
+            ),
+          ),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppController>();
@@ -440,24 +468,28 @@ class _NotificationsCardState extends State<_NotificationsCard> {
       child: Column(
         children: [
           ListTile(
-            leading: Icon(
+            leading: _leadingIcon(
               configured
                   ? Icons.notifications_active_outlined
                   : Icons.notifications_off_outlined,
               color: configured ? scheme.primary : scheme.onSurfaceVariant,
             ),
-            title: Text(configured
-                ? 'Push notifications enabled'
-                : 'Push notifications not configured'),
-            subtitle: Text(configured
-                ? 'This device can be woken for new messages (${app.pushProvider.toUpperCase()}).'
-                : 'Optional. Set up your own Firebase project on the Mac to enable background pushes. Messages still arrive while the app is open.'),
+            title: Text(
+              configured
+                  ? 'Push notifications enabled'
+                  : 'Push notifications not configured',
+            ),
+            subtitle: Text(
+              configured
+                  ? 'This device can be woken for new messages (${app.pushProvider.toUpperCase()}).'
+                  : 'Optional. Set up your own Firebase project on the Mac to enable background pushes. Messages still arrive while the app is open.',
+            ),
             isThreeLine: true,
           ),
           if (configured) ...[
             const Divider(height: 1),
             ListTile(
-              leading: const Icon(Icons.send_outlined),
+              leading: _leadingIcon(Icons.send_outlined),
               title: const Text('Send test notification'),
               subtitle: const Text('Delivers a test push to this device'),
               trailing: _busy
@@ -470,25 +502,127 @@ class _NotificationsCardState extends State<_NotificationsCard> {
               onTap: _busy ? null : _sendTest,
             ),
           ],
+          // Android 13+ permission warning — a denied POST_NOTIFICATIONS means
+          // no pushes OR keep-alive notifications can appear, however configured.
+          if (defaultTargetPlatform == TargetPlatform.android &&
+              !kIsWeb &&
+              app.notificationPermission == 'denied') ...[
+            const Divider(height: 1),
+            ListTile(
+              leading: _leadingIcon(
+                Icons.warning_amber_outlined,
+                color: scheme.error,
+              ),
+              title: const Text('Notifications are turned off'),
+              subtitle: const Text(
+                'Android is blocking notifications, so neither push nor '
+                'keep-alive can alert you. Turn them on to receive messages.',
+              ),
+              isThreeLine: true,
+              trailing: TextButton(
+                onPressed: _enableNotifications,
+                child: const Text('Turn on'),
+              ),
+            ),
+          ],
           // C29: advanced opt-in keep-alive (Android only). Default off. Works
           // even without Firebase — a foreground service holds the connection.
           if (defaultTargetPlatform == TargetPlatform.android && !kIsWeb) ...[
             const Divider(height: 1),
             SwitchListTile(
-              secondary: const Icon(Icons.bolt_outlined),
-              title: const Text('Keep MicaGo running in background'),
+              secondary: _leadingIcon(Icons.bolt_outlined),
+              title: const Text('Keep micaGO running in background'),
               subtitle: const Text(
-                'Advanced. Shows a persistent notification and keeps the '
-                'connection alive in the background, even without Firebase. '
-                'Uses more battery.',
+                'Advanced. A foreground service holds the connection open and '
+                'shows local notifications even without Firebase — so you get '
+                'alerts with no push setup. Android/OEM battery limits can still '
+                'throttle it, and it uses more battery.',
               ),
               isThreeLine: true,
               value: app.keepAliveEnabled,
               onChanged: (v) => app.setKeepAliveEnabled(v),
             ),
           ],
+          const Divider(height: 1),
+          _NotificationDiagnosticsTile(app: app),
         ],
       ),
+    );
+  }
+}
+
+/// C31: read-only notification diagnostics — FCM configured/registered,
+/// keep-alive, permission, last notification source, last direct-reply result.
+/// "Copy" exports the same (no token, no message text).
+class _NotificationDiagnosticsTile extends StatelessWidget {
+  final AppController app;
+  const _NotificationDiagnosticsTile({required this.app});
+
+  List<MapEntry<String, String>> _rows() {
+    String perm = switch (app.notificationPermission) {
+      'granted' => 'granted',
+      'denied' => 'denied',
+      _ => 'unknown',
+    };
+    return [
+      MapEntry('Firebase push', app.pushConfigured ? 'configured' : 'off'),
+      MapEntry(
+        'Token registered',
+        app.pushConfigured ? 'yes (${app.pushProvider})' : 'no',
+      ),
+      MapEntry('Keep-alive', app.keepAliveEnabled ? 'enabled' : 'off'),
+      MapEntry('Notification permission', perm),
+      MapEntry('Last notification', app.lastNotificationSource ?? '—'),
+      MapEntry('Last direct reply', app.lastReplyResult ?? '—'),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _rows();
+    return ExpansionTile(
+      leading: const SizedBox(width: 40, child: Icon(Icons.info_outline)),
+      title: const Text('Notification diagnostics'),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      children: [
+        for (final r in rows)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 4, child: Text(r.key)),
+                Expanded(
+                  flex: 6,
+                  child: Text(
+                    r.value,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy diagnostics'),
+            onPressed: () {
+              final text = [
+                'micaGO notification diagnostics',
+                for (final r in rows) '${r.key}: ${r.value}',
+              ].join('\n');
+              Clipboard.setData(ClipboardData(text: text));
+              ScaffoldMessenger.of(context)
+                ..clearSnackBars()
+                ..showSnackBar(
+                  const SnackBar(content: Text('Diagnostics copied')),
+                );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
@@ -541,7 +675,7 @@ class _SmsSendingCardState extends State<_SmsSendingCard> {
     final unreachable = app.syncSettings == null;
     return Card(
       child: SwitchListTile(
-        secondary: const Icon(Icons.sms_outlined),
+        secondary: _leadingIcon(Icons.sms_outlined),
         title: const Text('Allow SMS sending through Mac'),
         subtitle: Text(
           unreachable
@@ -563,6 +697,10 @@ class _AppearanceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
+    final display = context.watch<MessageDisplayController>();
+    final prefs = display.prefs;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -570,13 +708,25 @@ class _AppearanceCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // --- Theme mode ---
-            Text('Theme', style: Theme.of(context).textTheme.labelLarge),
+            Text(
+              strings.t('settings.theme'),
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
             const SizedBox(height: 8),
             SegmentedButton<ThemeMode>(
-              segments: const [
-                ButtonSegment(value: ThemeMode.system, label: Text('System')),
-                ButtonSegment(value: ThemeMode.light, label: Text('Light')),
-                ButtonSegment(value: ThemeMode.dark, label: Text('Dark')),
+              segments: [
+                ButtonSegment(
+                  value: ThemeMode.system,
+                  label: Text(strings.t('settings.system')),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.light,
+                  label: Text(strings.t('settings.light')),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.dark,
+                  label: Text(strings.t('settings.dark')),
+                ),
               ],
               selected: {theme.themeMode},
               onSelectionChanged: (s) => theme.setThemeMode(s.first),
@@ -584,12 +734,9 @@ class _AppearanceCard extends StatelessWidget {
             const Divider(height: 28),
 
             // --- Color ---
-            Text('Color', style: Theme.of(context).textTheme.labelLarge),
-            const SizedBox(height: 4),
             Text(
-              'On Android 12+, “Use system colors” follows your wallpaper '
-              '(Material You).',
-              style: Theme.of(context).textTheme.bodySmall,
+              strings.t('settings.color'),
+              style: Theme.of(context).textTheme.labelLarge,
             ),
             const SizedBox(height: 8),
             Wrap(
@@ -609,8 +756,35 @@ class _AppearanceCard extends StatelessWidget {
             ),
             const Divider(height: 28),
 
+            Text(
+              strings.t('settings.collection'),
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              strings.t('settings.recentPerChat'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final n in const [50, 100, 200])
+                  ChoiceChip(
+                    selected: prefs.messagesPerChat == n,
+                    onSelected: (_) =>
+                        display.update(prefs.copyWith(messagesPerChat: n)),
+                    label: Text('$n'),
+                  ),
+              ],
+            ),
+            const Divider(height: 28),
+
             // --- Language ---
-            Text('Language', style: Theme.of(context).textTheme.labelLarge),
+            Text(
+              strings.t('settings.language'),
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
             const SizedBox(height: 8),
             DropdownButton<LanguageChoice>(
               value: theme.language,
@@ -618,25 +792,24 @@ class _AppearanceCard extends StatelessWidget {
               onChanged: (l) {
                 if (l != null) theme.setLanguage(l);
               },
-              items: const [
+              items: [
                 DropdownMenuItem(
                   value: LanguageChoice.system,
-                  child: Text('System language'),
+                  child: Text(strings.t('settings.systemLanguage')),
                 ),
                 DropdownMenuItem(
                   value: LanguageChoice.english,
-                  child: Text('English'),
+                  child: Text(strings.t('settings.english')),
                 ),
                 DropdownMenuItem(
-                  value: LanguageChoice.chinese,
-                  child: Text('简体中文 (Simplified Chinese)'),
+                  value: LanguageChoice.simplifiedChinese,
+                  child: Text(strings.t('settings.zhHans')),
+                ),
+                DropdownMenuItem(
+                  value: LanguageChoice.traditionalChinese,
+                  child: Text(strings.t('settings.zhHant')),
                 ),
               ],
-            ),
-            Text(
-              'Note: app text is not translated yet — this switches built-in '
-              'system controls only. Full translations are planned.',
-              style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
         ),
@@ -665,7 +838,7 @@ class _AppearanceCard extends StatelessWidget {
       case ThemeColorChoice.system:
         return 'System';
       case ThemeColorChoice.micago:
-        return 'MicaGo';
+        return 'micaGO';
       case ThemeColorChoice.blue:
         return 'Blue';
       case ThemeColorChoice.green:
@@ -684,43 +857,88 @@ class MicaGoThemeSeed {
   static const Color value = Color(0xFF5B6CFF);
 }
 
-class _AboutBody extends StatelessWidget {
+class _AboutBody extends StatefulWidget {
   const _AboutBody();
 
   @override
+  State<_AboutBody> createState() => _AboutBodyState();
+}
+
+class _AboutBodyState extends State<_AboutBody> {
+  bool _revealToken = false;
+
+  @override
   Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
+    final app = context.watch<AppController>();
+    final profile = app.profile;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const ListTile(
-          leading: Icon(Icons.bolt),
-          title: Text('MicaGo'),
-          subtitle: Text('Android client for your own MicaGo relay server.'),
+        ListTile(
+          leading: _leadingIcon(Icons.bolt),
+          title: const Text('micaGO'),
+          subtitle: const Text('Android client'),
         ),
-        const ListTile(
-          leading: Icon(Icons.lock_outline),
-          title: Text('Privacy'),
-          subtitle: Text(
-            'Your messages stay between your Mac and your devices. There is '
-            'no MicaGo cloud. Contacts are matched locally and never uploaded.',
-          ),
+        ListTile(
+          leading: _leadingIcon(Icons.lock_outline),
+          title: Text(strings.t('settings.privacy')),
+          subtitle: const Text('No micaGO cloud. Contacts stay local.'),
         ),
-        const ListTile(
-          leading: Icon(Icons.science_outlined),
-          title: Text('Status'),
-          subtitle: Text(
-            'Pre-release. Text + media display; sending text only.',
-          ),
+        ListTile(
+          leading: _leadingIcon(Icons.science_outlined),
+          title: Text(strings.t('settings.status')),
+          subtitle: Text(strings.t('settings.preRelease')),
         ),
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            'Documentation site and links will appear here when MicaGo is '
-            'published.',
-            style: Theme.of(context).textTheme.bodySmall,
+        const SizedBox(height: 12),
+        Card(
+          child: Column(
+            children: [
+              ListTile(
+                leading: _leadingIcon(Icons.dns_outlined),
+                title: Text(strings.t('settings.activeServerUrl')),
+                subtitle: SelectableText(
+                  app.activeCandidate?.baseUrl ??
+                      profile?.effectiveBaseUrl ??
+                      '—',
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: _leadingIcon(Icons.cable_outlined),
+                title: Text(strings.t('settings.websocketUrl')),
+                subtitle: SelectableText(
+                  app.activeCandidate?.wsUrl ?? profile?.effectiveWsUrl ?? '—',
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: _leadingIcon(Icons.key_outlined),
+                title: Text(strings.t('settings.bearerToken')),
+                subtitle: SelectableText(_tokenText(profile?.token ?? '')),
+                trailing: IconButton(
+                  tooltip: _revealToken ? 'Hide' : 'Reveal',
+                  icon: Icon(
+                    _revealToken
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
+                  onPressed: (profile?.token.isEmpty ?? true)
+                      ? null
+                      : () => setState(() => _revealToken = !_revealToken),
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
+  }
+
+  String _tokenText(String token) {
+    if (token.isEmpty) return '—';
+    if (_revealToken) return token;
+    final head = token.length <= 4 ? token : token.substring(0, 4);
+    return '$head••••••••';
   }
 }

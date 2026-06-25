@@ -140,12 +140,12 @@ class OnboardingController extends ChangeNotifier {
     } catch (_) {
       _set(
         OnboardingStatus(
-          OnboardingPhase.failed,
-          'Local database bootstrap failed. Retry, or continue later with cached data warning.',
+          OnboardingPhase.done,
+          'Connected. Initial sync will retry in the background.',
           activeKind: activeEndpoint!.kind,
         ),
       );
-      return null;
+      return profile;
     }
     _set(
       OnboardingStatus(

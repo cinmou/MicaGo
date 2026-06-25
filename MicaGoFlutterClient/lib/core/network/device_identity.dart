@@ -49,11 +49,11 @@ Map<String, Object?> buildDeviceRegistration({
   bool pushEnabled = false,
   bool background = false,
 }) {
-  final label = name.trim().isEmpty ? 'MicaGo client' : name.trim();
+  final label = name.trim().isEmpty ? 'micaGO client' : name.trim();
   return {
     'id': id,
     // The version is its own field now (the Companion composes
-    // "{name} - MicaGo {version}"), so the name stays clean.
+    // "{name} - micaGO {version}"), so the name stays clean.
     'name': label,
     'appVersion': appVersion,
     'platform': platform,

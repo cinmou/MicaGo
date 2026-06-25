@@ -110,6 +110,7 @@ func fcmMessage(deviceToken string, n Notification, ttl time.Duration) map[strin
 		"sourceRowId": strconv.FormatInt(n.SourceRowID, 10),
 		"title":       n.Title,
 		"body":        body,
+		"handle":      n.Handle,
 		"previewMode": n.PreviewMode,
 		"createdAt":   strconv.FormatInt(n.CreatedAt, 10),
 	}

@@ -8,6 +8,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../app_controller.dart';
+import '../storage/secure_store.dart';
+import 'api_client.dart';
+import 'notification_display.dart';
 import 'push_logic.dart';
 
 /// Storage key for the user-owned Firebase client options. C28: MicaGo bakes no
@@ -57,18 +60,22 @@ class PushService {
   final AppController app;
 
   bool available = false;
+  bool _localReady = false;
   String? token;
 
-  static const _channelId = 'micago_messages';
-  static const _channelName = 'Messages';
   final FlutterLocalNotificationsPlugin _local =
       FlutterLocalNotificationsPlugin();
 
-  /// Idempotent start. Safe to call on every (re)connect; only does real work
-  /// once Firebase is configured + initialized.
+  /// Idempotent start. Safe to call on every (re)connect. It always brings up
+  /// local notifications first (the keep-alive path needs them and does NOT need
+  /// Firebase), then does the FCM-specific work only when Firebase is configured.
   Future<void> start() async {
+    // 0) Local notifications + the keep-alive shower — independent of Firebase,
+    //    so background WebSocket/delta messages can notify even with no FCM.
+    await _ensureLocalNotifications();
+
     if (available) {
-      // Already running: just make sure the latest token is registered.
+      // FCM already running: just make sure the latest token is registered.
       await _registerToken();
       return;
     }
@@ -78,7 +85,8 @@ class PushService {
     // 1) Pull the user-owned Firebase client config from the server.
     final cfg = await api.fetchFcmClientConfig();
     if (cfg == null || cfg['configured'] != true) {
-      // Firebase not set up → stay on WebSocket + delta sync (graceful).
+      // Firebase not set up → stay on WebSocket + delta sync (+ keep-alive local
+      // notifications when enabled). Fully graceful.
       return;
     }
 
@@ -97,8 +105,6 @@ class PushService {
         return;
       }
     }
-
-    await _initLocalNotifications();
 
     // 3) Permission + token.
     final messaging = FirebaseMessaging.instance;
@@ -158,15 +164,55 @@ class PushService {
     if (!pushShouldCatchUp(realtimeConnected: app.isRealtimeConnected)) {
       return; // socket already handled it (BlueBubbles dedup)
     }
+    app.noteNotificationSource('FCM');
     unawaited(app.runDeltaSync(reason: 'fcm-foreground'));
   }
 
   // Tap (from background or terminated): delta-sync FIRST so we don't show stale
   // content, then ask the shell to open the conversation.
   void _onNotificationTap(RemoteMessage message) {
+    app.noteNotificationSource('FCM');
     unawaited(app.runDeltaSync(reason: 'fcm-tap'));
     final chatGuid = pushChatGuid(message.data);
     if (chatGuid != null) app.requestOpenChat(chatGuid);
+  }
+
+  /// Brings up local notifications exactly once and wires the keep-alive
+  /// local-notification path on [AppController]. This has NO Firebase dependency,
+  /// so it runs even when FCM is not configured.
+  Future<void> _ensureLocalNotifications() async {
+    if (_localReady) return;
+    await _initLocalNotifications();
+    _localReady = true;
+    // The keep-alive path (in AppController) shows local notifications through
+    // the same initialized plugin, so FCM + keep-alive dedupe by notification id.
+    app.showLocalNotification = (
+            {required String title,
+            String? body,
+            required String? chatGuid,
+            required String? messageGuid}) =>
+        showMessageNotification(
+          _local,
+          title: title,
+          body: body,
+          chatGuid: chatGuid,
+          messageGuid: messageGuid,
+        );
+    await refreshNotificationPermission();
+  }
+
+  /// Queries whether the OS currently allows notifications (Android 13+
+  /// POST_NOTIFICATIONS) and records it on [AppController] for diagnostics.
+  Future<void> refreshNotificationPermission() async {
+    app.noteNotificationPermission(await systemNotificationsEnabled());
+  }
+
+  /// Asks for the Android 13+ POST_NOTIFICATIONS permission (no-op below 13 or
+  /// when already granted). Returns the resulting grant state.
+  Future<bool?> requestNotificationPermission() async {
+    final granted = await requestSystemNotificationPermission();
+    app.noteNotificationPermission(granted);
+    return granted;
   }
 
   Future<void> _initLocalNotifications() async {
@@ -174,20 +220,27 @@ class PushService {
     await _local.initialize(
       const InitializationSettings(android: android),
       onDidReceiveNotificationResponse: (resp) {
+        // Inline reply (app alive): send it; otherwise a plain tap opens the chat.
+        if (resp.actionId == notificationReplyActionId) {
+          final text = cleanReplyText(resp.input);
+          final guid = resp.payload;
+          if (text != null && guid != null && guid.isNotEmpty) {
+            unawaited(
+              sendNotificationReply(guid, text).then(app.noteReplyResult),
+            );
+          }
+          return;
+        }
         final guid = resp.payload;
         if (guid != null && guid.isNotEmpty) app.requestOpenChat(guid);
       },
+      onDidReceiveBackgroundNotificationResponse:
+          notificationBackgroundResponse,
     );
     await _local
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(
-          const AndroidNotificationChannel(
-            _channelId,
-            _channelName,
-            importance: Importance.high,
-          ),
-        );
+        ?.createNotificationChannel(messageNotificationChannel);
   }
 }
 
@@ -243,29 +296,68 @@ Future<void> showPushNotification(RemoteMessage message) async {
   // Single source of truth for "is there anything to show" (test pushes and
   // preview-disabled empty pushes are skipped) — shared with the pure logic test.
   if (!pushShouldNotify(data)) return;
-  final title = (data['title'] as String?)?.trim();
-  final body = (data['body'] as String?)?.trim();
 
   final plugin = FlutterLocalNotificationsPlugin();
   await plugin.initialize(
     const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     ),
+    // Register the inline-reply handler for this isolate too, so a reply from a
+    // background/killed-app notification is delivered.
+    onDidReceiveBackgroundNotificationResponse: notificationBackgroundResponse,
   );
   final chatGuid = data['chatGuid'] as String?;
-  final notifId = (data['messageGuid'] as String?)?.hashCode ?? 0;
-  await plugin.show(
-    notifId,
-    title?.isNotEmpty == true ? title : 'New message',
-    body,
-    const NotificationDetails(
-      android: AndroidNotificationDetails(
-        'micago_messages',
-        'Messages',
-        importance: Importance.high,
-        priority: Priority.high,
-      ),
-    ),
-    payload: chatGuid,
+  // C31: "who it's from" — server-resolved sender/title, else the raw handle,
+  // never a GUID or empty. (On-device contact resolution happens in the
+  // keep-alive main-isolate path; the FCM isolate uses the server's name.)
+  final title = messageNotificationTitle(
+    serverTitle: data['title'] as String?,
+    handle: data['handle'] as String?,
   );
+  await showMessageNotification(
+    plugin,
+    title: title,
+    body: notificationBody(data),
+    chatGuid: chatGuid,
+    messageGuid: data['messageGuid'] as String?,
+  );
+}
+
+/// C30: top-level handler for a notification action triggered while the app is
+/// backgrounded/killed (runs in a background isolate). Handles the inline reply
+/// by sending it to the chat; a plain tap is routed by app launch instead.
+@pragma('vm:entry-point')
+void notificationBackgroundResponse(NotificationResponse response) {
+  if (response.actionId != notificationReplyActionId) return;
+  final text = cleanReplyText(response.input);
+  final guid = response.payload;
+  if (text == null || guid == null || guid.isEmpty) return;
+  sendNotificationReply(guid, text).ignore();
+}
+
+/// C30/C31: sends an inline-reply message to [chatGuid] using the persisted
+/// connection profile (no live AppController needed, so it works from the
+/// background isolate). Reuses the existing bearer token + send API; no new deps.
+/// Returns a short, redaction-safe result string (used for diagnostics when the
+/// app is alive); failures are reported, not thrown — the user can reopen and
+/// resend.
+@pragma('vm:entry-point')
+Future<String> sendNotificationReply(String chatGuid, String text) async {
+  final profile = await SecureStore().loadProfile();
+  if (profile == null || !profile.isComplete) {
+    return 'reply failed: not paired';
+  }
+  final api = ApiClient(baseUrl: profile.effectiveBaseUrl, token: profile.token);
+  try {
+    await api.sendText(
+      chatGuid: chatGuid,
+      tempGuid: 'reply-${DateTime.now().millisecondsSinceEpoch}',
+      message: text,
+    );
+    return 'reply sent';
+  } catch (e) {
+    return 'reply failed: $e';
+  } finally {
+    api.close();
+  }
 }

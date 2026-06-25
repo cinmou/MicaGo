@@ -57,6 +57,31 @@ func TestAuthMissingWrongAndCorrect(t *testing.T) {
 	}
 }
 
+func TestAuthLogsRejectedDeviceRegistration(t *testing.T) {
+	var logs strings.Builder
+	router := NewRouter(
+		NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{}),
+		nil,
+		AuthConfig{
+			Enabled: true,
+			Token:   "secret",
+			Logger:  log.New(&logs, "", 0),
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/register", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer wrong")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if got := logs.String(); !strings.Contains(got, "auth rejected POST /api/devices/register") {
+		t.Fatalf("missing auth rejection log: %q", got)
+	}
+}
+
 func TestServerInfoDoesNotExposeToken(t *testing.T) {
 	router := NewRouter(
 		NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{}, config.Config{

@@ -10,6 +10,7 @@ import 'network/connection_candidate.dart';
 import 'network/connection_notice.dart';
 import 'network/endpoint_utils.dart';
 import 'network/device_identity.dart';
+import 'network/push_logic.dart';
 import 'network/refresh_coordinator.dart';
 import 'network/websocket_client.dart';
 import 'storage/local_cache_store.dart';
@@ -119,11 +120,21 @@ class AppController extends ChangeNotifier {
     _connSub = ws.events.listen((e) {
       if (e.type == 'connection:updated') {
         unawaited(refreshServerUrls());
+      } else if (e.type == 'message:new') {
+        // C31: keep-alive local-notification path (no Firebase required).
+        unawaited(_maybeNotifyBackgroundMessage(e));
       }
     });
   }
 
   StreamSubscription<WsEvent>? _connSub;
+
+  // C31: whether the app is currently foregrounded. Drives notification dedup —
+  // a realtime message that arrives while foregrounded is shown by the UI, not as
+  // a system notification. The app shell updates this from lifecycle events.
+  bool _foreground = true;
+  bool get isForeground => _foreground;
+  void setForeground(bool value) => _foreground = value;
 
   /// Called by the app shell on foreground resume (lightweight refresh).
   void onResume() {
@@ -671,11 +682,8 @@ class AppController extends ChangeNotifier {
     if (profile == null || profile.token.trim().isEmpty) {
       return _recordRegister('skipped: no profile or empty token');
     }
-    // Fall back to the first candidate so a transiently-null _activeCandidate
-    // (e.g. just nulled by an endpoint refresh) never blocks registration.
-    final candidate =
-        _activeCandidate ?? connectionCandidatesForProfile(profile).firstOrNull;
-    if (candidate == null || candidate.baseUrl.trim().isEmpty) {
+    final candidates = _registrationCandidates(profile);
+    if (candidates.isEmpty) {
       return _recordRegister('skipped: no candidate base URL');
     }
 
@@ -690,12 +698,13 @@ class AppController extends ChangeNotifier {
       if (id.isEmpty) {
         return _recordRegister('FAILED: empty device id');
       }
-      final mode = candidate.kind == ConnectionCandidateKind.public
-          ? 'lan_public'
-          : 'lan';
+      final hasPublic = candidates.any(
+        (c) => c.kind == ConnectionCandidateKind.public,
+      );
+      final mode = hasPublic ? 'lan_public' : 'lan';
       final background = _pushEnabled || _keepAliveEnabled;
       final body = buildDeviceRegistration(
-        name: 'MicaGo on ${defaultTargetPlatform.name}',
+        name: 'micaGO on ${defaultTargetPlatform.name}',
         platform: serverPlatformFor(defaultTargetPlatform, isWeb: kIsWeb),
         id: id,
         mode: mode,
@@ -705,45 +714,73 @@ class AppController extends ChangeNotifier {
         background: background,
       );
       _logConnectionSelection(
-        'device register → POST ${candidate.baseUrl}/api/devices/register '
+        'device register → ${candidates.length} candidate(s) '
         'id=$id mode=$mode tokenLen=${profile.token.trim().length} '
         'provider=$_pushProvider bg=$background',
       );
-      // DEDICATED short-lived client: the shared _api can be closed by a
-      // concurrent _rebuildApi() (endpoint refresh), aborting the POST. Retry so
-      // a transient/close failure doesn't leave the device unregistered (C29b).
-      final client = ApiClient(
-        baseUrl: candidate.baseUrl,
-        token: profile.token,
-      );
-      try {
-        ({String? id, int status, String? error}) result = (
-          id: null,
-          status: 0,
-          error: 'not attempted',
+      final failures = <String>[];
+      for (final candidate in candidates) {
+        // DEDICATED short-lived client: the shared _api can be closed by a
+        // concurrent _rebuildApi() (endpoint refresh), aborting the POST. Retry
+        // per endpoint, then move to the next advertised endpoint so stale LAN
+        // or Public URLs do not make the Companion-managed server look empty.
+        final client = ApiClient(
+          baseUrl: candidate.baseUrl,
+          token: profile.token,
         );
-        for (var attempt = 1; attempt <= 3; attempt++) {
-          result = await client.registerDevice(body);
-          if (result.status == 200) {
-            _startDeviceHeartbeat(id);
-            return _recordRegister('OK id=$id status=200 at ${candidate.baseUrl}');
-          }
-          _recordRegister(
-            'FAILED attempt $attempt/3 status=${result.status} '
-            '${result.error ?? ''} at ${candidate.baseUrl}',
+        try {
+          ({String? id, int status, String? error}) result = (
+            id: null,
+            status: 0,
+            error: 'not attempted',
           );
-          if (attempt < 3) {
-            await Future<void>.delayed(const Duration(seconds: 2));
+          for (var attempt = 1; attempt <= 2; attempt++) {
+            _recordRegister(
+              'attempt $attempt/2 ${candidate.label} '
+              '${candidate.baseUrl}',
+            );
+            result = await client.registerDevice(body);
+            if (result.status == 200) {
+              _activeCandidate = candidate;
+              _startDeviceHeartbeat(id);
+              return _recordRegister(
+                'OK id=$id status=200 via ${candidate.label} '
+                '${candidate.baseUrl}',
+              );
+            }
+            final failure =
+                '${candidate.label} ${candidate.baseUrl} '
+                        'status=${result.status} ${result.error ?? ''}'
+                    .trim();
+            failures.add(failure);
+            _recordRegister('FAILED $failure');
+            if (attempt < 2 && result.status == 0) {
+              await Future<void>.delayed(const Duration(seconds: 1));
+            } else {
+              break;
+            }
           }
+        } finally {
+          client.close();
         }
-        return _lastRegisterResult ??
-            'FAILED status=${result.status} ${result.error ?? ''}';
-      } finally {
-        client.close();
       }
+      return _recordRegister('FAILED all endpoints: ${failures.join(' | ')}');
     } finally {
       _registerInFlight = false;
     }
+  }
+
+  List<ConnectionCandidate> _registrationCandidates(ConnectionProfile profile) {
+    final out = <ConnectionCandidate>[];
+    final active = _activeCandidate;
+    if (active != null && active.baseUrl.trim().isNotEmpty) out.add(active);
+    out.addAll(connectionCandidates);
+    out.addAll(connectionCandidatesForProfile(profile));
+    final seen = <String>{};
+    return [
+      for (final c in out)
+        if (c.baseUrl.trim().isNotEmpty && seen.add(c.baseUrl)) c,
+    ];
   }
 
   /// Debug: force a registration attempt now and return its result summary.
@@ -777,11 +814,92 @@ class AppController extends ChangeNotifier {
   String? _pushToken;
   bool _pushEnabled = false;
 
+  // C31 notification wiring (set during app composition / by PushService).
+  // Both are optional: when unset the corresponding behavior simply no-ops.
+
+  /// Resolves a raw handle to an on-device contact name (set from ContactsService
+  /// in the app composition root). Used to title local notifications with a real
+  /// name rather than a bare phone/email handle.
+  String? Function(String? handle)? contactNameResolver;
+
+  /// Shows a local message notification through the shared, already-initialized
+  /// notifications plugin (set by [PushService] once local notifications are up,
+  /// independent of Firebase). The keep-alive path calls this.
+  Future<void> Function({
+    required String title,
+    String? body,
+    required String? chatGuid,
+    required String? messageGuid,
+  })?
+  showLocalNotification;
+
+  // The server's notification preview mode governs how much a local notification
+  // shows. We default to the common "sender + text" layout; `none`/`sender` hide
+  // the text. (The FCM path is gated server-side; this keeps the local path in
+  // step for the default.)
+  final String _notificationPreview = 'sender_and_text';
+
+  // C31 diagnostics -----------------------------------------------------------
+  String? _notificationPermission; // 'granted' | 'denied' | null = unknown
+  String? get notificationPermission => _notificationPermission;
+  void noteNotificationPermission(bool? granted) {
+    final v = granted == null ? null : (granted ? 'granted' : 'denied');
+    if (_notificationPermission == v) return;
+    _notificationPermission = v;
+    notifyListeners();
+  }
+
+  String? _lastNotificationSource; // timestamped 'FCM' | 'keep-alive'
+  String? get lastNotificationSource => _lastNotificationSource;
+  void noteNotificationSource(String source) {
+    _lastNotificationSource = '${DateTime.now().toIso8601String()} $source';
+    notifyListeners();
+  }
+
+  String? _lastReplyResult; // timestamped direct-reply outcome
+  String? get lastReplyResult => _lastReplyResult;
+  void noteReplyResult(String result) {
+    _lastReplyResult = '${DateTime.now().toIso8601String()} $result';
+    notifyListeners();
+  }
+
+  /// C31: when the app is backgrounded and the keep-alive service is holding the
+  /// socket open (no Firebase needed), turn an incoming realtime message into a
+  /// local notification — same formatting, contact-name resolution, tap routing
+  /// and direct-reply action as the FCM path. Foreground messages are shown by
+  /// the UI, so this no-ops; the shared notification id dedupes against any FCM
+  /// notification for the same message (only one is shown).
+  Future<void> _maybeNotifyBackgroundMessage(WsEvent e) async {
+    if (_foreground || !_keepAliveEnabled) return;
+    final show = showLocalNotification;
+    if (show == null) return; // local notifications not initialized yet
+    final msg = messageFromWsEvent(e);
+    if (msg == null || msg.isFromMe) return;
+    if (isReactionMessage(msg)) {
+      return; // tapbacks shouldn't raise a notification
+    }
+    final chatGuid = chatGuidFromWsEvent(e);
+    final contactName = contactNameResolver?.call(msg.handleId);
+    final title = messageNotificationTitle(
+      contactName: contactName,
+      handle: msg.handleId,
+    );
+    final body = localNotificationBody(msg.text, _notificationPreview);
+    await show(
+      title: title,
+      body: body,
+      chatGuid: chatGuid,
+      messageGuid: msg.guid,
+    );
+    noteNotificationSource('keep-alive');
+  }
+
   // C29: optional Android keep-alive foreground service. Persisted; default off.
   // When on, the device reports `background: true` and a foreground service keeps
   // the WebSocket alive. Firebase is NOT required for this.
-  static const MethodChannel _keepAliveChannel =
-      MethodChannel('micago/keepalive');
+  static const MethodChannel _keepAliveChannel = MethodChannel(
+    'micago/keepalive',
+  );
   static const String _keepAlivePrefKey = 'micago.keepalive.v1';
   bool _keepAliveEnabled = false;
   bool get keepAliveEnabled => _keepAliveEnabled;
@@ -1084,11 +1202,6 @@ class AppController extends ChangeNotifier {
       );
       await cache.writeMetadata('last_error', diag.lastError ?? '');
       onProgress?.call('Sync complete (${diag.messagesFetched} messages).');
-      if (diag.failedChats > 0) {
-        throw StateError(
-          'Initial DB bootstrap partially failed: ${diag.failedChats} chats failed.',
-        );
-      }
     } catch (error) {
       diag.lastError = error.toString();
       await cache.writeMetadata('last_error', diag.lastError!);

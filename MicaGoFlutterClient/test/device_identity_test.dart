@@ -58,7 +58,7 @@ void main() {
         platform: 'ios',
         id: 'dev-1',
       );
-      expect(body['name'], 'MicaGo client');
+      expect(body['name'], 'micaGO client');
     });
 
     test('C22: push fields included when an FCM token is present', () {

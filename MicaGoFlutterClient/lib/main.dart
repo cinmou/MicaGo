@@ -21,6 +21,10 @@ Future<void> main() async {
   await theme.bootstrap();
   await messageDisplay.bootstrap();
 
+  // C31: let the controller title local notifications with on-device contact
+  // names (resolves live against the contacts index; null when matching is off).
+  controller.contactNameResolver = contacts.displayNameFor;
+
   runApp(
     MicaGoApp(
       controller: controller,

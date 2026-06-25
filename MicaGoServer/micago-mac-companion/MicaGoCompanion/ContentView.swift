@@ -13,14 +13,14 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .dashboard: return "Dashboard"
-        case .connections: return "Connections"
-        case .syncControl: return "Sync Control"
-        case .debug: return "Debug"
-        case .log: return "Log"
-        case .notifications: return "Notifications"
-        case .tutorials: return "Tutorials"
-        case .advanced: return "Advanced"
+        case .dashboard: return L10n.tr("sidebar.dashboard")
+        case .connections: return L10n.tr("sidebar.connections")
+        case .syncControl: return L10n.tr("sidebar.syncControl")
+        case .debug: return L10n.tr("sidebar.debug")
+        case .log: return L10n.tr("sidebar.log")
+        case .notifications: return L10n.tr("sidebar.notifications")
+        case .tutorials: return L10n.tr("sidebar.tutorials")
+        case .advanced: return L10n.tr("sidebar.advanced")
         }
     }
 
@@ -56,7 +56,7 @@ struct ContentView: View {
             List(SidebarItem.allCases, selection: $nav.selection) { item in
                 Label(item.title, systemImage: item.symbol).tag(item)
             }
-            .navigationTitle("MicaGo")
+            .navigationTitle("micaGO")
             .frame(minWidth: 200)
         } detail: {
             NavigationStack {
@@ -67,7 +67,7 @@ struct ContentView: View {
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .navigationTitle(nav.selection?.title ?? "MicaGo")
+                .navigationTitle(nav.selection?.title ?? "micaGO")
                 // Server status + primary control live in the native window
                 // toolbar (trailing). Two separate ToolbarItems so macOS 26
                 // gives each its own Liquid-Glass treatment instead of fusing
@@ -379,7 +379,7 @@ private struct DashboardDevicesCard: View {
     var body: some View {
         SectionCard(title: "Paired Devices (\(model.devices.count))") {
             if model.devices.isEmpty {
-                Text("No devices yet. A device appears here when a MicaGo client connects and registers.")
+                Text("No devices yet. A device appears here when a micaGO client connects and registers.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -544,11 +544,19 @@ private struct MessageActionsCard: View {
                 if let reason = actions.reason, !reason.isEmpty {
                     Text(reason).font(.caption).foregroundStyle(.secondary)
                 }
+                if let warning = actions.platformWarning, !warning.isEmpty {
+                    Text(warning).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if actions.platformSupported == false {
+                    Text("Requires macOS \(actions.minimumMacOS ?? "13.0") or newer.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 if let helper = actions.helper, !helper.isEmpty {
                     Text("Helper: \(helper)").font(.caption2).foregroundStyle(.tertiary)
                         .textSelection(.enabled)
                 }
-                if !actions.available {
+                if !actions.available && actions.platformSupported != false {
                     HStack(spacing: 8) {
                         Button {
                             model.installIMCoreHelper()

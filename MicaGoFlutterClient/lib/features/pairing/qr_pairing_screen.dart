@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
+import '../../core/l10n/app_localizations.dart';
 import '../settings/message_display_controller.dart';
 import 'pairing_controller.dart';
 import 'pairing_payload.dart';
@@ -77,12 +78,13 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scan pairing code'),
+        title: Text(strings.t('pair.scanTitle')),
         actions: [
           IconButton(
-            tooltip: 'Toggle torch',
+            tooltip: strings.t('pair.toggleTorch'),
             icon: const Icon(Icons.flashlight_on_outlined),
             onPressed: () => _scanner.toggleTorch(),
           ),
@@ -102,21 +104,21 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
                 onScanAgain: _scanAgain,
               );
             case PairingStage.testing:
-              return const _CenteredStatus(
+              return _CenteredStatus(
                 icon: null,
-                text: 'Connecting to the server…',
+                text: strings.t('pair.connecting'),
                 showSpinner: true,
               );
             case PairingStage.failure:
               return _FailurePane(
-                message: _pairing.message ?? 'Pairing failed.',
+                message: _pairing.message ?? strings.t('pair.failed'),
                 onScanAgain: _scanAgain,
                 onRetry: _useScanned,
               );
             case PairingStage.success:
-              return const _CenteredStatus(
+              return _CenteredStatus(
                 icon: Icons.check_circle_outline,
-                text: 'Paired!',
+                text: strings.t('pair.paired'),
                 showSpinner: false,
               );
           }
@@ -155,11 +157,10 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'Scan the MicaGo connection QR code\n'
-                '(Mac app → Dashboard → Create Connection).',
+              Text(
+                MicaLocalizations.of(context).t('pair.scanHint'),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white),
+                style: const TextStyle(color: Colors.white),
               ),
               const SizedBox(height: 12),
               // C23: the one alternative to scanning — paste the connection JSON
@@ -167,7 +168,7 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
               FilledButton.tonalIcon(
                 onPressed: _pasteConnectionJson,
                 icon: const Icon(Icons.content_paste),
-                label: const Text('Paste connection JSON'),
+                label: Text(MicaLocalizations.of(context).t('pair.pasteJson')),
               ),
             ],
           ),
@@ -183,24 +184,24 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
     final raw = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Paste connection JSON'),
+        title: Text(MicaLocalizations.of(ctx).t('pair.pasteJson')),
         content: TextField(
           controller: controller,
           maxLines: 6,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Paste the connection JSON from the Mac app',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            hintText: MicaLocalizations.of(ctx).t('pair.pasteJsonHint'),
+            border: const OutlineInputBorder(),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
+            child: Text(MicaLocalizations.of(ctx).t('settings.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Connect'),
+            child: Text(MicaLocalizations.of(ctx).t('pair.connect')),
           ),
         ],
       ),
@@ -223,15 +224,13 @@ class _CameraError extends StatelessWidget {
           children: [
             const Icon(Icons.no_photography_outlined, size: 48),
             const SizedBox(height: 12),
-            const Text(
-              'Camera unavailable',
+            Text(
+              MicaLocalizations.of(context).t('pair.cameraUnavailable'),
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             Text(
-              'MicaGo needs camera access to scan the pairing code. '
-              'Grant the Camera permission in Android Settings, then come back. '
-              'You can also pair manually instead.',
+              MicaLocalizations.of(context).t('pair.cameraHelp'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -257,6 +256,7 @@ class _PreviewPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -273,20 +273,28 @@ class _PreviewPane extends StatelessWidget {
                       const Icon(Icons.qr_code_2),
                       const SizedBox(width: 8),
                       Text(
-                        'Pairing code found',
+                        strings.t('pair.codeFound'),
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  _kv(context, 'Server URL', payload.baseUrl),
+                  _kv(context, strings.t('pair.serverUrl'), payload.baseUrl),
                   const SizedBox(height: 6),
-                  _kv(context, 'WebSocket', payload.effectiveWsUrl),
+                  _kv(
+                    context,
+                    strings.t('pair.websocket'),
+                    payload.effectiveWsUrl,
+                  ),
                   const SizedBox(height: 6),
-                  _kv(context, 'Token', _maskedToken(payload.token)),
+                  _kv(
+                    context,
+                    strings.t('pair.token'),
+                    _maskedToken(payload.token),
+                  ),
                   if (payload.serverName != null) ...[
                     const SizedBox(height: 6),
-                    _kv(context, 'Server', payload.serverName!),
+                    _kv(context, strings.t('pair.server'), payload.serverName!),
                   ],
                 ],
               ),
@@ -299,13 +307,13 @@ class _PreviewPane extends StatelessWidget {
           FilledButton.icon(
             onPressed: onUse,
             icon: const Icon(Icons.check),
-            label: const Text('Use this server'),
+            label: Text(strings.t('pair.useThisServer')),
           ),
           const SizedBox(height: 8),
           TextButton.icon(
             onPressed: onScanAgain,
             icon: const Icon(Icons.qr_code_scanner),
-            label: const Text('Scan again'),
+            label: Text(strings.t('pair.scanAgain')),
           ),
         ],
       ),
@@ -370,11 +378,16 @@ class _FailurePane extends StatelessWidget {
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 20),
-            FilledButton(onPressed: onRetry, child: const Text('Try again')),
+            FilledButton(
+              onPressed: onRetry,
+              child: Text(MicaLocalizations.of(context).t('pair.tryAgain')),
+            ),
             const SizedBox(height: 8),
             TextButton(
               onPressed: onScanAgain,
-              child: const Text('Scan a different code'),
+              child: Text(
+                MicaLocalizations.of(context).t('pair.scanDifferent'),
+              ),
             ),
           ],
         ),

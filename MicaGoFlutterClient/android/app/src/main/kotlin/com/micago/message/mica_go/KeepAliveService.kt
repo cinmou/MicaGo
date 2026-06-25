@@ -14,7 +14,7 @@ import androidx.core.app.NotificationCompat
 
 /**
  * C29: optional keep-alive foreground service. It runs ONLY when the user opts
- * into "Keep MicaGo running in the background" (default off). Its sole job is to
+ * into "Keep micaGO running in the background" (default off). Its sole job is to
  * keep the app process alive with a minimal persistent notification so the Dart
  * isolate's WebSocket + reconnect loop keeps running while the app is
  * backgrounded — no Firebase required. It does no networking itself.
@@ -50,7 +50,7 @@ class KeepAliveService : Service() {
                     "Background connection",
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "Keeps MicaGo connected for new messages"
+                    description = "Keeps micaGO connected for new messages"
                     setShowBadge(false)
                 }
                 nm.createNotificationChannel(channel)
@@ -65,7 +65,7 @@ class KeepAliveService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("MicaGo is running")
+            .setContentTitle("micaGO is running")
             .setContentText("Staying connected for new messages")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)

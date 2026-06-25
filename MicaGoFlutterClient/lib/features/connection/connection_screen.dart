@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
+import '../../core/l10n/app_localizations.dart';
 import '../../core/models/connection_profile.dart';
 import '../../core/network/endpoint_utils.dart';
 import '../../core/network/manual_connection_profile.dart';
@@ -73,24 +74,24 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     final raw = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Paste connection JSON'),
+        title: Text(MicaLocalizations.of(ctx).t('pair.pasteJson')),
         content: TextField(
           controller: controller,
           maxLines: 7,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Paste the connection JSON from the Mac app',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            hintText: MicaLocalizations.of(ctx).t('pair.pasteJsonHint'),
+            border: const OutlineInputBorder(),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
+            child: Text(MicaLocalizations.of(ctx).t('settings.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Connect'),
+            child: Text(MicaLocalizations.of(ctx).t('pair.connect')),
           ),
         ],
       ),
@@ -121,8 +122,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Connect to MicaGo')),
+      appBar: AppBar(title: Text(strings.t('pair.connectToMicaGo'))),
       body: SafeArea(
         child: ListenableBuilder(
           listenable: _controller,
@@ -132,18 +134,18 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const _BrandHeader(),
+                  _BrandHeader(strings: strings),
                   const SizedBox(height: 24),
                   FilledButton.icon(
                     onPressed: () => context.push(Routes.pair),
                     icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan QR code'),
+                    label: Text(strings.t('pair.scanQr')),
                   ),
                   const SizedBox(height: 12),
                   FilledButton.tonalIcon(
                     onPressed: _pasteConnectionJson,
                     icon: const Icon(Icons.content_paste),
-                    label: const Text('Paste connection JSON'),
+                    label: Text(strings.t('pair.pasteJson')),
                   ),
                   if (_pasteError != null) ...[
                     const SizedBox(height: 12),
@@ -154,10 +156,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     key: _formKey,
                     child: ExpansionTile(
                       tilePadding: EdgeInsets.zero,
-                      title: const Text('Advanced manual setup'),
-                      subtitle: const Text(
-                        'Enter origins only; WebSocket URLs are derived automatically.',
-                      ),
+                      title: Text(strings.t('pair.advancedSetup')),
+                      subtitle: Text(strings.t('pair.advancedSetupHint')),
                       children: [
                         const SizedBox(height: 8),
                         TextFormField(
@@ -165,7 +165,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                           keyboardType: TextInputType.url,
                           autocorrect: false,
                           decoration: InputDecoration(
-                            labelText: 'Public URL (optional)',
+                            labelText: strings.t('pair.publicUrl'),
                             hintText: 'https://mica.example.com',
                             helperText: _derivedPublicWs,
                             prefixIcon: const Icon(Icons.public_outlined),
@@ -178,7 +178,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                           keyboardType: TextInputType.url,
                           autocorrect: false,
                           decoration: InputDecoration(
-                            labelText: 'LAN URL (optional)',
+                            labelText: strings.t('pair.lanUrl'),
                             hintText: 'http://192.168.1.23:3000',
                             helperText: _derivedLanWs,
                             prefixIcon: const Icon(Icons.wifi_tethering),
@@ -192,7 +192,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                           autocorrect: false,
                           enableSuggestions: false,
                           decoration: InputDecoration(
-                            labelText: 'Bearer token',
+                            labelText: strings.t('pair.bearerToken'),
                             prefixIcon: const Icon(Icons.key_outlined),
                             suffixIcon: IconButton(
                               tooltip: _obscureToken ? 'Show' : 'Hide',
@@ -224,13 +224,13 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                                   ),
                                 )
                               : const Icon(Icons.wifi_tethering),
-                          label: const Text('Test advanced connection'),
+                          label: Text(strings.t('pair.testAdvanced')),
                         ),
                         const SizedBox(height: 12),
                         FilledButton.icon(
                           onPressed: _onSaveAdvanced,
                           icon: const Icon(Icons.save_outlined),
-                          label: const Text('Save advanced connection'),
+                          label: Text(strings.t('pair.saveAdvanced')),
                         ),
                         const SizedBox(height: 16),
                         _TestResult(controller: _controller),
@@ -272,7 +272,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 }
 
 class _BrandHeader extends StatelessWidget {
-  const _BrandHeader();
+  final MicaLocalizations strings;
+  const _BrandHeader({required this.strings});
 
   @override
   Widget build(BuildContext context) {
@@ -292,9 +293,9 @@ class _BrandHeader extends StatelessWidget {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('MicaGo', style: Theme.of(context).textTheme.headlineSmall),
+            Text('micaGO', style: Theme.of(context).textTheme.headlineSmall),
             Text(
-              'Connect with QR or connection JSON',
+              strings.t('pair.headerSubtitle'),
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),

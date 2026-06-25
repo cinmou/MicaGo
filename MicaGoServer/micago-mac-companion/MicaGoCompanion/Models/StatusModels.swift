@@ -41,6 +41,9 @@ struct MessageActionsStatus: Codable {
     var helper: String?
     var reason: String?
     var requiresMessages: Bool
+    var minimumMacOS: String?
+    var platformSupported: Bool?
+    var platformWarning: String?
 }
 
 /// C17: identity of the running backend binary, from /api/server/status.
@@ -192,7 +195,7 @@ struct DeviceInfo: Codable, Identifiable {
     /// "{name} - MicaGo {version}" — the card's main line (C21u).
     var displayTitle: String {
         if let v = appVersion, !v.isEmpty {
-            return "\(name) - MicaGo \(v)"
+            return "\(name) - micaGO \(v)"
         }
         return name
     }

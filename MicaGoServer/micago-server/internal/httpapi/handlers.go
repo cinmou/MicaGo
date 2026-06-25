@@ -240,7 +240,7 @@ func NewHandlers(
 		status:          status,
 		startedAt:       time.Now().UnixMilli(),
 		serverInfo: store.ServerInfoResponse{
-			Name:         "MicaGoServer",
+			Name:         "micaGO Server",
 			Version:      version.Version,
 			BaseURL:      config.DeriveBaseURL(serverCfg),
 			WebSocketURL: config.DeriveWebSocketURL(serverCfg),

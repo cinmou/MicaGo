@@ -7,10 +7,8 @@ import 'storage/secure_store.dart';
 /// when available; the rest are fixed seed colors.
 enum ThemeColorChoice { system, micago, blue, green, purple, orange }
 
-/// Language choice. The UI is wired for locale switching, but app-specific
-/// strings are **not yet translated** (see docs/imessage-feature-map.md) — only
-/// Flutter's built-in Material widgets localize today.
-enum LanguageChoice { system, english, chinese }
+/// Language choice. Null locale follows the system.
+enum LanguageChoice { system, english, simplifiedChinese, traditionalChinese }
 
 /// App appearance + language preferences, persisted locally.
 class ThemeController extends ChangeNotifier {
@@ -48,8 +46,10 @@ class ThemeController extends ChangeNotifier {
         return null;
       case LanguageChoice.english:
         return const Locale('en');
-      case LanguageChoice.chinese:
-        return const Locale('zh');
+      case LanguageChoice.simplifiedChinese:
+        return const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans');
+      case LanguageChoice.traditionalChinese:
+        return const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant');
     }
   }
 
@@ -90,8 +90,11 @@ class ThemeController extends ChangeNotifier {
     (c) => c.name == v,
     orElse: () => ThemeColorChoice.system,
   );
-  LanguageChoice _parseLang(String? v) => LanguageChoice.values.firstWhere(
-    (l) => l.name == v,
-    orElse: () => LanguageChoice.system,
-  );
+  LanguageChoice _parseLang(String? v) {
+    if (v == 'chinese') return LanguageChoice.simplifiedChinese;
+    return LanguageChoice.values.firstWhere(
+      (l) => l.name == v,
+      orElse: () => LanguageChoice.system,
+    );
+  }
 }

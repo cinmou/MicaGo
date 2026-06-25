@@ -11,6 +11,10 @@ type Notification struct {
 	SourceRowID int64  `json:"sourceRowId"`
 	Title       string `json:"title"`
 	Body        string `json:"body"`
+	// Handle is the raw sender address (phone/email). C31: carried so the client
+	// can fall back to it for the notification title and resolve it against the
+	// on-device address book — so a push never shows a GUID or an empty title.
+	Handle      string `json:"handle"`
 	PreviewMode string `json:"previewMode"`
 	CreatedAt   int64  `json:"createdAt"`
 }

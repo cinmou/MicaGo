@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
+import '../../core/l10n/app_localizations.dart';
 import '../../core/network/push_service.dart';
 import '../chats/chats_pane.dart';
 import '../settings/settings_screen.dart';
@@ -27,8 +28,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   AppController? _app;
 
   static const _destinations = <_Destination>[
-    _Destination('Chats', Icons.chat_bubble_outline, Icons.chat_bubble),
-    _Destination('Settings', Icons.settings_outlined, Icons.settings),
+    _Destination('nav.chats', Icons.chat_bubble_outline, Icons.chat_bubble),
+    _Destination('nav.settings', Icons.settings_outlined, Icons.settings),
   ];
 
   @override
@@ -56,11 +57,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    final app = _app ?? context.read<AppController>();
+    // C31: track foreground/background so the keep-alive path only raises a
+    // system notification when the UI isn't already showing the message.
+    app.setForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.resumed) {
       // C20: one entry point — reconnect if needed + lightweight catch-up.
       // C22: this resume → catchUp is also the post-FCM-wake correctness path.
-      context.read<AppController>().onResume();
+      app.onResume();
       unawaited(_push?.start() ?? Future<void>.value());
+      // Refresh the Android 13+ notification-permission diagnostic on resume.
+      unawaited(_push?.refreshNotificationPermission() ?? Future<void>.value());
     }
   }
 
@@ -85,9 +92,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.of(context).size.width >= 720;
+    final strings = MicaLocalizations.of(context);
 
     final scaffold = Scaffold(
-      appBar: AppBar(title: Text(_destinations[_index].label)),
+      appBar: AppBar(title: Text(strings.t(_destinations[_index].label))),
       body: SafeArea(
         // C19: connection banner (offline / public-fallback) + recovery snackbars.
         child: ConnectionNoticeHost(
@@ -112,7 +120,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                   NavigationDestination(
                     icon: Icon(d.icon),
                     selectedIcon: Icon(d.selectedIcon),
-                    label: d.label,
+                    label: strings.t(d.label),
                   ),
               ],
             ),
@@ -137,7 +145,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                   NavigationRailDestination(
                     icon: Icon(d.icon),
                     selectedIcon: Icon(d.selectedIcon),
-                    label: Text(d.label),
+                    label: Text(strings.t(d.label)),
                   ),
               ],
             ),
