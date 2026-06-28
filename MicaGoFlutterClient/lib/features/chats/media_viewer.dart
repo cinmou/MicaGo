@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../core/network/api_client.dart';
+import 'attachment_views.dart';
 import 'models/message_model.dart';
 
 /// Full-screen media viewer (Part H): dim background, pinch-zoom, swipe between
@@ -32,11 +33,27 @@ class MediaGalleryViewer extends StatefulWidget {
       PageRouteBuilder(
         opaque: false,
         barrierColor: Colors.black,
+        transitionDuration: const Duration(milliseconds: 220),
+        reverseTransitionDuration: const Duration(milliseconds: 180),
         pageBuilder: (_, _, _) => MediaGalleryViewer(
           api: api,
           images: images,
           initialIndex: initialIndex,
         ),
+        transitionsBuilder: (_, animation, _, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+              child: child,
+            ),
+          );
+        },
       ),
     );
   }
@@ -183,9 +200,10 @@ class _ZoomableImageState extends State<_ZoomableImage>
         ..setEntry(0, 3, -pos.dx * (scale - 1))
         ..setEntry(1, 3, -pos.dy * (scale - 1));
     }
-    _zoomAnim = Matrix4Tween(begin: _tc.value, end: target).animate(
-      CurvedAnimation(parent: _anim, curve: Curves.easeOut),
-    );
+    _zoomAnim = Matrix4Tween(
+      begin: _tc.value,
+      end: target,
+    ).animate(CurvedAnimation(parent: _anim, curve: Curves.easeOut));
     _anim.forward(from: 0);
   }
 
@@ -208,6 +226,11 @@ class _ZoomableImageState extends State<_ZoomableImage>
         return GestureDetector(
           onDoubleTapDown: (d) => _doubleTapDetails = d,
           onDoubleTap: _handleDoubleTap,
+          onLongPress: () => showAttachmentActions(
+            context,
+            api: widget.api,
+            attachment: widget.attachment,
+          ),
           child: InteractiveViewer(
             transformationController: _tc,
             minScale: 1,
@@ -384,7 +407,8 @@ class _FullscreenVideoState extends State<FullscreenVideo> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
-    final ended = controller != null &&
+    final ended =
+        controller != null &&
         controller.value.position >= controller.value.duration &&
         controller.value.duration > Duration.zero;
     return Scaffold(
@@ -454,8 +478,9 @@ class _FullscreenVideoState extends State<FullscreenVideo> {
                           ),
                           Expanded(
                             child: Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 8),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
                               child: VideoProgressIndicator(
                                 controller,
                                 allowScrubbing: true,

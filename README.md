@@ -58,8 +58,9 @@ and **your** devices.
   own tunnel) works from anywhere.
 - 👤 **Contacts matching.** On‑device name resolution, opt‑in — the address book
   is never uploaded.
-- 🔔 **Notifications (optional).** Native Android MessagingStyle pushes via **your
-  own** Firebase, or a keep‑alive local path with no Firebase at all.
+- 🔔 **Notifications (optional).** A keep‑alive background service raises native
+  Android MessagingStyle alerts with nothing to set up. Prefer push? Point it at
+  **your own** Firebase instead.
 
 ---
 
@@ -170,12 +171,14 @@ flutter build apk --debug      # or: flutter run
 
 All optional and **off by default** — MicaGo works fully without any of them.
 
-- 🔔 **Firebase / FCM push.** Background push using **your own** Firebase project
-  (no `google-services.json` baked in). A thin *wake* signal; message data arrives
-  over WebSocket / delta. See [`docs/setup/firebase/`](docs/setup/firebase/README.md).
-- 🔋 **Keep‑alive service (Android).** A foreground service that holds the
-  connection open with a minimal notification — alerts with **no** push setup.
-  Default off; OEM battery managers can still throttle it.
+- 🔋 **Keep‑alive service (Android).** The simple path, and how most people will run
+  it: a foreground service holds the connection open and raises a local notification
+  when a message lands — no push account, no `google-services.json`. Default off, and
+  OEM battery managers can still throttle it.
+- 🔔 **Firebase / FCM push.** Rather not keep a service running? Wire up **your own**
+  Firebase project for background push (nothing baked in). The payload is only a wake
+  signal; the message itself arrives over WebSocket or delta sync. See
+  [`docs/setup/firebase/`](docs/setup/firebase/README.md).
 - ✍️ **Edit / Unsend / Delete (IMCore helper).** A small bundled helper that calls
   private macOS IMCore APIs.
   - *What it's for* — edit/unsend/delete a sent iMessage from the phone.
@@ -221,10 +224,11 @@ localized too; this README has [简体中文](README.zh-Hans.md) and
   Disk Access. It reads the live Messages database.
 - **Edit/Unsend/Delete** depend on your Mac granting private‑API (IMCore) access;
   where unavailable, those actions are hidden.
-- **Reliable killed‑app push** on Android effectively needs your own
-  `google-services.json` and/or keep‑alive; otherwise push is best‑effort while the
-  socket + delta sync cover the rest.
-- **Android only** for the client today (the API is client‑agnostic by design).
+- **Notifications while the app is killed** lean on the keep‑alive service, or on
+  your own `google-services.json` if you prefer Firebase. Without either, alerts are
+  best‑effort, and the socket plus delta sync still catch everything up on reopen.
+- **Verified on Android only.** The Flutter client can in principle build for other
+  platforms, but Android is the only one tested. The API is client‑agnostic by design.
 - Not affiliated with, or endorsed by, Apple. Use at your own risk.
 
 ---
@@ -242,10 +246,17 @@ bearer tokens or push tokens.
 
 ---
 
-<div align="center">
+## 🙏 Acknowledgments
 
-**[MIT](LICENSE)** · Built for people who'd rather host it themselves.
+MicaGo owes a lot to two open‑source projects that already mapped the hard parts of
+iMessage. We studied how they work and reimplemented the logic in our own code — no
+source was copied.
 
-[Get started →](docs/getting-started.md)
+- **[BlueBubbles](https://github.com/BlueBubblesApp)** — a mature iMessage bridge.
+  Its handling of stickers, link previews, location, handwriting, and Digital Touch
+  was our reference for classifying and rendering those message types.
+- **[imsg](https://imsg.sh)** by Peter Steinberger — a terminal iMessage tool with a
+  clean read of `chat.db` and the attachment / StickerCache layout, which guided our
+  server's read path.
 
-</div>
+Both are independent projects and are not affiliated with MicaGo.

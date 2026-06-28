@@ -145,6 +145,14 @@ const _strings = {
     'chat.digitalTouch': 'Digital Touch',
     'chat.recording': 'Recording…',
     'chat.send': 'Send',
+    'chat.saveAttachment': 'Save attachment',
+    'chat.savingAttachment': 'Saving attachment…',
+    'chat.attachmentSaved': 'Attachment saved.',
+    'chat.attachmentSaveFailed': 'Could not save attachment.',
+    'chat.shareAttachment': 'Share',
+    'chat.openAttachment': 'Open with…',
+    'chat.attachmentShareFailed': 'Could not share attachment.',
+    'chat.attachmentOpenFailed': 'Could not open attachment.',
   },
   'zhHans': {
     'settings.appearance': '外观',
@@ -226,11 +234,9 @@ const _strings = {
     'notif.sendTestBody': '向本设备投递一条测试推送',
     'notif.testSent': '测试通知已发送。',
     'notif.permOff': '通知已关闭',
-    'notif.permOffBody':
-        'Android 正在屏蔽通知，因此推送和保活都无法提醒你。请开启通知以接收消息。',
+    'notif.permOffBody': 'Android 正在屏蔽通知，因此推送和保活都无法提醒你。请开启通知以接收消息。',
     'notif.turnOn': '开启',
-    'notif.permBlocked':
-        '通知已被屏蔽。请在 Android 设置 → 应用 → micaGO → 通知 中启用。',
+    'notif.permBlocked': '通知已被屏蔽。请在 Android 设置 → 应用 → micaGO → 通知 中启用。',
     'notif.keepAlive': '在后台保持 micaGO 运行',
     'notif.keepAliveBody':
         '进阶选项。一个前台服务会保持连接打开，即使没有 Firebase 也能显示本地通知 —— 因此无需配置推送也能收到提醒。厂商的电池策略仍可能限制它，并且更耗电。',
@@ -244,6 +250,14 @@ const _strings = {
     'chat.digitalTouch': 'Digital Touch',
     'chat.recording': '录音中…',
     'chat.send': '发送',
+    'chat.saveAttachment': '保存附件',
+    'chat.savingAttachment': '正在保存附件…',
+    'chat.attachmentSaved': '附件已保存。',
+    'chat.attachmentSaveFailed': '附件保存失败。',
+    'chat.shareAttachment': '分享',
+    'chat.openAttachment': '用其他应用打开…',
+    'chat.attachmentShareFailed': '附件分享失败。',
+    'chat.attachmentOpenFailed': '附件打开失败。',
   },
   'zhHant': {
     'settings.appearance': '外觀',
@@ -325,11 +339,9 @@ const _strings = {
     'notif.sendTestBody': '向本裝置投遞一則測試推播',
     'notif.testSent': '測試通知已傳送。',
     'notif.permOff': '通知已關閉',
-    'notif.permOffBody':
-        'Android 正在封鎖通知，因此推播和保活都無法提醒你。請開啟通知以接收訊息。',
+    'notif.permOffBody': 'Android 正在封鎖通知，因此推播和保活都無法提醒你。請開啟通知以接收訊息。',
     'notif.turnOn': '開啟',
-    'notif.permBlocked':
-        '通知已被封鎖。請在 Android 設定 → 應用程式 → micaGO → 通知 中啟用。',
+    'notif.permBlocked': '通知已被封鎖。請在 Android 設定 → 應用程式 → micaGO → 通知 中啟用。',
     'notif.keepAlive': '在背景保持 micaGO 執行',
     'notif.keepAliveBody':
         '進階選項。一個前景服務會保持連線開啟，即使沒有 Firebase 也能顯示本機通知 —— 因此無需設定推播也能收到提醒。廠商的電池策略仍可能限制它，並且更耗電。',
@@ -343,5 +355,13 @@ const _strings = {
     'chat.digitalTouch': 'Digital Touch',
     'chat.recording': '錄音中…',
     'chat.send': '傳送',
+    'chat.saveAttachment': '儲存附件',
+    'chat.savingAttachment': '正在儲存附件…',
+    'chat.attachmentSaved': '附件已儲存。',
+    'chat.attachmentSaveFailed': '附件儲存失敗。',
+    'chat.shareAttachment': '分享',
+    'chat.openAttachment': '用其他應用程式開啟…',
+    'chat.attachmentShareFailed': '附件分享失敗。',
+    'chat.attachmentOpenFailed': '附件開啟失敗。',
   },
 };

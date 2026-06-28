@@ -12,9 +12,11 @@ class VoiceRecorder {
   final AudioRecorder _rec = AudioRecorder();
   String? _path;
   Timer? _ticker;
+  Timer? _ampTicker;
 
   /// Elapsed recording time, for the UI timer.
   final ValueNotifier<Duration> elapsed = ValueNotifier(Duration.zero);
+  final ValueNotifier<List<double>> levels = ValueNotifier(<double>[]);
 
   bool get isRecording => _path != null;
 
@@ -34,6 +36,18 @@ class VoiceRecorder {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         elapsed.value += const Duration(seconds: 1);
       });
+      _ampTicker = Timer.periodic(const Duration(milliseconds: 90), (_) async {
+        try {
+          final amp = await _rec.getAmplitude();
+          final db = amp.current.isFinite ? amp.current : -60.0;
+          final normalized = ((db + 60) / 60).clamp(0.04, 1.0).toDouble();
+          final next = [...levels.value, normalized];
+          if (next.length > 44) next.removeRange(0, next.length - 44);
+          levels.value = next;
+        } catch (_) {
+          // Amplitude is best-effort; recording itself can continue.
+        }
+      });
       return true;
     } catch (_) {
       _path = null;
@@ -44,6 +58,7 @@ class VoiceRecorder {
   /// Stops and returns the recorded bytes + a filename, or null on failure.
   Future<({Uint8List bytes, String filename})?> stop() async {
     _ticker?.cancel();
+    _ampTicker?.cancel();
     String? path;
     try {
       path = await _rec.stop();
@@ -58,7 +73,9 @@ class VoiceRecorder {
       final bytes = await file.readAsBytes();
       try {
         await file.delete();
-      } catch (_) {/* best-effort cleanup */}
+      } catch (_) {
+        /* best-effort cleanup */
+      }
       if (bytes.isEmpty) return null;
       return (
         bytes: bytes,
@@ -71,15 +88,20 @@ class VoiceRecorder {
 
   Future<void> cancel() async {
     _ticker?.cancel();
+    _ampTicker?.cancel();
     try {
       await _rec.cancel();
-    } catch (_) {/* ignore */}
+    } catch (_) {
+      /* ignore */
+    }
     _path = null;
   }
 
   void dispose() {
     _ticker?.cancel();
+    _ampTicker?.cancel();
     _rec.dispose();
     elapsed.dispose();
+    levels.dispose();
   }
 }

@@ -186,24 +186,27 @@ class PushService {
     _localReady = true;
     // The keep-alive path (in AppController) shows local notifications through
     // the same initialized plugin, so FCM + keep-alive dedupe by notification id.
-    app.showLocalNotification = (
-            {required String? chatGuid,
-            required String messageGuid,
-            required String senderName,
-            required String conversationTitle,
-            String? body,
-            String? avatarFilePath,
-            bool isGroup = false}) =>
-        showMessageNotification(
-          _local,
-          chatGuid: chatGuid,
-          messageGuid: messageGuid,
-          senderName: senderName,
-          conversationTitle: conversationTitle,
-          body: body,
-          avatarFilePath: avatarFilePath,
-          isGroup: isGroup,
-        );
+    app.showLocalNotification =
+        ({
+          required String? chatGuid,
+          required String messageGuid,
+          required String senderName,
+          required String conversationTitle,
+          String? body,
+          String? avatarFilePath,
+          bool isGroup = false,
+        }) => app.isChatMuted(chatGuid ?? '')
+        ? Future<void>.value()
+        : showMessageNotification(
+            _local,
+            chatGuid: chatGuid,
+            messageGuid: messageGuid,
+            senderName: senderName,
+            conversationTitle: conversationTitle,
+            body: body,
+            avatarFilePath: avatarFilePath,
+            isGroup: isGroup,
+          );
     // Opening a chat clears its stacked conversation notification.
     app.clearChatNotification = (chatGuid) =>
         cancelChatNotification(_local, chatGuid);
@@ -250,7 +253,8 @@ class PushService {
     );
     await _local
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(messageNotificationChannel);
   }
 }
@@ -281,7 +285,9 @@ Future<void> micaGoFirebaseBackgroundHandler(RemoteMessage message) async {
 Future<bool> ensureBackgroundFirebase() async {
   if (Firebase.apps.isNotEmpty) return true;
   try {
-    final raw = await const FlutterSecureStorage().read(key: fcmOptionsStorageKey);
+    final raw = await const FlutterSecureStorage().read(
+      key: fcmOptionsStorageKey,
+    );
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
@@ -361,7 +367,10 @@ Future<String> sendNotificationReply(String chatGuid, String text) async {
   if (profile == null || !profile.isComplete) {
     return 'reply failed: not paired';
   }
-  final api = ApiClient(baseUrl: profile.effectiveBaseUrl, token: profile.token);
+  final api = ApiClient(
+    baseUrl: profile.effectiveBaseUrl,
+    token: profile.token,
+  );
   try {
     await api.sendText(
       chatGuid: chatGuid,

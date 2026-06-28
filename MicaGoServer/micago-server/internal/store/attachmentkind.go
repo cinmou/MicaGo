@@ -242,9 +242,12 @@ func IsTIFFAttachment(mimeType, uti, transferName, filename *string) bool {
 }
 
 func NeedsPreviewConversion(isSticker bool, mimeType, uti, transferName, filename *string) bool {
-	if isSticker {
-		return true
-	}
+	// C39: stickers are NOT force-converted any more. A sticker is usually a plain
+	// PNG (in ~/Library/Messages/StickerCache) the client can render directly, so
+	// only convert when the format itself isn't web-renderable (HEIC/TIFF, below).
+	// Forcing conversion on every sticker added a needless transcode and a second
+	// failure point. `isSticker` is intentionally unused now.
+	_ = isSticker
 	if IsTIFFAttachment(mimeType, uti, transferName, filename) {
 		return true
 	}

@@ -1,12 +1,18 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/l10n/app_localizations.dart';
 import '../../core/network/api_client.dart';
+import '../../core/ui/top_banner.dart';
 import 'media_viewer.dart';
 import 'models/message_model.dart';
 import 'url_preview.dart';
@@ -51,7 +57,7 @@ class AttachmentView extends StatelessWidget {
       );
     }
     if (attachment.isImage && attachment.needsPreviewConversion) {
-      return _PreviewUnavailableAttachment(attachment: attachment);
+      return _PreviewUnavailableAttachment(api: api, attachment: attachment);
     }
     if (attachment.isAudio) {
       return _AudioAttachment(api: api, attachment: attachment);
@@ -65,8 +71,195 @@ class AttachmentView extends StatelessWidget {
     if (attachment.isLinkPreview) {
       return _LinkAttachment(attachment: attachment);
     }
-    return _FileAttachment(attachment: attachment);
+    return _FileAttachment(api: api, attachment: attachment);
   }
+}
+
+enum AttachmentAction { save, share, open }
+
+Future<void> showAttachmentActions(
+  BuildContext context, {
+  required ApiClient api,
+  required AttachmentModel attachment,
+}) async {
+  final strings = MicaLocalizations.of(context);
+  final action = await showModalBottomSheet<AttachmentAction>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.file_download_outlined),
+              title: Text(strings.t('chat.saveAttachment')),
+              subtitle: Text(attachment.displayName),
+              onTap: () =>
+                  Navigator.of(sheetContext).pop(AttachmentAction.save),
+            ),
+            ListTile(
+              leading: const Icon(Icons.ios_share_outlined),
+              title: Text(strings.t('chat.shareAttachment')),
+              onTap: () =>
+                  Navigator.of(sheetContext).pop(AttachmentAction.share),
+            ),
+            ListTile(
+              leading: const Icon(Icons.open_in_new_outlined),
+              title: Text(strings.t('chat.openAttachment')),
+              onTap: () =>
+                  Navigator.of(sheetContext).pop(AttachmentAction.open),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+  if (!context.mounted || action == null) return;
+  switch (action) {
+    case AttachmentAction.save:
+      await _saveAttachment(context, api: api, attachment: attachment);
+    case AttachmentAction.share:
+      await _shareAttachment(context, api: api, attachment: attachment);
+    case AttachmentAction.open:
+      await _openAttachment(context, api: api, attachment: attachment);
+  }
+}
+
+Future<void> _saveAttachment(
+  BuildContext context, {
+  required ApiClient api,
+  required AttachmentModel attachment,
+}) async {
+  final strings = MicaLocalizations.of(context);
+  try {
+    TopBanner.show(context, strings.t('chat.savingAttachment'));
+    final bytes = await api.getAttachmentBytes(attachment.guid);
+    if (!context.mounted) return;
+
+    final fileName = _attachmentSaveName(attachment);
+    String? path;
+    try {
+      path = await FilePicker.platform.saveFile(
+        dialogTitle: strings.t('chat.saveAttachment'),
+        fileName: fileName,
+        bytes: bytes,
+      );
+    } on UnsupportedError {
+      path = await FilePicker.platform.saveFile(
+        dialogTitle: strings.t('chat.saveAttachment'),
+        fileName: fileName,
+      );
+      if (path != null) {
+        await File(path).writeAsBytes(bytes, flush: true);
+      }
+    }
+    if (!context.mounted || path == null) return;
+    TopBanner.show(context, strings.t('chat.attachmentSaved'));
+  } catch (_) {
+    if (!context.mounted) return;
+    TopBanner.show(
+      context,
+      strings.t('chat.attachmentSaveFailed'),
+      kind: TopBannerKind.error,
+    );
+  }
+}
+
+Future<File> _writeTempAttachment({
+  required ApiClient api,
+  required AttachmentModel attachment,
+}) async {
+  final bytes = await api.getAttachmentBytes(attachment.guid);
+  final dir = await getTemporaryDirectory();
+  final folder = Directory('${dir.path}/micago-attachments');
+  if (!await folder.exists()) {
+    await folder.create(recursive: true);
+  }
+  final file = File('${folder.path}/${_attachmentSaveName(attachment)}');
+  await file.writeAsBytes(bytes, flush: true);
+  return file;
+}
+
+Future<void> _shareAttachment(
+  BuildContext context, {
+  required ApiClient api,
+  required AttachmentModel attachment,
+}) async {
+  final strings = MicaLocalizations.of(context);
+  try {
+    final file = await _writeTempAttachment(api: api, attachment: attachment);
+    if (!context.mounted) return;
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: attachment.mimeType)],
+      subject: attachment.displayName,
+      fileNameOverrides: [_attachmentSaveName(attachment)],
+    );
+  } catch (_) {
+    if (!context.mounted) return;
+    TopBanner.show(
+      context,
+      strings.t('chat.attachmentShareFailed'),
+      kind: TopBannerKind.error,
+    );
+  }
+}
+
+Future<void> _openAttachment(
+  BuildContext context, {
+  required ApiClient api,
+  required AttachmentModel attachment,
+}) async {
+  final strings = MicaLocalizations.of(context);
+  try {
+    final file = await _writeTempAttachment(api: api, attachment: attachment);
+    final result = await OpenFilex.open(file.path, type: attachment.mimeType);
+    if (!context.mounted || result.type == ResultType.done) return;
+    TopBanner.show(
+      context,
+      result.message.isNotEmpty
+          ? result.message
+          : strings.t('chat.attachmentOpenFailed'),
+      kind: TopBannerKind.error,
+    );
+  } catch (_) {
+    if (!context.mounted) return;
+    TopBanner.show(
+      context,
+      strings.t('chat.attachmentOpenFailed'),
+      kind: TopBannerKind.error,
+    );
+  }
+}
+
+String _attachmentSaveName(AttachmentModel attachment) {
+  final display = attachment.displayName.trim();
+  var name = display.isEmpty || display == 'Attachment'
+      ? 'attachment-${attachment.guid}'
+      : display.split(RegExp(r'[/\\]')).last;
+  name = name.replaceAll(RegExp(r'[\x00-\x1F<>:"|?*]'), '_').trim();
+  if (name.isEmpty) name = 'attachment-${attachment.guid}';
+  if (!name.contains('.')) {
+    final ext = _extensionFor(attachment);
+    if (ext != null) name = '$name$ext';
+  }
+  return name;
+}
+
+String? _extensionFor(AttachmentModel attachment) {
+  final mime = attachment.mimeType ?? attachment.originalMimeType ?? '';
+  if (attachment.isVoiceMessage) return '.caf';
+  if (mime == 'image/jpeg') return '.jpg';
+  if (mime == 'image/png') return '.png';
+  if (mime == 'image/gif') return '.gif';
+  if (mime == 'image/heic' || mime == 'image/heif') return '.heic';
+  if (mime == 'image/tiff') return '.tiff';
+  if (mime == 'video/quicktime') return '.mov';
+  if (mime == 'video/mp4') return '.mp4';
+  if (mime == 'audio/x-m4a' || mime == 'audio/mp4') return '.m4a';
+  if (mime == 'audio/x-caf') return '.caf';
+  if (mime == 'application/pdf') return '.pdf';
+  return null;
 }
 
 class _LinkAttachment extends StatelessWidget {
@@ -191,12 +384,10 @@ class _VideoAttachment extends StatelessWidget {
     return GestureDetector(
       onTap: () =>
           FullscreenVideo.open(context, api: api, attachment: attachment),
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: scheme.surface.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(12),
-        ),
+      onLongPress: () =>
+          showAttachmentActions(context, api: api, attachment: attachment),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -273,10 +464,10 @@ class _StickerAttachmentState extends State<_StickerAttachment> {
         }
         return GestureDetector(
           onTap: () => setState(() => _visible = !_visible),
-          onLongPress: () => MediaGalleryViewer.open(
+          onLongPress: () => showAttachmentActions(
             context,
             api: widget.api,
-            images: [widget.attachment],
+            attachment: widget.attachment,
           ),
           child: AnimatedOpacity(
             duration: const Duration(milliseconds: 150),
@@ -333,54 +524,58 @@ class _StickerPlaceholder extends StatelessWidget {
 }
 
 class _PreviewUnavailableAttachment extends StatelessWidget {
+  final ApiClient api;
   final AttachmentModel attachment;
-  const _PreviewUnavailableAttachment({required this.attachment});
+  const _PreviewUnavailableAttachment({
+    required this.api,
+    required this.attachment,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: scheme.surface.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.image_not_supported_outlined,
-            color: scheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('TIFF image'),
-                Text(
-                  'Preview not available yet',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                if (attachment.displayName != 'Attachment')
+    return GestureDetector(
+      onLongPress: () =>
+          showAttachmentActions(context, api: api, attachment: attachment),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.image_not_supported_outlined,
+              color: scheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('TIFF image'),
                   Text(
-                    attachment.displayName,
+                    'Preview not available yet',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
-                if (attachment.totalBytes > 0)
-                  Text(
-                    _formatSize(attachment.totalBytes),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-              ],
+                  if (attachment.displayName != 'Attachment')
+                    Text(
+                      attachment.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  if (attachment.totalBytes > 0)
+                    Text(
+                      _formatSize(attachment.totalBytes),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -432,7 +627,10 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
           );
         }
         if (snap.hasError || snap.data == null) {
-          return _FileAttachment(attachment: widget.attachment);
+          return _FileAttachment(
+            api: widget.api,
+            attachment: widget.attachment,
+          );
         }
         final bytes = snap.data!;
         return GestureDetector(
@@ -442,13 +640,21 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
             images: widget.siblings,
             initialIndex: widget.index,
           ),
+          onLongPress: () => showAttachmentActions(
+            context,
+            api: widget.api,
+            attachment: widget.attachment,
+          ),
           // Bounded inline thumbnail: cap height and downscale the decode
           // (cacheWidth) so a large photo never decodes at full resolution in
           // the scrolling list. Full-size loading happens in the media viewer.
           child: ConstrainedBox(
             constraints: widget.attachment.isSticker
                 ? const BoxConstraints(maxHeight: 180, maxWidth: 180)
-                : const BoxConstraints(maxHeight: 260, maxWidth: 280),
+                : BoxConstraints(
+                    maxHeight: 340,
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+                  ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(
                 widget.attachment.isSticker ? 4 : 12,
@@ -459,9 +665,11 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
                     ? BoxFit.contain
                     : BoxFit.cover,
                 gaplessPlayback: true,
-                cacheWidth: 560,
-                errorBuilder: (_, _, _) =>
-                    _FileAttachment(attachment: widget.attachment),
+                cacheWidth: 900,
+                errorBuilder: (_, _, _) => _FileAttachment(
+                  api: widget.api,
+                  attachment: widget.attachment,
+                ),
               ),
             ),
           ),
@@ -495,7 +703,7 @@ class _AudioAttachmentState extends State<_AudioAttachment> {
     try {
       if (!_loaded) {
         await _player.setUrl(
-          widget.api.attachmentUrl(widget.attachment.guid),
+          widget.api.attachmentPlayableUrl(widget.attachment.guid),
           headers: widget.api.mediaAuthHeaders, // token in header, not URL
         );
         _loaded = true;
@@ -517,86 +725,133 @@ class _AudioAttachmentState extends State<_AudioAttachment> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final label = widget.attachment.isVoiceMessage
         ? 'Voice message'
         : widget.attachment.displayName;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: scheme.surface.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
+    return GestureDetector(
+      onLongPress: () => showAttachmentActions(
+        context,
+        api: widget.api,
+        attachment: widget.attachment,
       ),
-      child: StreamBuilder<PlayerState>(
-        stream: _player.playerStateStream,
-        builder: (context, snap) {
-          final playing = snap.data?.playing ?? false;
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                onPressed: _failed ? null : _toggle,
-                icon: Icon(
-                  _failed
-                      ? Icons.error_outline
-                      : playing
-                      ? Icons.pause_circle
-                      : Icons.play_circle,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: StreamBuilder<PlayerState>(
+          stream: _player.playerStateStream,
+          builder: (context, snap) {
+            final playing = snap.data?.playing ?? false;
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  onPressed: _failed ? null : _toggle,
+                  icon: Icon(
+                    _failed
+                        ? Icons.error_outline
+                        : playing
+                        ? Icons.pause_circle
+                        : Icons.play_circle,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  _failed ? 'Audio unavailable' : label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    _failed ? 'Audio unavailable' : label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 }
 
 class _FileAttachment extends StatelessWidget {
+  final ApiClient api;
   final AttachmentModel attachment;
-  const _FileAttachment({required this.attachment});
+  const _FileAttachment({required this.api, required this.attachment});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: scheme.surface.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(_iconFor(attachment), color: scheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    final bg = Color.alphaBlend(
+      scheme.primary.withValues(alpha: 0.18),
+      scheme.surface,
+    );
+    final fg = scheme.onSurface;
+    final meta = [
+      _extensionLabel(attachment),
+      if (attachment.totalBytes > 0) _humanSize(attachment.totalBytes),
+    ].where((s) => s.isNotEmpty).join('  ');
+    return GestureDetector(
+      onLongPress: () =>
+          showAttachmentActions(context, api: api, attachment: attachment),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: 260,
+          maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+          minHeight: 84,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  attachment.displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: scheme.surface.withValues(alpha: 0.70),
+                  child: Icon(_iconFor(attachment), color: fg, size: 28),
                 ),
-                if (attachment.totalBytes > 0)
-                  Text(
-                    _humanSize(attachment.totalBytes),
-                    style: Theme.of(context).textTheme.bodySmall,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        attachment.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(color: fg, fontWeight: FontWeight.w700),
+                      ),
+                      if (meta.isNotEmpty)
+                        Text(
+                          meta,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                    ],
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Attachment actions',
+                  color: scheme.onSurfaceVariant,
+                  onPressed: () => showAttachmentActions(
+                    context,
+                    api: api,
+                    attachment: attachment,
+                  ),
+                  icon: const Icon(Icons.more_vert),
+                ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -611,6 +866,20 @@ class _FileAttachment extends StatelessWidget {
   }
 
   String _humanSize(int bytes) => _formatSize(bytes);
+
+  String _extensionLabel(AttachmentModel a) {
+    final name = a.displayName;
+    final idx = name.lastIndexOf('.');
+    if (idx >= 0 && idx < name.length - 1) {
+      return name.substring(idx + 1).toUpperCase();
+    }
+    final mime = a.mimeType ?? a.originalMimeType ?? '';
+    final slash = mime.indexOf('/');
+    if (slash >= 0 && slash < mime.length - 1) {
+      return mime.substring(slash + 1).toUpperCase();
+    }
+    return a.displayKind == 'unknown' ? 'FILE' : a.displayKind.toUpperCase();
+  }
 }
 
 String _formatSize(int bytes) {

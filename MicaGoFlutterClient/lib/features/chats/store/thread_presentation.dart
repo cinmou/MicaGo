@@ -51,6 +51,8 @@ class MessageViewItem extends ThreadViewItem {
   final String? systemLabel; // for system/unknown/retracted/reaction rows
   final int mergedSystemCount;
   final String? senderLabel; // shown only in groups for incoming; else null
+  final bool showSenderName; // first row in an incoming group sender run
+  final bool showSenderAvatar; // last row in an incoming group sender run
   final String? body; // sanitized display text (null = none)
   final ReplyPreview? reply;
   final List<MessageModel> reactions;
@@ -59,6 +61,7 @@ class MessageViewItem extends ThreadViewItem {
   final MessageDeliveryState deliveryState;
   final bool showStatus; // whether to render a delivery label
   final bool showTimestamp; // whether the footer shows the time by default
+  final bool showBubbleTail; // only the last bubble in a same-side run gets one
 
   MessageViewItem({
     required this.message,
@@ -67,6 +70,8 @@ class MessageViewItem extends ThreadViewItem {
     required this.systemLabel,
     required this.mergedSystemCount,
     required this.senderLabel,
+    required this.showSenderName,
+    required this.showSenderAvatar,
     required this.body,
     required this.reply,
     required this.reactions,
@@ -75,6 +80,7 @@ class MessageViewItem extends ThreadViewItem {
     required this.deliveryState,
     required this.showStatus,
     required this.showTimestamp,
+    required this.showBubbleTail,
   });
 
   @override
@@ -153,7 +159,8 @@ class ThreadPresentationBuilder {
     final items = <ThreadViewItem>[];
     DateTime? lastDay;
     int? lastTs;
-    for (final row in rows) {
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
       final m = row.message;
       final ts = m.dateCreated;
       if (ts != null) {
@@ -169,11 +176,25 @@ class ThreadPresentationBuilder {
         lastTs = ts;
       }
 
-      final isSystem =
-          row.kind == MessageRenderableKind.service ||
-          row.kind == MessageRenderableKind.reaction ||
-          row.kind == MessageRenderableKind.retracted ||
-          row.kind == MessageRenderableKind.unknown;
+      final isSystem = _isSystemKind(row.kind);
+      final next = i + 1 < rows.length ? rows[i + 1] : null;
+      final prev = i > 0 ? rows[i - 1] : null;
+      final nextIsSystem = next == null || _isSystemKind(next.kind);
+      final showBubbleTail =
+          !isSystem &&
+          (next == null || nextIsSystem || next.message.isFromMe != m.isFromMe);
+      final inIncomingGroupRun = isGroup && !isSystem && !m.isFromMe;
+      final sameAsPrev =
+          inIncomingGroupRun && prev != null && _sameSenderRun(prev, row);
+      final sameAsNext =
+          inIncomingGroupRun && next != null && _sameSenderRun(row, next);
+      final senderLabel = inIncomingGroupRun
+          ? resolveSenderLabel(
+              m,
+              isGroup: isGroup,
+              contactName: resolveName(m.handleId),
+            )
+          : null;
 
       items.add(
         MessageViewItem(
@@ -184,13 +205,9 @@ class ThreadPresentationBuilder {
               ? _systemLabel(row.kind, m, senderName: resolveName(m.handleId))
               : null,
           mergedSystemCount: row.mergedSystemCount,
-          senderLabel: (!isSystem && !m.isFromMe && isGroup)
-              ? resolveSenderLabel(
-                  m,
-                  isGroup: isGroup,
-                  contactName: resolveName(m.handleId),
-                )
-              : null,
+          senderLabel: senderLabel,
+          showSenderName: inIncomingGroupRun && !sameAsPrev,
+          showSenderAvatar: inIncomingGroupRun && !sameAsNext,
           body: isSystem ? null : displayText(m),
           reply: isSystem ? null : replyFor(m),
           reactions: row.reactions,
@@ -201,6 +218,7 @@ class ThreadPresentationBuilder {
           deliveryState: deliveryStateFor(m),
           showStatus: !isSystem && showStatusFor(m),
           showTimestamp: !isSystem && m.dedupeKey == lastRowKey,
+          showBubbleTail: showBubbleTail,
         ),
       );
     }
@@ -234,12 +252,42 @@ class ThreadPresentationBuilder {
         return 'Unsupported message';
     }
   }
+
+  static bool _isSystemKind(MessageRenderableKind kind) =>
+      kind == MessageRenderableKind.service ||
+      kind == MessageRenderableKind.reaction ||
+      kind == MessageRenderableKind.retracted ||
+      kind == MessageRenderableKind.unknown;
+
+  static bool _sameSenderRun(DisplayRow a, DisplayRow b) {
+    if (_isSystemKind(a.kind) || _isSystemKind(b.kind)) return false;
+    final am = a.message;
+    final bm = b.message;
+    if (am.isFromMe || bm.isFromMe) return false;
+    final ah = am.handleId?.trim();
+    final bh = bm.handleId?.trim();
+    if (ah == null || ah.isEmpty || bh == null || bh.isEmpty || ah != bh) {
+      return false;
+    }
+    final at = am.dateCreated;
+    final bt = bm.dateCreated;
+    if (at != null &&
+        bt != null &&
+        (bt - at).abs() > kSenderRunGap.inMilliseconds) {
+      return false;
+    }
+    return true;
+  }
 }
 
 /// C21u: the gap (since the previous message, same day) above which a centered
 /// time chip is shown. BlueBubbles groups closely-spaced messages and only
 /// surfaces a timestamp when the conversation pauses.
 const Duration kTimeClusterGap = Duration(minutes: 60);
+
+/// iMessage-style sender-run grouping for group chats: close consecutive
+/// incoming messages from the same sender share one avatar/name group.
+const Duration kSenderRunGap = Duration(minutes: 5);
 
 /// Whether a same-day time separator should precede a message sent at [ts],
 /// given the previous message's timestamp [prevTs]. Pure + testable.

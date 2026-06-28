@@ -230,6 +230,7 @@ class ThreadController extends ChangeNotifier {
           tempGuid: tempId,
           bytes: item.bytes,
           filename: item.filename,
+          isAudioMessage: item.isAudioMessage,
         );
       }
       // One catch-up after the batch; the rows also arrive via message:new.

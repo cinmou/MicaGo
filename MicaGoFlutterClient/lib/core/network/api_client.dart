@@ -568,6 +568,7 @@ class ApiClient {
     required String tempGuid,
     required Uint8List bytes,
     required String filename,
+    bool isAudioMessage = false,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -575,6 +576,9 @@ class ApiClient {
     );
     request.headers.addAll(_authHeaders);
     request.fields['tempGuid'] = tempGuid;
+    if (isAudioMessage) {
+      request.fields['isAudioMessage'] = 'true';
+    }
     request.files.add(
       http.MultipartFile.fromBytes('file', bytes, filename: filename),
     );
@@ -641,6 +645,10 @@ class ApiClient {
   /// the URL.
   String attachmentUrl(String attachmentGuid) => _uri(
     '/api/attachments/${Uri.encodeComponent(attachmentGuid)}',
+  ).toString();
+
+  String attachmentPlayableUrl(String attachmentGuid) => _uri(
+    '/api/attachments/${Uri.encodeComponent(attachmentGuid)}/playable',
   ).toString();
 
   /// Authorization headers for streaming media (e.g. just_audio). Kept out of

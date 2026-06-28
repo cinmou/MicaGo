@@ -12,10 +12,12 @@ class StagedAttachment {
   final Uint8List bytes;
   final String filename;
   final String? sourceId;
+  final bool isAudioMessage;
   const StagedAttachment({
     required this.bytes,
     required this.filename,
     this.sourceId,
+    this.isAudioMessage = false,
   });
 
   bool get isImage {
@@ -92,7 +94,7 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
         ),
       );
       if (albums.isNotEmpty) {
-        _recent = await albums.first.getAssetListRange(start: 0, end: 30);
+        _recent = await albums.first.getAssetListRange(start: 0, end: 31);
       }
     } catch (e) {
       widget.onError('Could not load recent media: $e');
@@ -133,78 +135,139 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
     }
   }
 
+  Future<void> _pickMoreImages() async {
+    try {
+      final files = await ImagePicker().pickMultiImage();
+      final picked = <StagedAttachment>[];
+      for (final file in files) {
+        picked.add(
+          StagedAttachment(
+            bytes: await file.readAsBytes(),
+            filename: file.name,
+          ),
+        );
+      }
+      if (picked.isNotEmpty) widget.onPicked(picked);
+    } catch (e) {
+      widget.onError('Could not open photo picker: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final height = (MediaQuery.sizeOf(context).height * 0.50).clamp(
+      300.0,
+      460.0,
+    );
     return Container(
-      height: 220,
+      height: height,
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        border: Border(top: BorderSide(color: scheme.outlineVariant)),
+        color: scheme.surfaceContainerHigh,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(18),
+          topRight: Radius.circular(18),
+        ),
       ),
-      padding: const EdgeInsets.all(8),
-      child: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : CustomScrollView(
-              scrollDirection: Axis.horizontal,
-              slivers: [
-                // Leading action tiles (always available).
-                SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 8,
-                    crossAxisSpacing: 8,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            SizedBox(
+              height: 20,
+              child: Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(999),
                   ),
-                  delegate: SliverChildListDelegate([
-                    // C21: Camera + Files only. The standalone "Video" tile was
-                    // removed — recent videos are pickable straight from the
-                    // grid below (they carry a play badge and send like any
-                    // other attachment).
-                    _ActionTile(
-                      icon: Icons.photo_camera_outlined,
-                      label: 'Camera',
-                      onTap: _pickCamera,
-                    ),
-                    _ActionTile(
-                      icon: Icons.folder_open_outlined,
-                      label: 'Files',
-                      onTap: _pickFiles,
-                    ),
-                    if (_permission == PermissionState.limited)
-                      _ActionTile(
-                        icon: Icons.add_photo_alternate_outlined,
-                        label: 'More photos',
-                        onTap: () => PhotoManager.presentLimited(),
-                      ),
-                  ]),
                 ),
-                const SliverPadding(padding: EdgeInsets.only(left: 8)),
-                // Recent gallery media grid (the BlueBubbles hallmark).
-                if (_permission?.hasAccess ?? false)
-                  SliverGrid(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          mainAxisSpacing: 8,
-                          crossAxisSpacing: 8,
-                        ),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, i) => _MediaTile(
-                        asset: _recent[i],
-                        selected: widget.selectedAssetIds.contains(
-                          _recent[i].id,
-                        ),
-                        onTap: () => widget.onToggleAsset(_recent[i]),
-                      ),
-                      childCount: _recent.length,
-                    ),
-                  )
-                else
-                  SliverToBoxAdapter(
-                    child: _PermissionPrompt(state: _permission),
-                  ),
-              ],
+              ),
             ),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : CustomScrollView(
+                      scrollDirection: Axis.horizontal,
+                      slivers: [
+                        // Leading action tiles (always available).
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(8, 0, 0, 8),
+                          sliver: SliverGrid(
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2,
+                                  mainAxisExtent: 118,
+                                  mainAxisSpacing: 8,
+                                  crossAxisSpacing: 8,
+                                ),
+                            delegate: SliverChildListDelegate([
+                              // C21: Camera + Files only. The standalone "Video" tile was
+                              // removed — recent videos are pickable straight from the
+                              // grid below (they carry a play badge and send like any
+                              // other attachment).
+                              _ActionTile(
+                                icon: Icons.photo_camera_outlined,
+                                label: 'Camera',
+                                onTap: _pickCamera,
+                              ),
+                              _ActionTile(
+                                icon: Icons.folder_open_outlined,
+                                label: 'Files',
+                                onTap: _pickFiles,
+                              ),
+                              if (_permission == PermissionState.limited)
+                                _ActionTile(
+                                  icon: Icons.add_photo_alternate_outlined,
+                                  label: 'More photos',
+                                  onTap: () => PhotoManager.presentLimited(),
+                                ),
+                            ]),
+                          ),
+                        ),
+                        const SliverPadding(padding: EdgeInsets.only(left: 8)),
+                        // Recent gallery media grid (the BlueBubbles hallmark).
+                        if (_permission?.hasAccess ?? false)
+                          SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(0, 0, 8, 8),
+                            sliver: SliverGrid(
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    mainAxisSpacing: 8,
+                                    crossAxisSpacing: 8,
+                                  ),
+                              delegate: SliverChildBuilderDelegate((
+                                context,
+                                i,
+                              ) {
+                                if (i == _recent.length) {
+                                  return _MorePhotosTile(
+                                    onTap: _pickMoreImages,
+                                  );
+                                }
+                                return _MediaTile(
+                                  asset: _recent[i],
+                                  selected: widget.selectedAssetIds.contains(
+                                    _recent[i].id,
+                                  ),
+                                  onTap: () => widget.onToggleAsset(_recent[i]),
+                                );
+                              }, childCount: _recent.length + 1),
+                            ),
+                          )
+                        else
+                          SliverToBoxAdapter(
+                            child: _PermissionPrompt(state: _permission),
+                          ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -223,19 +286,26 @@ class _ActionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return SizedBox(
-      width: 96,
+      width: 118,
       child: Material(
-        color: scheme.surface,
-        borderRadius: BorderRadius.circular(10),
+        color: scheme.primary,
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(18),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 26),
+              Icon(icon, size: 28, color: scheme.onPrimary),
               const SizedBox(height: 6),
-              Text(label, style: Theme.of(context).textTheme.labelSmall),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.onPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ],
           ),
         ),
@@ -264,7 +334,7 @@ class _MediaTileState extends State<_MediaTile> {
   @override
   void initState() {
     super.initState();
-    widget.asset.thumbnailDataWithSize(const ThumbnailSize.square(200)).then((
+    widget.asset.thumbnailDataWithSize(const ThumbnailSize.square(360)).then((
       data,
     ) {
       if (mounted) setState(() => _thumb = data);
@@ -315,6 +385,42 @@ class _MediaTileState extends State<_MediaTile> {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MorePhotosTile extends StatelessWidget {
+  final VoidCallback onTap;
+  const _MorePhotosTile({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 96,
+      child: Material(
+        color: scheme.primary,
+        borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.photo_library_outlined, color: scheme.onPrimary),
+              const SizedBox(height: 6),
+              Text(
+                'More',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

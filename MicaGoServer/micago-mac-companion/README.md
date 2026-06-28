@@ -29,10 +29,13 @@ The companion launches a prebuilt server binary (default `~/.micago/bin/micago`)
 
 ```bash
 cd ../micago-server
-go build -o ~/.micago/bin/micago ./cmd/micago
+scripts/update-backend.sh
 ```
 
-The path is editable in-app and persisted. The first server run creates
+The script builds the backend with version/commit/build-time stamps, installs it
+to `~/.micago/bin/micago`, and sets the Companion backend-path override so local
+development runs the newly built binary instead of an older bundled copy. The
+path is still editable in-app and persisted. The first server run creates
 `~/.micago/config.yaml` with the bearer token the companion reads.
 
 ## What it shows

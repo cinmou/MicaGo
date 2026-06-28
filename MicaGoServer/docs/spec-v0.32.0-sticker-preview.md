@@ -9,6 +9,8 @@
   messages. BlueBubbles overlays them on the target bubble.
 - MicaGo-recorded voice messages are sent as `voice_*.m4a`; they should display
   as voice notes, not generic audio.
+- Native Messages voice notes arrive as `Audio Message.caf`, which many Android
+  media stacks cannot decode directly.
 - The Messages "kept an audio message" row (`item_type=5` with a subject) is
   sync noise beside the real voice attachment.
 - Voice-message undo-send can lag until the next sync pass, making it appear as
@@ -24,6 +26,7 @@ BlueBubbles also:
 
 - renders associated stickers over their target message;
 - hides `itemType == 5 && subject != null` kept-audio rows;
+- sends recorded audio attachments with an `isAudioMessage` form flag;
 - sends edit/unsend with a `partIndex` and updates the visible message after a
   successful response.
 
@@ -39,6 +42,12 @@ BlueBubbles also:
   a transparent sticker strip over the target message.
 - `voice_*.m4a` attachments are classified as `displayKind=voice`, while normal
   `.m4a` files remain ordinary audio.
+- Flutter voice sends include `isAudioMessage=true`; the Go backend converts
+  those uploads to `Audio Message.caf` before passing them to Messages, matching
+  the native attachment container more closely.
+- Audio playback uses `/api/attachments/{guid}/playable`; CAF attachments are
+  transcoded to an AAC `.m4a` cache with `afconvert` so Android clients can play
+  Mac-originated voice notes.
 - Kept-audio system rows are hidden in the thread display.
 - After a successful undo-send request, the Flutter thread patches the target
   message locally as retracted, then lets the normal sync/WebSocket path confirm

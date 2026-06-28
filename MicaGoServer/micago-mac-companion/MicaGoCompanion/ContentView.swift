@@ -417,9 +417,11 @@ private struct DashboardDevicesCard: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                ForEach(model.activeConnections) { connection in
+                ForEach(Array(model.activeConnections.enumerated()), id: \.element.id) { index, connection in
                     ActiveConnectionRow(connection: connection)
-                    Divider()
+                    if index < model.activeConnections.count - 1 {
+                        Divider()
+                    }
                 }
             }
         }

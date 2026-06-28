@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -138,6 +139,20 @@ class AppController extends ChangeNotifier {
   bool get isForeground => _foreground;
   void setForeground(bool value) => _foreground = value;
 
+  static const _mutedChatsKey = 'micago.muted_chats.v1';
+  final Set<String> _mutedChats = <String>{};
+  bool isChatMuted(String chatGuid) => _mutedChats.contains(chatGuid);
+
+  Future<void> setChatMuted(String chatGuid, bool muted) async {
+    if (muted) {
+      _mutedChats.add(chatGuid);
+    } else {
+      _mutedChats.remove(chatGuid);
+    }
+    await store.writeValue(_mutedChatsKey, jsonEncode(_mutedChats.toList()));
+    notifyListeners();
+  }
+
   /// Called by the app shell on foreground resume (lightweight refresh).
   void onResume() {
     if (hasProfile && ws.status != WsStatus.connected) {
@@ -168,6 +183,7 @@ class AppController extends ChangeNotifier {
   Future<void> bootstrap() async {
     await cache.open();
     await _loadRealtimeDiagnostics();
+    await _loadMutedChats();
     _profile = await store.loadProfile();
     if (_profile != null) {
       _activeCandidate = connectionCandidatesForProfile(_profile!).firstOrNull;
@@ -189,6 +205,21 @@ class AppController extends ChangeNotifier {
     await _loadKeepAlive();
     _bootstrapped = true;
     notifyListeners();
+  }
+
+  Future<void> _loadMutedChats() async {
+    final raw = await store.readValue(_mutedChatsKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        _mutedChats
+          ..clear()
+          ..addAll(decoded.whereType<String>());
+      }
+    } catch (_) {
+      // Corrupt preference: keep notifications enabled.
+    }
   }
 
   /// Builds a throwaway [ApiClient] for the connection-test screen without

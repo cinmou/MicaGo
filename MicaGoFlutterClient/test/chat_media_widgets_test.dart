@@ -282,7 +282,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Message Info'), findsOneWidget);
+    // C39: the long-press "Message Info" entry was removed.
+    expect(find.text('Message Info'), findsNothing);
     expect(find.text('Copy debug JSON'), findsNothing);
   });
 
@@ -363,37 +364,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Message Info'), findsOneWidget);
+    expect(find.text('Message Info'), findsNothing);
     expect(find.text('Edit'), findsOneWidget);
     expect(find.text('Undo Send'), findsOneWidget);
     expect(find.text('Delete'), findsOneWidget);
-  });
-
-  testWidgets('message info remains accessible from the normal action menu', (
-    tester,
-  ) async {
-    const msg = MessageModel(guid: 'm1', text: 'Inspect me');
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Builder(
-            builder: (context) => GestureDetector(
-              onLongPressStart: (details) =>
-                  showMessageActionMenu(context, msg, details.globalPosition),
-              child: const Text('Inspect me'),
-            ),
-          ),
-        ),
-      ),
-    );
-
-    await tester.longPress(find.text('Inspect me'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Message Info'), findsOneWidget);
-    expect(find.text('Copy debug JSON'), findsNothing);
   });
 }
 

@@ -49,6 +49,22 @@ Three components:
   guides (android-client-connection / remote-access-cloudflare / notifications-setup /
   manual-test-flow) are still English-only — the localized index marks them "(英文)".
 
+## Sticker bytes not served (C39)
+
+- **Client showed "贴纸" but no image** because the sticker's file lives in
+  `~/Library/Messages/**StickerCache**/…` — a **sibling** of `Attachments`. The
+  `resolveAttachmentPath` guard (`internal/httpapi/handlers.go`) only allowed paths
+  **under** `attachmentsRoot`, so it 404'd the sticker. Fixed: allow the
+  `StickerCache` sibling too (`stickerCacheRoot`), guard still restricts to those
+  two Messages subdirs. Verified live: `GET /api/attachments/{guid}` → 200 image/png
+  served straight from StickerCache. Test: `internal/httpapi/sticker_path_test.go`.
+- Also made sticker **preview conversion format-driven** (`NeedsPreviewConversion` /
+  `attachmentNeedsPreviewConversion` no longer force-convert every sticker) — a PNG
+  sticker serves as-is; only HEIC/TIFF convert.
+- Removed the long-press **Message Info** entry (`MessageAction.info`) from
+  `showMessageActionMenu`; the `_SystemRow` tap-to-diagnose stays. Tests updated.
+- Requires rebuilding the bundled backend.
+
 ## Stickers / location / handwriting (C37, backend v0.32)
 
 - See [MicaGoServer/docs/stickers-location-handwriting.md](MicaGoServer/docs/stickers-location-handwriting.md).

@@ -935,11 +935,18 @@ func (h *Handlers) SendAttachment(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w)
 		return
 	}
+	sendPath := tmpPath
+	responseFilename := filepath.Base(header.Filename)
+	isAudioMessage := parseBoolFormValue(r.FormValue("isAudioMessage"))
+	if converted, ok := h.prepareOutgoingVoiceAttachment(r.Context(), tmpPath, header.Filename, isAudioMessage); ok {
+		sendPath = converted
+		responseFilename = filepath.Base(converted)
+	}
 	if tempGUID != "" {
 		h.broadcastSendPending(r.Context(), tempGUID, guid)
 	}
-	if err := h.send.Sender.SendAttachment(r.Context(), guid, tmpPath); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := h.send.Sender.SendAttachment(r.Context(), guid, sendPath); err != nil {
+		_ = os.Remove(sendPath)
 		h.logSend(tempGUID, "attachment send failed", err.Error())
 		if tempGUID != "" {
 			h.broadcastSendError(r.Context(), tempGUID, guid, "send_failed", "failed to send attachment")
@@ -960,8 +967,39 @@ func (h *Handlers) SendAttachment(w http.ResponseWriter, r *http.Request) {
 		"tempGuid": tempGUID,
 		"chatGuid": guid,
 		"state":    "sent_unconfirmed",
-		"filename": filepath.Base(header.Filename),
+		"filename": responseFilename,
 	})
+}
+
+func (h *Handlers) prepareOutgoingVoiceAttachment(ctx context.Context, sourcePath, originalName string, isAudioMessage bool) (string, bool) {
+	if !isAudioMessage || !isMicaGoVoiceUpload(originalName) {
+		return "", false
+	}
+	dest := filepath.Join(filepath.Dir(sourcePath), "Audio Message.caf")
+	convertCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(convertCtx, "afconvert", "-f", "caff", "-d", "aac", sourcePath, dest).Run(); err != nil {
+		h.logInternal("convert outgoing voice to caf", err)
+		return "", false
+	}
+	if err := os.Chmod(dest, 0o600); err != nil {
+		h.logInternal("chmod outgoing voice caf", err)
+	}
+	return dest, true
+}
+
+func isMicaGoVoiceUpload(name string) bool {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(name)))
+	return strings.HasPrefix(base, "voice_") && (strings.HasSuffix(base, ".m4a") || strings.HasSuffix(base, ".aac"))
+}
+
+func parseBoolFormValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // writeOutgoingTempFile saves an upload into Messages' attachment tree, mirroring
@@ -1062,6 +1100,101 @@ func (h *Handlers) GetAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeContent(w, r, filename, stat.ModTime(), file)
+}
+
+func (h *Handlers) GetAttachmentPlayable(w http.ResponseWriter, r *http.Request) {
+	if h.attachments == nil {
+		writeInternalError(w)
+		return
+	}
+
+	guid := r.PathValue("guid")
+	meta, err := h.attachments.GetAttachmentByGUID(r.Context(), guid)
+	if err != nil {
+		h.logInternal("get playable attachment", err)
+		writeInternalError(w)
+		return
+	}
+	if meta == nil || meta.HideAttachment {
+		writeNotFound(w, "attachment not found")
+		return
+	}
+	source, ok := resolveAttachmentPath(h.attachmentsRoot, meta.LocalPath)
+	if !ok {
+		writeNotFound(w, "attachment not found")
+		return
+	}
+	if !attachmentIsCAF(meta) {
+		h.serveAttachmentPath(w, r, meta, source)
+		return
+	}
+
+	playablePath := filepath.Join(os.TempDir(), "micago-attachment-audio", safePreviewName(guid)+".m4a")
+	if _, err := os.Stat(playablePath); err != nil {
+		if err := os.MkdirAll(filepath.Dir(playablePath), 0o700); err != nil {
+			h.logInternal("create playable audio dir", err)
+			writeInternalError(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := exec.CommandContext(ctx, "afconvert", "-f", "m4af", "-d", "aac", source, playablePath).Run(); err != nil {
+			h.logInternal("convert playable audio", err)
+			writeAPIError(w, http.StatusNotImplemented, "playable_unavailable", "playable audio conversion is not available for this attachment")
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "audio/mp4")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": "Audio Message.m4a"}))
+	http.ServeFile(w, r, playablePath)
+}
+
+func (h *Handlers) serveAttachmentPath(w http.ResponseWriter, r *http.Request, meta *store.AttachmentMeta, resolvedPath string) {
+	file, err := os.Open(resolvedPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeNotFound(w, "attachment not found")
+			return
+		}
+		h.logInternal("open attachment", err)
+		writeInternalError(w)
+		return
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		h.logInternal("stat attachment", err)
+		writeInternalError(w)
+		return
+	}
+
+	contentType := "application/octet-stream"
+	if inferred := store.InferMimeType(meta.MimeType, meta.Uti, meta.TransferName, meta.Filename); inferred != nil {
+		if v := strings.TrimSpace(*inferred); v != "" {
+			contentType = v
+		}
+	}
+	w.Header().Set("Content-Type", contentType)
+	filename := attachmentFilename(meta)
+	if filename != "" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+	}
+	http.ServeContent(w, r, filename, stat.ModTime(), file)
+}
+
+func attachmentIsCAF(meta *store.AttachmentMeta) bool {
+	if meta == nil {
+		return false
+	}
+	mimeType := strings.ToLower(strings.TrimSpace(ptrString(meta.MimeType)))
+	uti := strings.ToLower(strings.TrimSpace(ptrString(meta.Uti)))
+	name := strings.ToLower(strings.TrimSpace(attachmentFilename(meta)))
+	return mimeType == "audio/x-caf" ||
+		mimeType == "audio/caf" ||
+		uti == "com.apple.coreaudio-format" ||
+		uti == "com.apple.coreaudio.caf" ||
+		strings.HasSuffix(name, ".caf")
 }
 
 func (h *Handlers) GetAttachmentPreview(w http.ResponseWriter, r *http.Request) {
@@ -1424,6 +1557,16 @@ func resolveAttachmentPath(root string, localPath *string) (string, bool) {
 	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolvedRoot
 	}
+	// C39: stickers live in ~/Library/Messages/StickerCache (a sibling of
+	// Attachments), not under attachmentsRoot — so the old "must be under root"
+	// guard rejected them and the client got a 404 (it knew it was a sticker but
+	// could never fetch the PNG). Allow the StickerCache sibling too; the guard
+	// still restricts serving to these two Messages subdirectories.
+	allowedRoots := []string{root}
+	if sticker := stickerCacheRoot(root); sticker != "" {
+		allowedRoots = append(allowedRoots, sticker)
+	}
+
 	target := *localPath
 	if strings.HasPrefix(target, "~/") {
 		home, err := os.UserHomeDir()
@@ -1439,11 +1582,26 @@ func resolveAttachmentPath(root string, localPath *string) (string, bool) {
 		return "", false
 	}
 
-	if resolvedPath != root && !strings.HasPrefix(resolvedPath, root+string(os.PathSeparator)) {
-		return "", false
+	for _, allowed := range allowedRoots {
+		if resolvedPath == allowed || strings.HasPrefix(resolvedPath, allowed+string(os.PathSeparator)) {
+			return resolvedPath, true
+		}
 	}
+	return "", false
+}
 
-	return resolvedPath, true
+// stickerCacheRoot returns the StickerCache directory that sits next to the
+// Attachments root (i.e. ~/Library/Messages/StickerCache), symlink-resolved when
+// it exists. Empty when the root isn't the Messages Attachments dir.
+func stickerCacheRoot(attachmentsRoot string) string {
+	if filepath.Base(attachmentsRoot) != "Attachments" {
+		return ""
+	}
+	candidate := filepath.Clean(filepath.Join(filepath.Dir(attachmentsRoot), "StickerCache"))
+	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+		return resolved
+	}
+	return candidate
 }
 
 func attachmentFilename(meta *store.AttachmentMeta) string {
@@ -1466,9 +1624,7 @@ func attachmentNeedsPreviewConversion(meta *store.AttachmentMeta) bool {
 	if meta == nil {
 		return false
 	}
-	if meta.IsSticker {
-		return true
-	}
+	// C39: drive by format, not the sticker flag — a PNG sticker is served as-is.
 	mimeType := strings.ToLower(strings.TrimSpace(ptrString(meta.MimeType)))
 	uti := strings.ToLower(strings.TrimSpace(ptrString(meta.Uti)))
 	name := strings.ToLower(strings.TrimSpace(attachmentFilename(meta)))

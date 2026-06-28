@@ -156,6 +156,101 @@ void main() {
     expect(items.whereType<MessageViewItem>().single.senderLabel, isNull);
   });
 
+  test('group sender runs show name first and avatar last', () {
+    final t0 = DateTime(2024, 1, 1, 10).millisecondsSinceEpoch;
+    final items = _build(
+      [
+        _m(guid: 'a1', text: 'one', handleId: '+a', dateCreated: t0),
+        _m(
+          guid: 'a2',
+          text: 'two',
+          handleId: '+a',
+          dateCreated: t0 + 60 * 1000,
+        ),
+        _m(
+          guid: 'a3',
+          text: 'three',
+          handleId: '+a',
+          dateCreated: t0 + 2 * 60 * 1000,
+        ),
+        _m(
+          guid: 'b1',
+          text: 'four',
+          handleId: '+b',
+          dateCreated: t0 + 3 * 60 * 1000,
+        ),
+        _m(
+          guid: 'b2',
+          text: 'five',
+          handleId: '+b',
+          dateCreated: t0 + 9 * 60 * 1000,
+        ),
+        _m(
+          guid: 'me',
+          text: 'mine',
+          isFromMe: true,
+          dateCreated: t0 + 10 * 60 * 1000,
+        ),
+      ],
+      isGroup: true,
+      resolve: (h) => switch (h) {
+        '+a' => 'JJ',
+        '+b' => 'Uex',
+        _ => null,
+      },
+    );
+
+    final msgs = items.whereType<MessageViewItem>().toList();
+
+    expect(msgs.firstWhere((m) => m.message.guid == 'a1').senderLabel, 'JJ');
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'a1').showSenderName,
+      isTrue,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'a1').showSenderAvatar,
+      isFalse,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'a2').showSenderName,
+      isFalse,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'a2').showSenderAvatar,
+      isFalse,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'a3').showSenderName,
+      isFalse,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'a3').showSenderAvatar,
+      isTrue,
+    );
+
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'b1').showSenderName,
+      isTrue,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'b1').showSenderAvatar,
+      isTrue,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'b2').showSenderName,
+      isTrue,
+    );
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'b2').showSenderAvatar,
+      isTrue,
+    );
+
+    final mine = msgs.firstWhere((m) => m.message.guid == 'me');
+    expect(mine.senderLabel, isNull);
+    expect(mine.showSenderName, isFalse);
+    expect(mine.showSenderAvatar, isFalse);
+  });
+
   test('reply preview resolved from loaded target', () {
     final items = _build(
       [

@@ -155,6 +155,21 @@ func TestSendAttachmentRequiresFile(t *testing.T) {
 	}
 }
 
+func TestVoiceAttachmentHelpers(t *testing.T) {
+	if !parseBoolFormValue("true") || !parseBoolFormValue("1") || !parseBoolFormValue("on") {
+		t.Fatal("expected common true form values")
+	}
+	if parseBoolFormValue("false") || parseBoolFormValue("") {
+		t.Fatal("expected false form values")
+	}
+	if !isMicaGoVoiceUpload("voice_1782663292267.m4a") {
+		t.Fatal("expected MicaGo voice upload filename")
+	}
+	if isMicaGoVoiceUpload("song.m4a") {
+		t.Fatal("ordinary m4a must not be treated as voice upload")
+	}
+}
+
 // stubSyncSettings lets tests flip AllowSMSSend.
 type stubSyncSettings struct{ allowSMS bool }
 

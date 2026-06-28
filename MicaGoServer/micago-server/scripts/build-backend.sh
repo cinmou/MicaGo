@@ -18,6 +18,7 @@ BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 OUT="${1:-$HOME/.micago/bin/micago}"
 
 mkdir -p "$(dirname "$OUT")"
+export GOCACHE="${GOCACHE:-$PWD/.gocache}"
 go build \
   -ldflags "-X micagoserver/internal/version.Commit=$COMMIT -X micagoserver/internal/version.BuildTime=$BUILD_TIME" \
   -o "$OUT" ./cmd/micago

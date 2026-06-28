@@ -32,6 +32,7 @@ func NewRouter(h *Handlers, hub *realtime.Hub, auth AuthConfig) http.Handler {
 	mux.Handle("POST /api/chats/{guid}/messages/{messageGuid}/retract", auth.Wrap(http.HandlerFunc(h.RetractMessage)))
 	mux.Handle("DELETE /api/chats/{guid}/messages/{messageGuid}", auth.Wrap(http.HandlerFunc(h.DeleteMessage)))
 	mux.Handle("GET /api/attachments/{guid}", auth.Wrap(http.HandlerFunc(h.GetAttachment)))
+	mux.Handle("GET /api/attachments/{guid}/playable", auth.Wrap(http.HandlerFunc(h.GetAttachmentPlayable)))
 	mux.Handle("GET /api/attachments/{guid}/preview", auth.Wrap(http.HandlerFunc(h.GetAttachmentPreview)))
 	mux.Handle("POST /api/devices/register", auth.Wrap(http.HandlerFunc(h.RegisterDevice)))
 	mux.Handle("GET /api/devices", auth.Wrap(http.HandlerFunc(h.ListDevices)))
