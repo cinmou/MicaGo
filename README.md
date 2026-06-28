@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/Server.png" alt="micaGOServer" width="120" />
+</p>
+
 <div align="center">
 
 # MicaGo
@@ -8,19 +12,7 @@
 
 *A self-hosted iMessage bridge. No MicaGo cloud, no account, no relay.*
 
-<p align="center">
-
-  <a href="docs/index.md">Documentation</a> ·
-
-  <a href="docs/getting-started.md">Getting started</a> ·
-
-  <a href="#-security-model">Security model</a> ·
-
-  <a href="docs/remote-access-cloudflare.md">Remote access</a> ·
-
-  <a href="MicaGoServer/docs/CHANGELOG.md">CHANGELOG</a>
-
-</p>
+[Documentation](docs/index.md) · [Getting started](docs/getting-started.md) · [Security model](#-security-model) · [Remote access](docs/remote-access-cloudflare.md) · [CHANGELOG](MicaGoServer/docs/CHANGELOG.md)
 
 </div>
 
