@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/Server.png" alt="micaGOServer" width="120" />
+</p>
+
 <div align="center">
 
 # MicaGo
