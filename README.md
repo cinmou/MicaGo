@@ -240,9 +240,8 @@ bearer tokens or push tokens.
 
 ## 🙏 Acknowledgments
 
-MicaGo owes a lot to two open‑source projects that already mapped the hard parts of
-iMessage. We studied how they work and reimplemented the logic in our own code — no
-source was copied.
+MicaGo owes a lot to two open-source projects that already mapped the hard parts of
+iMessage. We are grateful for their work.
 
 - **[BlueBubbles](https://github.com/BlueBubblesApp)** — a mature iMessage bridge.
   Its handling of stickers, link previews, location, handwriting, and Digital Touch

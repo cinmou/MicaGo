@@ -142,6 +142,10 @@ class AppController extends ChangeNotifier {
   static const _mutedChatsKey = 'micago.muted_chats.v1';
   final Set<String> _mutedChats = <String>{};
   bool isChatMuted(String chatGuid) => _mutedChats.contains(chatGuid);
+  bool areChatsMuted(Iterable<String> chatGuids) {
+    final guids = chatGuids.toList(growable: false);
+    return guids.isNotEmpty && guids.every(_mutedChats.contains);
+  }
 
   Future<void> setChatMuted(String chatGuid, bool muted) async {
     if (muted) {
@@ -149,6 +153,20 @@ class AppController extends ChangeNotifier {
     } else {
       _mutedChats.remove(chatGuid);
     }
+    await store.writeValue(_mutedChatsKey, jsonEncode(_mutedChats.toList()));
+    notifyListeners();
+  }
+
+  Future<void> setChatsMuted(Iterable<String> chatGuids, bool muted) async {
+    var changed = false;
+    for (final chatGuid in chatGuids) {
+      if (muted) {
+        changed = _mutedChats.add(chatGuid) || changed;
+      } else {
+        changed = _mutedChats.remove(chatGuid) || changed;
+      }
+    }
+    if (!changed) return;
     await store.writeValue(_mutedChatsKey, jsonEncode(_mutedChats.toList()));
     notifyListeners();
   }

@@ -512,36 +512,64 @@ private struct DeviceCardRow: View {
     }
 }
 
-// MARK: - Tutorials (placeholder)
+// MARK: - Tutorials
 
 private struct TutorialsPage: View {
-    private let entries: [(String, String)] = [
-        ("Getting Started", "First setup, permissions, and your first connection."),
-        ("Remote Access", "Reach your Mac from anywhere with your own domain + tunnel."),
-        ("Android Client", "Pair the Android app by QR and use chats."),
-        ("Troubleshooting", "Common connection problems and fixes."),
-        ("Documentation site", "Full docs (link added when MicaGo is published)."),
+    /// The published repo. Guides open on GitHub in the user's browser.
+    private static let repoBase = "https://github.com/cinmou/MicaGo/blob/main"
+
+    /// Localized guides ship as `name.zh-Hans.md` / `name.zh-Hant.md` beside the
+    /// English `name.md`; English-only guides ignore the suffix.
+    private static let entries: [(title: String, subtitle: String, path: String, localized: Bool)] = [
+        ("Getting Started", "First setup, permissions, and your first connection.", "docs/getting-started", true),
+        ("Documentation", "All user guides in one place.", "docs/index", true),
+        ("Android Client", "Pair the Android app by QR and use chats.", "docs/android-client-connection", false),
+        ("Remote Access", "Reach your Mac from anywhere with your own domain + tunnel.", "docs/remote-access-cloudflare", false),
+        ("Notifications", "Push and keep‑alive notification setup + troubleshooting.", "docs/notifications-setup", false),
     ]
+
+    /// The `.md` filename suffix that matches the user's preferred language, so a
+    /// localized guide opens in that language (English guides pass `localized:false`).
+    private var docSuffix: String {
+        let lang = Locale.preferredLanguages.first?.lowercased() ?? "en"
+        if lang.hasPrefix("zh-hant") || lang.hasPrefix("zh-tw") || lang.hasPrefix("zh-hk") {
+            return ".zh-Hant"
+        } else if lang.hasPrefix("zh") {
+            return ".zh-Hans"
+        }
+        return ""
+    }
+
+    private func url(for entry: (title: String, subtitle: String, path: String, localized: Bool)) -> URL? {
+        let suffix = entry.localized ? docSuffix : ""
+        return URL(string: "\(Self.repoBase)/\(entry.path)\(suffix).md")
+    }
 
     var body: some View {
         SectionCard(title: "Tutorials") {
-            Text("Guides will appear here when MicaGo is published.")
+            Text("User guides on GitHub. Links open in your browser.")
                 .foregroundStyle(.secondary)
             Divider()
-            ForEach(entries, id: \.0) { entry in
-                HStack(spacing: 10) {
-                    Image(systemName: "book.closed").foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(entry.0).fontWeight(.medium)
-                        Text(entry.1).font(.caption).foregroundStyle(.secondary)
+            ForEach(Self.entries, id: \.title) { entry in
+                Button {
+                    if let url = url(for: entry) { NSWorkspace.shared.open(url) }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "book.closed").foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(entry.title).fontWeight(.medium)
+                            Text(entry.subtitle).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "arrow.up.right.square").foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    Text("Soon").font(.caption2).foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .padding(.vertical, 4)
                 Divider()
             }
-            Text("This is a reserved entry point for in‑app guides and the published documentation site.")
+            Text("Source: github.com/cinmou/MicaGo")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

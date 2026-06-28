@@ -25,6 +25,7 @@ import 'emoji_text.dart';
 import 'message_debug_sheet.dart';
 import 'message_display.dart';
 import 'message_render.dart';
+import 'media_viewer.dart';
 import 'models/chat_summary.dart';
 import 'models/merged_chat.dart';
 import 'models/message_model.dart';
@@ -534,8 +535,8 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
                     Expanded(child: titleRow),
                     ?_routeSelector(context),
                     IconButton(
-                      tooltip: 'Details & search',
-                      icon: const Icon(Icons.search),
+                      tooltip: 'Details',
+                      icon: const Icon(Icons.info_outline),
                       onPressed: _openDetailsSearch,
                     ),
                   ],
@@ -562,8 +563,8 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
           actions: [
             ?_routeSelector(context),
             IconButton(
-              tooltip: 'Details & search',
-              icon: const Icon(Icons.search),
+              tooltip: 'Details',
+              icon: const Icon(Icons.info_outline),
               onPressed: _openDetailsSearch,
             ),
           ],
@@ -607,19 +608,19 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   // sheet (and the thread already auto-refreshes via WS + delta catch-up).
   void _openDetailsSearch() {
     final contacts = context.read<ContactsService>();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => _ThreadDetailsSheet(
-        title: _resolveTitle(contacts),
-        merged: widget.merged,
-        active: _active,
-        messages: _controller.messages,
-        resolveName: contacts.displayNameFor,
-        api: context.read<AppController>().api,
-        onRefresh: () => _controller.load(),
-        onLoadOlder: () => _controller.loadOlder(),
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _ThreadDetailsSheet(
+          title: _resolveTitle(contacts),
+          merged: widget.merged,
+          active: _active,
+          messages: _controller.messages,
+          resolveName: contacts.displayNameFor,
+          api: context.read<AppController>().api,
+          onRefresh: () => _controller.load(),
+          onLoadOlder: () => _controller.loadOlder(),
+          onSwitchRoute: _switchRoute,
+        ),
       ),
     );
   }
@@ -856,6 +857,11 @@ Color _accent1_100(ColorScheme scheme) => Color.alphaBlend(
 Color _accent1_500(ColorScheme scheme) => scheme.primary;
 
 Color _accent1_600(ColorScheme scheme) => scheme.primary;
+
+Color _accent1_700(ColorScheme scheme) => Color.alphaBlend(
+  scheme.primary.withValues(alpha: 0.86),
+  scheme.surfaceContainerHighest,
+);
 
 Color _accent1_800(ColorScheme scheme) => scheme.primary;
 
@@ -1184,32 +1190,24 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // C24: emoji-only messages render larger and without the colored bubble
     // (BlueBubbles-style). Mixed text + emoji stays a normal text bubble.
     final body = widget.body;
-    final bigEmoji =
-        body != null && !hasMedia && widget.reply == null && isBigEmoji(body);
+    final bigEmoji = body != null && !hasMedia && isBigEmoji(body);
     // C27: a media-only message (renderable images/stickers, no text or reply)
     // renders as a clean media bubble — no colored chat bubble wrapping it,
     // matching BlueBubbles. Mixed media + text keeps the normal bubble.
     final attachmentOnly =
-        hasMedia &&
-        widget.body == null &&
-        widget.reply == null &&
-        message.attachments.isNotEmpty;
+        hasMedia && widget.body == null && message.attachments.isNotEmpty;
     final cleanMediaOnly =
         attachmentOnly &&
         message.attachments.every((a) => a.canRenderInlineImage);
     final stickerOnly =
         hasMedia &&
         widget.body == null &&
-        widget.reply == null &&
         message.attachments.isNotEmpty &&
         message.attachments.every((a) => a.isStickerLike);
     // C37: handwriting / Digital Touch ship their rendered media as the
     // attachment — show it with no chat bubble behind it (like a sticker).
     final embeddedMedia =
-        message.isEmbeddedMedia &&
-        hasMedia &&
-        widget.body == null &&
-        widget.reply == null;
+        message.isEmbeddedMedia && hasMedia && widget.body == null;
     final stripBubble =
         bigEmoji ||
         attachmentOnly ||
@@ -1237,7 +1235,6 @@ class _MessageBubbleState extends State<_MessageBubble> {
           ? CrossAxisAlignment.end
           : CrossAxisAlignment.start,
       children: [
-        if (reply != null) _ReplyPreviewBlock(reply: reply, fromMe: fromMe),
         if (hasMedia)
           for (final a in message.attachments)
             Padding(
@@ -1360,6 +1357,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
           UrlPreviewCard(url: previewUrl),
           const SizedBox(height: 4),
         ],
+        if (reply != null) _ReplyPreviewBlock(reply: reply, fromMe: fromMe),
         bubbleWithOverlays,
         _Footer(
           message: message,
@@ -1564,12 +1562,8 @@ class _ReplyPreviewBlock extends StatelessWidget {
     final label = reply.targetLoaded
         ? (reply.text ?? 'Attachment')
         : 'Replying to a message';
-    final bubbleColor = fromMe
-        ? scheme.onPrimary.withValues(alpha: 0.18)
-        : scheme.surface.withValues(alpha: 0.72);
-    final textColor = fromMe
-        ? scheme.onPrimary.withValues(alpha: 0.92)
-        : scheme.onSurfaceVariant;
+    final bubbleColor = scheme.surface.withValues(alpha: 0.72);
+    final textColor = scheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Opacity(
@@ -1907,7 +1901,8 @@ class _VoiceRecordingBarState extends State<_VoiceRecordingBar> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final outerColor = _accent1_500(scheme);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final outerColor = dark ? _accent1_700(scheme) : _accent1_500(scheme);
     final inputColor = _accent1_10(scheme);
     final inputIconColor = _accent1_800(scheme);
     final bar = Container(
@@ -2034,7 +2029,8 @@ class _VoiceReviewBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final outerColor = _accent1_500(scheme);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final outerColor = dark ? _accent1_700(scheme) : _accent1_500(scheme);
     final inputColor = _accent1_10(scheme);
     final inputIconColor = _accent1_800(scheme);
     final bar = Container(
@@ -2308,7 +2304,9 @@ class _ComposerState extends State<_Composer> {
       );
     }
 
-    final outerColor = _accent1_500(scheme);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final outerColor = dark ? _accent1_700(scheme) : _accent1_500(scheme);
+    final attachIconColor = dark ? _accent1_50(scheme) : scheme.onPrimary;
     final inputColor = _accent1_10(scheme);
     final inputIconColor = _accent1_800(scheme);
     final onInput = scheme.onSurface;
@@ -2352,7 +2350,7 @@ class _ComposerState extends State<_Composer> {
                       : IconButton(
                           onPressed: widget.onAttach,
                           tooltip: 'Attachments',
-                          color: scheme.onPrimary,
+                          color: attachIconColor,
                           icon: AnimatedSwitcher(
                             duration: const Duration(milliseconds: 150),
                             transitionBuilder: (child, anim) =>
@@ -2920,6 +2918,7 @@ class _ThreadDetailsSheet extends StatefulWidget {
   final ApiClient? api;
   final VoidCallback onRefresh;
   final VoidCallback onLoadOlder;
+  final ValueChanged<ChatSummary> onSwitchRoute;
 
   const _ThreadDetailsSheet({
     required this.title,
@@ -2930,6 +2929,7 @@ class _ThreadDetailsSheet extends StatefulWidget {
     required this.api,
     required this.onRefresh,
     required this.onLoadOlder,
+    required this.onSwitchRoute,
   });
 
   @override
@@ -2939,6 +2939,8 @@ class _ThreadDetailsSheet extends StatefulWidget {
 class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
   final _search = TextEditingController();
   String _query = '';
+  late String _activeGuid = widget.active.guid;
+  bool _searchOpen = false;
 
   @override
   void dispose() {
@@ -2952,6 +2954,8 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     final app = context.watch<AppController>();
     final q = _query.trim().toLowerCase();
     final api = widget.api;
+    final routeGuids = widget.merged.routes.map((r) => r.guid).toList();
+    final muted = app.areChatsMuted(routeGuids);
     final allAttachments = [
       for (final m in widget.messages)
         for (final a in m.attachments)
@@ -2959,7 +2963,7 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     ];
     final media = allAttachments
         .where((a) => a.canRenderInlineImage || a.isVideo)
-        .take(24)
+        .take(9)
         .toList(growable: false);
     final images = media
         .where((a) => a.canRenderInlineImage)
@@ -2977,7 +2981,7 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     for (final a in allAttachments) {
       if (a.isLinkPreview) linkSet.add(a.displayName);
     }
-    final linkUrls = linkSet.take(12).toList(growable: false);
+    final linkUrls = linkSet.take(4).toList(growable: false);
     // Newest-first matches whose text contains the query.
     final results = q.isEmpty
         ? const <MessageModel>[]
@@ -2988,229 +2992,273 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
               (a, b) => (b.dateCreated ?? 0).compareTo(a.dateCreated ?? 0),
             ));
     final insets = MediaQuery.of(context).viewInsets.bottom;
+    final headerBg = _accent1_100(scheme);
+    final pageBg = _accent1_50(scheme);
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: insets),
-      child: DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.6,
-        minChildSize: 0.4,
-        maxChildSize: 0.92,
-        builder: (context, scrollController) => ListView(
-          controller: scrollController,
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-          children: [
-            Row(
-              children: [
-                HandleAvatar(
-                  title: widget.title,
-                  handle: widget.active.isGroup
-                      ? null
-                      : widget.active.chatIdentifier,
-                  participantHandles: widget.active.participants,
-                  isGroup: widget.active.isGroup,
-                  radius: 22,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Details'),
+        backgroundColor: headerBg,
+        surfaceTintColor: Colors.transparent,
+        actions: [
+          IconButton(
+            tooltip: _searchOpen ? 'Hide search' : 'Search',
+            icon: Icon(_searchOpen ? Icons.search_off : Icons.search),
+            onPressed: () {
+              setState(() {
+                _searchOpen = !_searchOpen;
+                if (!_searchOpen) {
+                  _search.clear();
+                  _query = '';
+                }
+              });
+            },
+          ),
+        ],
+      ),
+      body: DecoratedBox(
+        decoration: BoxDecoration(color: headerBg),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: DecoratedBox(
+            decoration: BoxDecoration(color: pageBg),
+            child: SafeArea(
+              top: false,
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, 24 + insets),
+                children: [
+                  Row(
                     children: [
-                      Text(
-                        widget.title,
-                        style: Theme.of(context).textTheme.titleMedium,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      HandleAvatar(
+                        title: widget.title,
+                        handle: widget.active.isGroup
+                            ? null
+                            : widget.active.chatIdentifier,
+                        participantHandles: widget.active.participants,
+                        isGroup: widget.active.isGroup,
+                        radius: 22,
                       ),
-                      if (widget.active.chatIdentifier != null)
-                        Text(
-                          widget.active.chatIdentifier!,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Refresh',
-                  icon: const Icon(Icons.refresh),
-                  onPressed: () {
-                    widget.onRefresh();
-                    Navigator.of(context).maybePop();
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text('Actions', style: Theme.of(context).textTheme.labelLarge),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Mute notifications'),
-              subtitle: const Text('Silence local notifications for this chat'),
-              value: app.isChatMuted(widget.active.guid),
-              onChanged: (value) => app.setChatMuted(widget.active.guid, value),
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      widget.onRefresh();
-                      TopBanner.show(context, 'Refreshing conversation');
-                    },
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Refresh'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      widget.onLoadOlder();
-                      TopBanner.show(context, 'Fetching more messages');
-                    },
-                    icon: const Icon(Icons.history),
-                    label: const Text('Fetch more'),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-            // Routes for this contact (server-authoritative service per route).
-            Text('Routes', style: Theme.of(context).textTheme.labelLarge),
-            const SizedBox(height: 4),
-            for (final r in widget.merged.routes)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  r.guid == widget.active.guid
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                  size: 18,
-                  color: scheme.primary,
-                ),
-                title: Text(r.service.label),
-                subtitle: r.chatIdentifier != null
-                    ? Text(r.chatIdentifier!)
-                    : null,
-              ),
-            const Divider(height: 24),
-            if (api != null && media.isNotEmpty) ...[
-              Text(
-                'Images & Videos',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: media.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 8,
-                  crossAxisSpacing: 8,
-                ),
-                itemBuilder: (context, i) {
-                  final a = media[i];
-                  return ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: ColoredBox(
-                      color: scheme.surfaceContainerHighest,
-                      child: Center(
-                        child: AttachmentView(
-                          api: api,
-                          attachment: a,
-                          imageSiblings: images,
-                          imageIndex: a.canRenderInlineImage
-                              ? images.indexOf(a)
-                              : 0,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.title,
+                              style: Theme.of(context).textTheme.titleMedium,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (widget.active.chatIdentifier != null)
+                              Text(
+                                widget.active.chatIdentifier!,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
+                              ),
+                          ],
                         ),
                       ),
-                    ),
-                  );
-                },
-              ),
-              const Divider(height: 24),
-            ],
-            if (linkUrls.isNotEmpty) ...[
-              Text('Links', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 8),
-              for (final url in linkUrls)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: UrlPreviewCard(url: url, compact: true),
-                ),
-              const Divider(height: 24),
-            ],
-            if (api != null && files.isNotEmpty) ...[
-              Text('Files', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 8),
-              for (final a in files)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    a.isAudio
-                        ? Icons.graphic_eq
-                        : a.isLocation
-                        ? Icons.location_on_outlined
-                        : Icons.insert_drive_file_outlined,
-                  ),
-                  title: Text(
-                    a.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(a.displayKind),
-                  onLongPress: () =>
-                      showAttachmentActions(context, api: api, attachment: a),
-                ),
-              const Divider(height: 24),
-            ],
-            TextField(
-              controller: _search,
-              autofocus: true,
-              decoration: InputDecoration(
-                hintText: 'Search this conversation',
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
-                isDense: true,
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.close),
+                      IconButton(
+                        tooltip: 'Refresh',
+                        icon: const Icon(Icons.refresh),
                         onPressed: () {
-                          _search.clear();
-                          setState(() => _query = '');
+                          widget.onRefresh();
+                          TopBanner.show(context, 'Refreshing conversation');
                         },
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Actions',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Mute notifications'),
+                    subtitle: const Text(
+                      'Silence local notifications for every route here',
+                    ),
+                    value: muted,
+                    onChanged: (value) => app.setChatsMuted(routeGuids, value),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            widget.onRefresh();
+                            TopBanner.show(context, 'Refreshing conversation');
+                          },
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Refresh'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            widget.onLoadOlder();
+                            TopBanner.show(context, 'Fetching more messages');
+                          },
+                          icon: const Icon(Icons.history),
+                          label: const Text('Fetch more'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 24),
+                  // Routes for this contact (server-authoritative service per route).
+                  Text('Routes', style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 4),
+                  for (final r in widget.merged.routes)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        r.guid == _activeGuid
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_unchecked,
+                        size: 18,
+                        color: scheme.primary,
+                      ),
+                      title: Text(r.service.label),
+                      subtitle: r.chatIdentifier != null
+                          ? Text(r.chatIdentifier!)
+                          : null,
+                      selected: r.guid == _activeGuid,
+                      selectedTileColor: scheme.primary.withValues(alpha: 0.08),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      onTap: () {
+                        setState(() => _activeGuid = r.guid);
+                        widget.onSwitchRoute(r);
+                      },
+                    ),
+                  const Divider(height: 24),
+                  if (api != null && media.isNotEmpty) ...[
+                    Text(
+                      'Images & Videos',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    _DetailsMediaGrid(api: api, media: media, images: images),
+                    const Divider(height: 24),
+                  ],
+                  if (linkUrls.isNotEmpty) ...[
+                    Text(
+                      'Links',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: linkUrls.length,
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 280,
+                            mainAxisSpacing: 8,
+                            crossAxisSpacing: 8,
+                            childAspectRatio: 0.86,
+                          ),
+                      itemBuilder: (context, i) =>
+                          UrlPreviewCard(url: linkUrls[i], compact: true),
+                    ),
+                    const Divider(height: 24),
+                  ],
+                  if (api != null && files.isNotEmpty) ...[
+                    Text(
+                      'Files',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    for (final a in files)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          a.isAudio
+                              ? Icons.graphic_eq
+                              : a.isLocation
+                              ? Icons.location_on_outlined
+                              : Icons.insert_drive_file_outlined,
+                        ),
+                        title: Text(
+                          a.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(a.displayKind),
+                        onLongPress: () => showAttachmentActions(
+                          context,
+                          api: api,
+                          attachment: a,
+                        ),
+                      ),
+                    const Divider(height: 24),
+                  ],
+                  if (_searchOpen) ...[
+                    TextField(
+                      controller: _search,
+                      autofocus: false,
+                      decoration: InputDecoration(
+                        hintText: 'Search this conversation',
+                        prefixIcon: const Icon(Icons.search),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(18),
+                          borderSide: BorderSide(color: scheme.outlineVariant),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(18),
+                          borderSide: BorderSide(color: scheme.primary),
+                        ),
+                        filled: true,
+                        fillColor: scheme.surface.withValues(alpha: 0.82),
+                        isDense: true,
+                        suffixIcon: _query.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.close),
+                                onPressed: () {
+                                  _search.clear();
+                                  setState(() => _query = '');
+                                },
+                              ),
+                      ),
+                      onChanged: (v) => setState(() => _query = v),
+                    ),
+                    const SizedBox(height: 12),
+                    if (q.isNotEmpty)
+                      Text(
+                        results.isEmpty
+                            ? 'No matches'
+                            : '${results.length} match${results.length == 1 ? '' : 'es'}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    for (final m in results)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          m.text ?? '',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          _sheetSubtitle(m),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                  ],
+                ],
               ),
-              onChanged: (v) => setState(() => _query = v),
             ),
-            const SizedBox(height: 12),
-            if (q.isNotEmpty)
-              Text(
-                results.isEmpty
-                    ? 'No matches'
-                    : '${results.length} match${results.length == 1 ? '' : 'es'}',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-            for (final m in results)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  m.text ?? '',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  _sheetSubtitle(m),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -3226,6 +3274,154 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     String two(int n) => n.toString().padLeft(2, '0');
     return '$who · ${dt.year}-${two(dt.month)}-${two(dt.day)} '
         '${two(dt.hour)}:${two(dt.minute)}';
+  }
+}
+
+class _DetailsMediaGrid extends StatelessWidget {
+  final ApiClient api;
+  final List<AttachmentModel> media;
+  final List<AttachmentModel> images;
+
+  const _DetailsMediaGrid({
+    required this.api,
+    required this.media,
+    required this.images,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: media.length,
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 150,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+        childAspectRatio: 1,
+      ),
+      itemBuilder: (context, i) => _DetailsMediaTile(
+        api: api,
+        attachment: media[i],
+        images: images,
+        imageIndex: media[i].canRenderInlineImage
+            ? images.indexOf(media[i])
+            : 0,
+      ),
+    );
+  }
+}
+
+class _DetailsMediaTile extends StatefulWidget {
+  final ApiClient api;
+  final AttachmentModel attachment;
+  final List<AttachmentModel> images;
+  final int imageIndex;
+
+  const _DetailsMediaTile({
+    required this.api,
+    required this.attachment,
+    required this.images,
+    required this.imageIndex,
+  });
+
+  @override
+  State<_DetailsMediaTile> createState() => _DetailsMediaTileState();
+}
+
+class _DetailsMediaTileState extends State<_DetailsMediaTile> {
+  late final Future<Uint8List?> _future = _loadPreview();
+
+  Future<Uint8List?> _loadPreview() async {
+    if (!widget.attachment.canRenderInlineImage) return null;
+    final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
+    final cached = imageByteCache[cacheKey];
+    if (cached != null) return cached;
+    final bytes = await widget.api.getAttachmentPreviewBytes(widget.attachment);
+    imageByteCache[cacheKey] = bytes;
+    return bytes;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          if (widget.attachment.canRenderInlineImage) {
+            MediaGalleryViewer.open(
+              context,
+              api: widget.api,
+              images: widget.images,
+              initialIndex: widget.imageIndex,
+            );
+          } else if (widget.attachment.isVideo) {
+            FullscreenVideo.open(
+              context,
+              api: widget.api,
+              attachment: widget.attachment,
+            );
+          }
+        },
+        onLongPress: () => showAttachmentActions(
+          context,
+          api: widget.api,
+          attachment: widget.attachment,
+        ),
+        child: widget.attachment.isVideo
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  Center(
+                    child: Icon(
+                      Icons.play_circle_fill,
+                      size: 42,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    bottom: 8,
+                    child: Text(
+                      widget.attachment.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : FutureBuilder<Uint8List?>(
+                future: _future,
+                builder: (context, snap) {
+                  final bytes = snap.data;
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    );
+                  }
+                  if (snap.hasError || bytes == null || bytes.isEmpty) {
+                    return Icon(
+                      Icons.broken_image_outlined,
+                      color: scheme.onSurfaceVariant,
+                    );
+                  }
+                  return Image.memory(
+                    bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    cacheWidth: 420,
+                  );
+                },
+              ),
+      ),
+    );
   }
 }
 

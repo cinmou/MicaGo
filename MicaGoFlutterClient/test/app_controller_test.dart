@@ -1,0 +1,66 @@
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:mica_go/core/app_controller.dart';
+import 'package:mica_go/core/models/connection_profile.dart';
+import 'package:mica_go/core/storage/secure_store.dart';
+
+class _MemoryStore implements SecureStore {
+  ConnectionProfile? _saved;
+  final Map<String, String> _values = {};
+  bool _contactsEnabled = false;
+
+  @override
+  Future<ConnectionProfile?> loadProfile() async => _saved;
+
+  @override
+  Future<void> saveProfile(ConnectionProfile profile) async {
+    _saved = profile;
+  }
+
+  @override
+  Future<void> clearProfile() async {
+    _saved = null;
+  }
+
+  @override
+  Future<bool> contactsMatchingEnabled() async => _contactsEnabled;
+
+  @override
+  Future<void> setContactsMatchingEnabled(bool enabled) async {
+    _contactsEnabled = enabled;
+  }
+
+  @override
+  Future<String?> readValue(String key) async => _values[key];
+
+  @override
+  Future<void> writeValue(String key, String value) async {
+    _values[key] = value;
+  }
+
+  @override
+  Future<void> deleteValue(String key) async {
+    _values.remove(key);
+  }
+}
+
+void main() {
+  test('batch mute applies to every route in a merged conversation', () async {
+    final controller = AppController(store: _MemoryStore());
+    const routes = ['iMessage;+1', 'iMessage;email@example.com', 'SMS;+1'];
+
+    expect(controller.areChatsMuted(routes), isFalse);
+
+    await controller.setChatsMuted(routes, true);
+    expect(controller.areChatsMuted(routes), isTrue);
+    for (final route in routes) {
+      expect(controller.isChatMuted(route), isTrue);
+    }
+
+    await controller.setChatsMuted(routes, false);
+    expect(controller.areChatsMuted(routes), isFalse);
+    for (final route in routes) {
+      expect(controller.isChatMuted(route), isFalse);
+    }
+  });
+}

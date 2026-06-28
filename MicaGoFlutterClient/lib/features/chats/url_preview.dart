@@ -66,11 +66,12 @@ class _UrlPreviewCardState extends State<UrlPreviewCard>
             !data.hasDisplayContent) {
           return const SizedBox.shrink();
         }
+        final maxWidth = widget.compact ? 260.0 : 320.0;
         return InkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () => launchUrl(uri, mode: LaunchMode.externalApplication),
           child: Container(
-            constraints: BoxConstraints(maxWidth: widget.compact ? 260 : 320),
+            constraints: BoxConstraints(maxWidth: maxWidth),
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               color: Theme.of(
@@ -83,13 +84,10 @@ class _UrlPreviewCardState extends State<UrlPreviewCard>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (data.imageUrl != null)
-                  AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: Image.network(
-                      data.imageUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                    ),
+                  _PreviewImage(
+                    url: data.imageUrl!,
+                    maxWidth: maxWidth,
+                    compact: widget.compact,
                   ),
                 Padding(
                   padding: const EdgeInsets.all(10),
@@ -147,6 +145,104 @@ class _UrlPreviewCardState extends State<UrlPreviewCard>
 
   @override
   bool get wantKeepAlive => true;
+}
+
+class _PreviewImage extends StatefulWidget {
+  final String url;
+  final double maxWidth;
+  final bool compact;
+
+  const _PreviewImage({
+    required this.url,
+    required this.maxWidth,
+    required this.compact,
+  });
+
+  @override
+  State<_PreviewImage> createState() => _PreviewImageState();
+}
+
+class _PreviewImageState extends State<_PreviewImage> {
+  static final Map<String, Future<Size?>> _sizeCache = {};
+  late Future<Size?> _sizeFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _sizeFuture = _sizeCache.putIfAbsent(
+      widget.url,
+      () => _resolveImageSize(widget.url),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _PreviewImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _sizeFuture = _sizeCache.putIfAbsent(
+        widget.url,
+        () => _resolveImageSize(widget.url),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Size?>(
+      future: _sizeFuture,
+      builder: (context, snap) {
+        final size = snap.data;
+        final aspect = size == null || size.height <= 0
+            ? 16 / 9
+            : (size.width / size.height).clamp(0.45, 2.4);
+        final minWidth = widget.compact ? 170.0 : 210.0;
+        final width = aspect >= 1
+            ? widget.maxWidth
+            : (widget.maxWidth * aspect).clamp(minWidth, widget.maxWidth);
+        final maxHeight = widget.compact ? 220.0 : 300.0;
+        final height = (width / aspect).clamp(90.0, maxHeight);
+
+        return SizedBox(
+          width: width,
+          height: height,
+          child: Image.network(
+            widget.url,
+            fit: BoxFit.contain,
+            alignment: Alignment.topCenter,
+            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+          ),
+        );
+      },
+    );
+  }
+
+  static Future<Size?> _resolveImageSize(String url) {
+    final completer = Completer<Size?>();
+    final image = NetworkImage(url);
+    late final ImageStreamListener listener;
+    final stream = image.resolve(const ImageConfiguration());
+    listener = ImageStreamListener(
+      (info, _) {
+        final image = info.image;
+        completer.complete(
+          Size(image.width.toDouble(), image.height.toDouble()),
+        );
+        stream.removeListener(listener);
+      },
+      onError: (_, _) {
+        completer.complete(null);
+        stream.removeListener(listener);
+      },
+    );
+    stream.addListener(listener);
+    return completer.future.timeout(
+      const Duration(seconds: 6),
+      onTimeout: () {
+        stream.removeListener(listener);
+        return null;
+      },
+    );
+  }
 }
 
 class _PreviewMetadata {

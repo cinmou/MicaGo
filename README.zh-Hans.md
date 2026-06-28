@@ -219,8 +219,8 @@ MicaGo/
 
 ## 🙏 致谢
 
-MicaGo 从两个开源项目身上学到很多 —— 它们各自啃下了 iMessage 里同样难处理的部分。我们研究
-了它们的思路,再用自己的代码重新实现,没有照搬任何源码。
+MicaGo 从两个开源项目身上学到很多 —— 它们各自啃下了 iMessage 里同样难处理的部分。我们感谢
+它们的工作。
 
 - **[BlueBubbles](https://github.com/BlueBubblesApp)** —— 一个成熟的 iMessage 桥接工具。
   贴纸、链接预览、位置、手写以及 Digital Touch 的处理,是我们分类、渲染这些消息类型时的参考。

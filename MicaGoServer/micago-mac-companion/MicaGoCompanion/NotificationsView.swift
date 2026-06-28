@@ -140,8 +140,8 @@ private struct PushPrivacyCard: View {
             .fixedSize(horizontal: false, vertical: true)
 
             Link("Firebase Console", destination: URL(string: "https://console.firebase.google.com")!)
-            Text("Setup guide: docs/setup/firebase/README.md in the MicaGo repository.")
-                .font(.caption2).foregroundStyle(.secondary)
+            Link("Firebase setup guide", destination: URL(string: "https://github.com/cinmou/MicaGo/blob/main/docs/setup/firebase/README.md")!)
+                .font(.caption2)
         }
     }
 }
