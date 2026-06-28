@@ -149,6 +149,7 @@ type devicePatchRequest struct {
 type StatusDeps struct {
 	APIStore    string
 	ClientCount func() int
+	Connections func() []realtime.ClientSession
 	SyncState   func(key string) (string, bool, error)
 	// Network owns the optional public connection endpoint (v0.11). Nil disables
 	// the public-url endpoints; local/LAN aggregation still works.
@@ -378,6 +379,14 @@ func (h *Handlers) clientCount() int {
 		return 0
 	}
 	return h.status.ClientCount()
+}
+
+func (h *Handlers) GetServerConnections(w http.ResponseWriter, r *http.Request) {
+	connections := []realtime.ClientSession{}
+	if h.status.Connections != nil {
+		connections = h.status.Connections()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": connections})
 }
 
 func (h *Handlers) deviceCount(ctx context.Context) int {
@@ -1456,6 +1465,9 @@ func attachmentFilename(meta *store.AttachmentMeta) string {
 func attachmentNeedsPreviewConversion(meta *store.AttachmentMeta) bool {
 	if meta == nil {
 		return false
+	}
+	if meta.IsSticker {
+		return true
 	}
 	mimeType := strings.ToLower(strings.TrimSpace(ptrString(meta.MimeType)))
 	uti := strings.ToLower(strings.TrimSpace(ptrString(meta.Uti)))

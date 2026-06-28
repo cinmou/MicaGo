@@ -12,11 +12,14 @@ func TestHubRegisterUnregisterAndEmptyBroadcast(t *testing.T) {
 	conn1 := &websocket.Conn{}
 	conn2 := &websocket.Conn{}
 
-	hub.add(conn1)
-	hub.add(conn2)
+	hub.add(conn1, ClientSession{ID: "one"})
+	hub.add(conn2, ClientSession{ID: "two"})
 
 	if hub.ClientCount() != 2 {
 		t.Fatalf("expected 2 clients, got %d", hub.ClientCount())
+	}
+	if sessions := hub.Clients(); len(sessions) != 2 {
+		t.Fatalf("expected 2 session snapshots, got %d", len(sessions))
 	}
 
 	hub.remove(conn1)

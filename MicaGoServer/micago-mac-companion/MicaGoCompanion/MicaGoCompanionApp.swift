@@ -290,6 +290,17 @@ private func existingDashboardWindow() -> NSWindow? {
     NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) }
 }
 
+/// Bridges SwiftUI's `openWindow` action to AppKit. The `WindowGroup` window has
+/// the correct native toolbar/titlebar (large inline title, trailing controls);
+/// a hand-rolled `NSWindow` does not. ContentView stores its `openWindow` action
+/// here on appear so the AppKit menu-bar item can reopen the SAME WindowGroup
+/// window instead of building a divergent one.
+@MainActor
+final class DashboardWindowOpener {
+    static let shared = DashboardWindowOpener()
+    var open: (() -> Void)?
+}
+
 @MainActor
 private final class DashboardWindowPresenter {
     static let shared = DashboardWindowPresenter()
@@ -352,5 +363,22 @@ func presentDashboard(openWindow: OpenWindowAction) {
 func presentDashboardFromAppKit() {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
+
+    // Reuse the real WindowGroup window so the menu-bar path looks identical to
+    // launching from the Dock (native toolbar/titlebar). Prefer an already-open
+    // window; otherwise reopen the WindowGroup via the captured SwiftUI action.
+    // The hand-rolled NSWindow is only a last resort (e.g. launched hidden and
+    // never once shown, so no openWindow action was captured yet).
+    if let existing = existingDashboardWindow() {
+        existing.deminiaturize(nil)
+        existing.makeKeyAndOrderFront(nil)
+        applyActivationPolicy()
+        return
+    }
+    if let open = DashboardWindowOpener.shared.open {
+        open()
+        applyActivationPolicy()
+        return
+    }
     DashboardWindowPresenter.shared.show()
 }

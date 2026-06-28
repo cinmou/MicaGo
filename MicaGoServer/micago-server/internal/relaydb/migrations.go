@@ -151,6 +151,25 @@ func (db *DB) Migrate() error {
 		return err
 	}
 
+	// C33: indexes. Without these, `ListChats` runs its 7 correlated per-chat
+	// subqueries as full table scans of `messages` — O(chats × messages) — which
+	// times out the Companion's Sync Control load on a real (large) relay.db.
+	// `idx_messages_chat_date` covers the per-chat aggregates + "latest renderable"
+	// ORDER BY; the others speed up the delta cursor and attachment-preview joins.
+	// Created after the additive columns above so composite indexes can include
+	// them. All IF NOT EXISTS — idempotent on every start.
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_messages_chat_date ON messages(chat_guid, date_created)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_source_rowid ON messages(source_rowid)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_date_created ON messages(date_created)`,
+		`CREATE INDEX IF NOT EXISTS idx_attachments_message_guid ON attachments(message_guid)`,
+	}
+	for _, statement := range indexes {
+		if _, err := db.sqlDB.Exec(statement); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

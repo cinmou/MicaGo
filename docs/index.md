@@ -16,11 +16,15 @@ cloud service: your messages stay between your Mac and the devices you connect.
   Tunnel is **external and optional**; MicaGo does not bundle or manage it.
 - **[Android Client Connection](android-client-connection.md)** — pairing the
   Android app over LAN or a public URL, and what it supports.
+- **[Push Notifications](notifications-setup.md)** — optional self-hosted
+  Firebase / FCM setup and troubleshooting for Android notifications.
+- **[Firebase Setup Reference](setup/firebase/README.md)** — the same optional
+  push setup as a focused Firebase checklist, with deeper step-by-step pages.
 - **[Manual Test Flow](manual-test-flow.md)** — a step‑by‑step checklist you can
   run from zero to confirm local, LAN, public, and client connectivity.
 
 For the full development history (per-cycle change notes), see the
-[CHANGELOG](../CHANGELOG.md). For the overall project overview and build
+[CHANGELOG](../MicaGoServer/docs/CHANGELOG.md). For the overall project overview and build
 instructions, see the [root README](../README.md).
 
 ## Security notes

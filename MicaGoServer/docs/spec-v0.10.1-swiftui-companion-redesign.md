@@ -56,8 +56,8 @@ Adopt these **concepts** (rebuilt natively, not copied):
 - A **Dashboard** that answers "is it running, where do I reach it, is it
   healthy" at a glance (status, primary URL, copy/QR, sync freshness).
 - A **Connections** surface for local/LAN/public endpoints + pairing QR.
-- A **Devices** surface listing registered devices with per-device actions
-  (test push, remove).
+- A **Push Devices** surface listing registered notification devices with
+  per-device actions (test push, remove).
 - A **Notifications** surface showing provider status.
 - A **Permissions** surface (Full Disk Access, Automation, plus Messages.app
   running) with remediation guidance.
@@ -108,7 +108,7 @@ Sidebar:
 ```
 Dashboard
 Connections
-Devices
+Push Devices
 Notifications
 Permissions
 Server
@@ -130,7 +130,7 @@ The current "Connection Endpoints" surface. **Local** and **LAN** endpoints
 reveal/copy; **pairing QR** with a Local/LAN/Public endpoint picker. Source:
 `/api/server/urls`, `/api/server/public-url[/check]`, config token (local read).
 
-### Devices
+### Push Devices
 List from `/api/devices`: name, platform, clientType, push provider,
 `pushEnabled`, `pushTokenSet` (token never shown), `lastSeenAt`. Per-device
 **Test Push** (`POST /api/devices/{id}/test-push`) and **Remove**
@@ -235,7 +235,7 @@ third-party dependencies; CoreImage for QR (already used).
 3. **Connections**: local + LAN endpoints appear when bound to `0.0.0.0`; only
    local when loopback. Public URL set/validate works; token is **masked** until
    Reveal; pairing QR regenerates per selected endpoint.
-4. **Devices**: registered devices list; Test Push returns success/▲not-configured;
+4. **Push Devices**: registered notification devices list; Test Push returns success/▲not-configured;
    Remove deletes after confirm; push token is never shown (only "token set").
 5. **Notifications**: provider/preview and implemented vs stub render; the v0.12
    FCM panel is clearly labeled "planned".

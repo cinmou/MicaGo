@@ -160,6 +160,56 @@ struct WebSocketStatus: Codable {
     var clients: Int
 }
 
+// GET /api/server/connections -> { "data": [ActiveConnectionInfo] }
+struct ActiveConnectionListResponse: Codable {
+    var data: [ActiveConnectionInfo]
+}
+
+struct ActiveConnectionInfo: Codable, Identifiable {
+    var id: String
+    var clientName: String?
+    var clientType: String?
+    var platform: String?
+    var appVersion: String?
+    var remoteAddress: String?
+    var userAgent: String?
+    var connectedAt: Int64
+    var lastSeenAt: Int64
+
+    var displayTitle: String {
+        let name = clientName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !name.isEmpty { return name }
+        let platformLabel = platform?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !platformLabel.isEmpty { return platformLabel.capitalized }
+        return "micaGO Client"
+    }
+
+    var subtitle: String {
+        var parts: [String] = []
+        if let clientType, !clientType.isEmpty { parts.append(clientType) }
+        if let platform, !platform.isEmpty { parts.append(platform) }
+        if let appVersion, !appVersion.isEmpty { parts.append("micaGO \(appVersion)") }
+        if let remoteAddress, !remoteAddress.isEmpty { parts.append(remoteAddress) }
+        return parts.isEmpty ? "Active WebSocket session" : parts.joined(separator: " · ")
+    }
+
+    var connectedLabel: String {
+        Self.relativeTime(connectedAt)
+    }
+
+    var lastSeenLabel: String {
+        Self.relativeTime(lastSeenAt)
+    }
+
+    private static func relativeTime(_ millis: Int64) -> String {
+        guard millis > 0 else { return "unknown" }
+        let date = Date(timeIntervalSince1970: TimeInterval(millis) / 1000)
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
 struct PermissionStatus: Codable {
     var fullDiskAccess: PermissionCheck
     var attachments: PermissionCheck

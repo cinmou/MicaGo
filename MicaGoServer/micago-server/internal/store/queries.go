@@ -75,7 +75,10 @@ func buildSyncMessagesSQL(present []string, hasAccount bool, extraWhere, tail st
 // columns into a MessageRow and semanticValues.
 func scanSyncRowSemantic(rows *sql.Rows, present []string) (MessageRow, semanticValues, error) {
 	var row MessageRow
-	var isFromMe, isRead, isDelivered, hasAttachments int64
+	// chat.db stores these flags as NULL for many rows (e.g. is_read on outgoing
+	// or older messages). Scanning NULL into a plain int64 fails and would abort
+	// the entire sync, so use NullInt64 and treat NULL as 0/false.
+	var isFromMe, isRead, isDelivered, hasAttachments sql.NullInt64
 	base := []any{
 		&row.ChatGUID, &row.SourceRowID, &row.GUID, &row.Text, &row.AttributedBody,
 		&row.Subject, &row.Service, &row.Account, &row.DateRaw, &row.DateReadRaw, &row.DateDeliveredRaw,
@@ -85,10 +88,10 @@ func scanSyncRowSemantic(rows *sql.Rows, present []string) (MessageRow, semantic
 	if err := rows.Scan(append(base, semTargets...)...); err != nil {
 		return MessageRow{}, semanticValues{}, fmt.Errorf("scan sync message row: %w", err)
 	}
-	row.IsFromMe = isFromMe != 0
-	row.IsRead = isRead != 0
-	row.IsDelivered = isDelivered != 0
-	row.CacheHasAttachments = hasAttachments != 0
+	row.IsFromMe = isFromMe.Int64 != 0
+	row.IsRead = isRead.Int64 != 0
+	row.IsDelivered = isDelivered.Int64 != 0
+	row.CacheHasAttachments = hasAttachments.Int64 != 0
 	return row, finalize(), nil
 }
 
@@ -527,8 +530,9 @@ LIMIT ?;`
 			subject, service                *string
 			dateRaw                         int64
 			dateReadRaw, dateDeliveredRaw   *int64
-			isFromMe, isRead, isDelivered   int64
-			hasAttachments                  int64
+			// NULL-safe: chat.db stores these flags as NULL on many rows.
+			isFromMe, isRead, isDelivered   sql.NullInt64
+			hasAttachments                  sql.NullInt64
 			handleValue, handleService      *string
 			dateEditedRaw, dateRetractedRaw *int64
 			errorCode                       sql.NullInt64
@@ -566,12 +570,12 @@ LIMIT ?;`
 			DateEdited:          timeutil.AppleMicrosToUnixMilliPtr(dateEditedRaw),
 			DateRetracted:       timeutil.AppleMicrosToUnixMilliPtr(dateRetractedRaw),
 			ErrorCode:           errorCode.Int64,
-			IsFromMe:            isFromMe != 0,
-			IsRead:              isRead != 0,
-			IsDelivered:         isDelivered != 0,
+			IsFromMe:            isFromMe.Int64 != 0,
+			IsRead:              isRead.Int64 != 0,
+			IsDelivered:         isDelivered.Int64 != 0,
 			HandleID:            handleValue,
 			HandleService:       handleService,
-			CacheHasAttachments: hasAttachments != 0,
+			CacheHasAttachments: hasAttachments.Int64 != 0,
 		})
 	}
 	if err := rows.Err(); err != nil {

@@ -628,6 +628,9 @@ class ApiClient {
           .timeout(const Duration(seconds: 30)),
     );
     if (res.statusCode != 200) {
+      if (attachment.isStickerLike) {
+        return getAttachmentBytes(attachment.guid);
+      }
       throw _errorFrom(res);
     }
     return res.bodyBytes;

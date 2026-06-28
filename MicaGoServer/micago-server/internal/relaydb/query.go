@@ -54,6 +54,7 @@ SELECT c.guid, c.chat_identifier, c.service_name, c.display_name, c.is_archived,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid) AS total,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0) AS renderable,
   (SELECT m.date_created FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_at,
+  (SELECT m.guid FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_guid,
   (SELECT m.text FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_text,
   (SELECT m.service FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_service,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid AND m.service IN ('iMessage','iMessageLite')) AS imessage_count
@@ -79,6 +80,7 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		var chat store.ChatJSON
 		var total, renderable int64
 		var latestAt *int64
+		var latestGUID *string
 		var latestText *string
 		var latestService *string
 		var imessageCount int64
@@ -91,6 +93,7 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 			&total,
 			&renderable,
 			&latestAt,
+			&latestGUID,
 			&latestText,
 			&latestService,
 			&imessageCount,
@@ -105,9 +108,16 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		chat.EffectiveService = ResolveEffectiveService(chat.ServiceName, latestService, imessageCount > 0)
 		chat.CanSendText, chat.CanSendAttachments = settings.SendCapabilities(chat.EffectiveService)
 		chat.LatestRenderableAt = latestAt
+		hasPreview := false
 		if latestText != nil {
 			if t := strings.TrimSpace(*latestText); t != "" {
 				chat.LatestRenderablePreview = &t
+				hasPreview = true
+			}
+		}
+		if !hasPreview && latestGUID != nil {
+			if label, err := db.attachmentPreviewLabel(ctx, *latestGUID); err == nil && label != "" {
+				chat.LatestRenderablePreview = &label
 			}
 		}
 		chat.UnsupportedOnly = total > 0 && renderable == 0
@@ -146,6 +156,33 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		end = len(filtered)
 	}
 	return filtered[offset:end], nil
+}
+
+func (db *DB) attachmentPreviewLabel(ctx context.Context, messageGUID string) (string, error) {
+	grouped, err := db.loadAttachmentsByMessageGUID(ctx, []string{messageGUID})
+	if err != nil {
+		return "", err
+	}
+	attachments := grouped[messageGUID]
+	if len(attachments) == 0 {
+		return "", nil
+	}
+	a := attachments[0]
+	mime := stringValue(a.MimeType)
+	switch {
+	case a.IsSticker || a.DisplayKind == "sticker" || a.AttachmentKind == "sticker":
+		return "（贴纸）", nil
+	case a.IsVoiceMessage:
+		return "（语音）", nil
+	case a.AttachmentKind == "image" || strings.HasPrefix(mime, "image/"):
+		return "（图片）", nil
+	case a.AttachmentKind == "video" || strings.HasPrefix(mime, "video/"):
+		return "（视频）", nil
+	case a.AttachmentKind == "audio" || strings.HasPrefix(mime, "audio/"):
+		return "（音频）", nil
+	default:
+		return "（文件）", nil
+	}
 }
 
 // relayMessageSelect is the shared SELECT for relay message reads. It exposes
@@ -566,7 +603,7 @@ func (db *DB) loadAttachmentsByMessageGUID(ctx context.Context, guids []string) 
 	}
 
 	rows, err := db.sqlDB.QueryContext(ctx, `
-SELECT guid, message_guid, filename, mime_type, transfer_name, total_bytes, uti, is_sticker
+SELECT guid, message_guid, filename, mime_type, transfer_name, total_bytes, uti, is_sticker, hide_attachment
 FROM attachments
 WHERE message_guid IN (`+strings.Join(placeholders, ", ")+`)
 ORDER BY created_at ASC, guid ASC;
@@ -580,7 +617,7 @@ ORDER BY created_at ASC, guid ASC;
 	for rows.Next() {
 		var attachment store.AttachmentJSON
 		var messageGUID string
-		var isSticker sql.NullInt64
+		var isSticker, hideAttachment sql.NullInt64
 		if err := rows.Scan(
 			&attachment.GUID,
 			&messageGUID,
@@ -590,13 +627,26 @@ ORDER BY created_at ASC, guid ASC;
 			&attachment.TotalBytes,
 			&attachment.Uti,
 			&isSticker,
+			&hideAttachment,
 		); err != nil {
 			return nil, err
+		}
+		// Apple marks a rich link's internal preview parts (the site thumbnail,
+		// favicon, and LinkPresentation payload) with hide_attachment=1 so they
+		// never show as standalone attachments in Messages. They were leaking into
+		// the client as 2–4 small "file" cards above the link; the server's debug
+		// view already hid them. Skip them here too (BlueBubbles excludes hidden
+		// attachments from a message's real attachments).
+		if hideAttachment.Valid && hideAttachment.Int64 != 0 {
+			continue
 		}
 		attachment.IsSticker = isSticker.Valid && isSticker.Int64 != 0
 		attachment.DownloadURL = "/api/attachments/" + attachment.GUID
 		store.DecorateAttachmentJSON(&attachment)
-		if attachment.NeedsPreviewConversion {
+		if store.IsAttachmentPreviewPayload(attachment) {
+			continue
+		}
+		if attachment.NeedsPreviewConversion || attachment.IsSticker {
 			attachment.PreviewURL = "/api/attachments/" + attachment.GUID + "/preview"
 		}
 		grouped[messageGUID] = append(grouped[messageGUID], attachment)

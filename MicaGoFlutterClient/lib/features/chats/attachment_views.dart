@@ -1,11 +1,15 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/l10n/app_localizations.dart';
 import '../../core/network/api_client.dart';
 import 'media_viewer.dart';
 import 'models/message_model.dart';
+import 'url_preview.dart';
 
 /// Renders a single attachment in a message bubble, choosing the right view by
 /// kind. Display-only — the server has no media-send endpoint (C2 gap).
@@ -29,6 +33,15 @@ class AttachmentView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (attachment.isOpaquePreviewPayload) {
+      return const SizedBox.shrink();
+    }
+    // C32: stickers (incl. third-party iMessage sticker packs) are handled first
+    // and always as a sticker — we try to render the image and, if that fails,
+    // show a clean "Sticker" placeholder rather than a broken file/“TIFF” card.
+    if (attachment.isStickerLike) {
+      return _StickerAttachment(api: api, attachment: attachment);
+    }
     if (attachment.canRenderInlineImage) {
       return _ImageAttachment(
         api: api,
@@ -46,7 +59,121 @@ class AttachmentView extends StatelessWidget {
     if (attachment.isVideo) {
       return _VideoAttachment(api: api, attachment: attachment);
     }
+    if (attachment.isLocation) {
+      return _LocationAttachment(api: api, attachment: attachment);
+    }
+    if (attachment.isLinkPreview) {
+      return _LinkAttachment(attachment: attachment);
+    }
     return _FileAttachment(attachment: attachment);
+  }
+}
+
+class _LinkAttachment extends StatelessWidget {
+  final AttachmentModel attachment;
+  const _LinkAttachment({required this.attachment});
+
+  @override
+  Widget build(BuildContext context) {
+    return UrlPreviewCard(url: attachment.displayName, compact: true);
+  }
+}
+
+/// C37: an iMessage shared-location attachment. Apple stores it as a small
+/// vlocation text payload carrying an Apple Maps URL; we fetch it, extract the
+/// URL, and offer "Open in Maps". A clean card — never a raw/broken file card.
+class _LocationAttachment extends StatefulWidget {
+  final ApiClient api;
+  final AttachmentModel attachment;
+  const _LocationAttachment({required this.api, required this.attachment});
+
+  @override
+  State<_LocationAttachment> createState() => _LocationAttachmentState();
+}
+
+class _LocationAttachmentState extends State<_LocationAttachment> {
+  late final Future<Uri?> _future = _loadMapUrl();
+
+  Future<Uri?> _loadMapUrl() async {
+    try {
+      final bytes = await widget.api.getAttachmentBytes(widget.attachment.guid);
+      final text = utf8.decode(bytes, allowMalformed: true);
+      // The vlocation body contains an Apple Maps URL (and/or a geo: URI).
+      final match = RegExp(
+        r'(?:https?:\/\/[^\s<>"]*maps[^\s<>"]+|geo:[-0-9.,?&=]+)',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (match != null) {
+        return Uri.tryParse(match.group(0)!.replaceAll(r'\', ''));
+      }
+    } catch (_) {
+      // Fall through to a no-link card.
+    }
+    return null;
+  }
+
+  Future<void> _open(Uri url) async {
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      /* best-effort */
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return FutureBuilder<Uri?>(
+      future: _future,
+      builder: (context, snap) {
+        final url = snap.data;
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: url == null ? null : () => _open(url),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.location_on, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          MicaLocalizations.of(context).t('chat.location'),
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                        Text(
+                          url == null
+                              ? MicaLocalizations.of(context).t('chat.location')
+                              : MicaLocalizations.of(
+                                  context,
+                                ).t('chat.openInMaps'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (url != null)
+                    Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -96,6 +223,110 @@ class _VideoAttachment extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// C32: renders an iMessage sticker. Stickers are images (PNG/HEIC/GIF), so we
+/// try to load + show the bitmap with sticker styling (transparent, no card,
+/// tap to fade like BlueBubbles, long-press to enlarge). If the bytes can't be
+/// fetched or decoded — common for third-party sticker packs in formats the
+/// server can't preview — we show a clean "Sticker" chip instead of a broken
+/// file card.
+class _StickerAttachment extends StatefulWidget {
+  final ApiClient api;
+  final AttachmentModel attachment;
+  const _StickerAttachment({required this.api, required this.attachment});
+
+  @override
+  State<_StickerAttachment> createState() => _StickerAttachmentState();
+}
+
+class _StickerAttachmentState extends State<_StickerAttachment> {
+  late final Future<Uint8List> _future = _load();
+  bool _visible = true;
+
+  Future<Uint8List> _load() async {
+    final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
+    final cached = imageByteCache[cacheKey];
+    if (cached != null) return cached;
+    final bytes = await widget.api.getAttachmentPreviewBytes(widget.attachment);
+    imageByteCache[cacheKey] = bytes;
+    return bytes;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const SizedBox(
+            height: 120,
+            width: 120,
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+        if (snap.hasError || snap.data == null || snap.data!.isEmpty) {
+          return const _StickerPlaceholder();
+        }
+        return GestureDetector(
+          onTap: () => setState(() => _visible = !_visible),
+          onLongPress: () => MediaGalleryViewer.open(
+            context,
+            api: widget.api,
+            images: [widget.attachment],
+          ),
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 150),
+            opacity: _visible ? 1 : 0.25,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 160, maxWidth: 160),
+              child: Image.memory(
+                snap.data!,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                cacheWidth: 320,
+                filterQuality: FilterQuality.none,
+                errorBuilder: (_, _, _) => const _StickerPlaceholder(),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Clean fallback for an un-renderable sticker — a small labelled chip, never a
+/// broken/empty file card.
+class _StickerPlaceholder extends StatelessWidget {
+  const _StickerPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.auto_awesome_outlined,
+            size: 18,
+            color: scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            MicaLocalizations.of(context).t('chat.sticker'),
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ],
       ),
     );
   }

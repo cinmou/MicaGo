@@ -67,7 +67,7 @@ class KeepAliveService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("micaGO is running")
             .setContentText("Staying connected for new messages")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_stat_micago_notification)
             .setOngoing(true)
             .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)

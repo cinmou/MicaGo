@@ -153,6 +153,53 @@ result is shown in plain language (the token is never displayed):
 - Use **Show QR code** / **Copy setup JSON** to pair the Android client; it can
   then connect over mobile data using `https://micago.example.com`.
 
+## Push notifications when you're away (remote)
+
+A common goal is: *be on mobile data, away from home Wi‑Fi, and still get notified
+of new iMessages.* Here's how the tunnel fits into that.
+
+**The push itself does not go through the tunnel.** The flow is:
+
+```
+new iMessage ─► your Mac (server) ─► FCM (Google) ─► your phone   ← the "wake"
+                                                          │
+              phone fetches the actual message via delta sync ◄──┘
+                         over https://micago.example.com  ← the tunnel
+```
+
+- The **wake** (FCM push) is delivered by Google directly to the phone — it works
+  on mobile data with no tunnel. For it, the **Mac just needs outbound internet**
+  to reach `fcm.googleapis.com` (the tunnel is not involved).
+- But a push is only a wake signal — the **message content is pulled from your
+  server** over WebSocket / delta sync. When the phone is **off your Wi‑Fi**, it
+  can only reach the server through a **public URL**. That's what the Cloudflare
+  Tunnel custom domain provides.
+
+So, to get useful remote push:
+
+1. Complete this guide so `https://micago.example.com` shows **Reachable** in
+   **Connection Endpoints → Public**.
+2. Pair (or re‑pair) the Android client while **Public** is reachable, so its
+   saved profile includes the public URL. The client auto‑selects Public when it
+   can't reach a LAN route (e.g. on mobile data).
+3. Set up your own Firebase push — see
+   [notifications-setup.md](notifications-setup.md). FCM and the public URL are
+   independent pieces: FCM wakes the phone, the public URL lets it sync.
+4. Test it: put the phone on **mobile data** (Wi‑Fi off), background the app, and
+   send yourself an iMessage. You should get the notification, and tapping it
+   should open the chat (the client delta‑syncs over the public URL).
+
+**Optional — let the client learn the public URL automatically.** In the
+Companion's **Notifications** settings you can enable **Firebase public‑URL sync**,
+which publishes the current public URL to your own Firebase so clients can pick up
+a changed tunnel hostname without re‑pairing. It's optional; pairing with Public
+reachable already embeds the URL.
+
+> Keep‑alive is **not** a substitute here: when the app is killed on mobile data,
+> only the FCM wake (with a reachable public URL for the follow‑up sync) reliably
+> notifies you. Keep‑alive helps a backgrounded app, subject to OEM battery
+> limits.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

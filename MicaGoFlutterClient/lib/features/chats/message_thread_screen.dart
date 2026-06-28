@@ -1,9 +1,15 @@
+import 'dart:io';
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_controller.dart';
+import '../../core/l10n/app_localizations.dart';
 import '../../core/network/api_client.dart';
+import '../../core/theme_controller.dart';
 import '../../core/ui/top_banner.dart';
 import 'package:photo_manager/photo_manager.dart';
 
@@ -21,8 +27,10 @@ import 'message_render.dart';
 import 'models/chat_summary.dart';
 import 'models/merged_chat.dart';
 import 'models/message_model.dart';
+import 'voice_recorder.dart';
 import 'route_label.dart';
 import 'store/thread_presentation.dart';
+import 'url_preview.dart';
 import 'thread_controller.dart';
 
 /// Real message thread (C2): history, attachments, optimistic text send, and
@@ -97,6 +105,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     _controller.dispose();
     _scroll.dispose();
     _composer.dispose();
+    _recorder.dispose();
     super.dispose();
   }
 
@@ -221,11 +230,61 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     }
   }
 
-  // C21: voice is a UI affordance only for now — recording is not implemented,
-  // so rather than ship a half-working recorder we clearly tell the user it's
-  // not available yet (the send path for audio would reuse sendAttachments).
-  void _onVoiceAffordance() {
-    TopBanner.show(context, 'Voice messages aren’t available yet.');
+  // C37: voice messages — record to a temp m4a and ship it through the existing
+  // send-attachment path. Mic permission is requested on first record.
+  final VoiceRecorder _recorder = VoiceRecorder();
+  bool _recording = false;
+  bool _voiceBusy = false;
+
+  Future<void> _startVoice() async {
+    if (_recording || _voiceBusy) return;
+    if (!_canSendAttachments) {
+      TopBanner.show(context, 'Attachments can’t be sent in this chat.');
+      return;
+    }
+    setState(() => _voiceBusy = true);
+    final ok = await _recorder.start();
+    if (!mounted) return;
+    setState(() {
+      _voiceBusy = false;
+      _recording = ok;
+    });
+    if (!ok) {
+      TopBanner.show(
+        context,
+        'Couldn’t start recording — allow microphone access in Android Settings.',
+        kind: TopBannerKind.error,
+      );
+    }
+  }
+
+  Future<void> _sendVoice() async {
+    if (!_recording || _voiceBusy) return;
+    setState(() => _voiceBusy = true);
+    final result = await _recorder.stop();
+    if (!mounted) return;
+    setState(() {
+      _voiceBusy = false;
+      _recording = false;
+    });
+    if (result == null) {
+      TopBanner.show(context, 'Recording failed.', kind: TopBannerKind.error);
+      return;
+    }
+    await _controller.sendAttachments([
+      StagedAttachment(bytes: result.bytes, filename: result.filename),
+    ]);
+    if (mounted) _showAttachErrorIfAny();
+  }
+
+  Future<void> _cancelVoice() async {
+    await _recorder.cancel();
+    if (mounted) {
+      setState(() {
+        _recording = false;
+        _voiceBusy = false;
+      });
+    }
   }
 
   void _showAttachErrorIfAny() {
@@ -314,24 +373,32 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
                 )
               : const SizedBox(width: double.infinity),
         ),
-        ListenableBuilder(
-          listenable: _controller,
-          builder: (context, _) => _Composer(
-            controller: _composer,
-            service: _effectiveService,
-            serviceCanSend: canSend,
-            // Send is enabled when there's text OR staged attachments.
-            canSend: _composer.text.trim().isNotEmpty || _staged.isNotEmpty,
-            onSend: _send,
-            attachmentSending: _controller.attachmentSending,
-            attachOpen: _attachOpen,
-            onAttach: _toggleAttachPanel,
-            onVoice: _onVoiceAffordance,
-            emojiOpen: _emojiOpen,
-            onEmoji: _toggleEmojiPanel,
-            onInputFocused: _onInputFocused,
-          ),
-        ),
+        _recording
+            ? _VoiceRecordingBar(
+                elapsed: _recorder.elapsed,
+                busy: _voiceBusy,
+                onCancel: _cancelVoice,
+                onSend: _sendVoice,
+              )
+            : ListenableBuilder(
+                listenable: _controller,
+                builder: (context, _) => _Composer(
+                  controller: _composer,
+                  service: _effectiveService,
+                  serviceCanSend: canSend,
+                  // Send is enabled when there's text OR staged attachments.
+                  canSend:
+                      _composer.text.trim().isNotEmpty || _staged.isNotEmpty,
+                  onSend: _send,
+                  attachmentSending: _controller.attachmentSending,
+                  attachOpen: _attachOpen,
+                  onAttach: _toggleAttachPanel,
+                  onVoice: _startVoice,
+                  emojiOpen: _emojiOpen,
+                  onEmoji: _toggleEmojiPanel,
+                  onInputFocused: _onInputFocused,
+                ),
+              ),
         // C24: emoji panel slides up from the bottom, below the composer —
         // like a keyboard/attachment panel.
         AnimatedSize(
@@ -344,12 +411,14 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
         ),
       ],
     );
+    final themedContent = _ChatBackground(child: content);
 
     final titleRow = Row(
       children: [
         HandleAvatar(
           title: title,
           handle: _active.isGroup ? null : _active.chatIdentifier,
+          participantHandles: _active.participants,
           isGroup: _active.isGroup,
           radius: 16,
         ),
@@ -389,7 +458,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
             ),
           ),
           const Divider(height: 1),
-          Expanded(child: content),
+          Expanded(child: themedContent),
         ],
       );
     }
@@ -407,7 +476,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
           ),
         ],
       ),
-      body: content,
+      body: themedContent,
     );
   }
 
@@ -601,6 +670,35 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
       ),
     );
     return m.message.hasAttachments ? RepaintBoundary(child: bubble) : bubble;
+  }
+}
+
+class _ChatBackground extends StatelessWidget {
+  final Widget child;
+  const _ChatBackground({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = context.watch<ThemeController>().chatBackgroundPath;
+    if (path == null || path.isEmpty) return child;
+
+    final file = File(path);
+    if (!file.existsSync()) return child;
+    final brightness = Theme.of(context).brightness;
+    final overlay = brightness == Brightness.dark
+        ? Colors.black.withValues(alpha: 0.38)
+        : Colors.white.withValues(alpha: 0.30);
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ExcludeSemantics(child: Image.file(file, fit: BoxFit.cover)),
+        ExcludeSemantics(
+          child: DecoratedBox(decoration: BoxDecoration(color: overlay)),
+        ),
+        child,
+      ],
+    );
   }
 }
 
@@ -832,18 +930,23 @@ class _DateSeparator extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Center(
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Text(
-          label,
-          style: Theme.of(
-            context,
-          ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+      child: Semantics(
+        label: label,
+        child: ExcludeSemantics(
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              label,
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
         ),
       ),
     );
@@ -914,12 +1017,27 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // C27: a media-only message (renderable images/stickers, no text or reply)
     // renders as a clean media bubble — no colored chat bubble wrapping it,
     // matching BlueBubbles. Mixed media + text keeps the normal bubble.
-    final cleanMediaOnly = hasMedia &&
+    final cleanMediaOnly =
+        hasMedia &&
         widget.body == null &&
         widget.reply == null &&
         message.attachments.isNotEmpty &&
         message.attachments.every((a) => a.canRenderInlineImage);
-    final stripBubble = bigEmoji || cleanMediaOnly;
+    final stickerOnly =
+        hasMedia &&
+        widget.body == null &&
+        widget.reply == null &&
+        message.attachments.isNotEmpty &&
+        message.attachments.every((a) => a.isStickerLike);
+    // C37: handwriting / Digital Touch ship their rendered media as the
+    // attachment — show it with no chat bubble behind it (like a sticker).
+    final embeddedMedia =
+        message.isEmbeddedMedia &&
+        hasMedia &&
+        widget.body == null &&
+        widget.reply == null;
+    final stripBubble =
+        bigEmoji || cleanMediaOnly || stickerOnly || embeddedMedia;
     final bubbleColor = stripBubble
         ? Colors.transparent
         : (fromMe ? scheme.primaryContainer : scheme.surfaceContainerHighest);
@@ -932,6 +1050,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final sender = widget.senderName;
     final bodyText = widget.body;
     final effect = effectHint;
+    final previewUrl = bodyText == null ? null : firstUrlInText(bodyText);
+    final hasLinkAttachment = message.attachments.any((a) => a.isLinkPreview);
 
     final bubble = Container(
       margin: const EdgeInsets.symmetric(vertical: 2),
@@ -981,11 +1101,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
                 ),
               ),
           if (bodyText != null)
-            Text(
-              bodyText,
+            _LinkedMessageText(
+              text: bodyText,
               style: bigEmoji
                   ? TextStyle(fontSize: bigEmojiFontSize(bodyText), height: 1.1)
                   : TextStyle(color: textColor),
+              linkColor: fromMe ? scheme.onPrimaryContainer : scheme.primary,
             ),
           if (effect != null)
             Padding(
@@ -1015,17 +1136,20 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     final bubbleWithReactions = reactions.isEmpty
         ? bubble
-        : Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Padding(padding: const EdgeInsets.only(top: 8), child: bubble),
-              Positioned(
-                top: -4,
-                right: fromMe ? null : 4,
-                left: fromMe ? 4 : null,
-                child: _ReactionChips(reactions: reactions),
-              ),
-            ],
+        : Semantics(
+            container: true,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Padding(padding: const EdgeInsets.only(top: 8), child: bubble),
+                Positioned(
+                  top: -4,
+                  right: fromMe ? null : 4,
+                  left: fromMe ? 4 : null,
+                  child: _ReactionChips(reactions: reactions),
+                ),
+              ],
+            ),
           );
 
     final row = Column(
@@ -1034,6 +1158,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
           : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (previewUrl != null && !hasLinkAttachment) ...[
+          UrlPreviewCard(url: previewUrl),
+          const SizedBox(height: 4),
+        ],
         bubbleWithReactions,
         _Footer(
           message: message,
@@ -1299,7 +1427,172 @@ class _Footer extends StatelessWidget {
   }
 }
 
+class _LinkedMessageText extends StatefulWidget {
+  final String text;
+  final TextStyle? style;
+  final Color linkColor;
+
+  const _LinkedMessageText({
+    required this.text,
+    required this.style,
+    required this.linkColor,
+  });
+
+  @override
+  State<_LinkedMessageText> createState() => _LinkedMessageTextState();
+}
+
+class _LinkedMessageTextState extends State<_LinkedMessageText> {
+  final List<TapGestureRecognizer> _recognizers = [];
+  List<InlineSpan>? _spans;
+
+  @override
+  void initState() {
+    super.initState();
+    _spans = _buildSpans();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LinkedMessageText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text ||
+        oldWidget.style != widget.style ||
+        oldWidget.linkColor != widget.linkColor) {
+      _disposeRecognizers();
+      _spans = _buildSpans();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeRecognizers();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = urlPreviewRegex.allMatches(widget.text).toList();
+    if (matches.isEmpty) return Text(widget.text, style: widget.style);
+    return RichText(
+      text: TextSpan(style: widget.style, children: _spans ?? const []),
+    );
+  }
+
+  List<InlineSpan> _buildSpans() {
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final match in urlPreviewRegex.allMatches(widget.text)) {
+      if (match.start > cursor) {
+        spans.add(TextSpan(text: widget.text.substring(cursor, match.start)));
+      }
+      final raw = widget.text.substring(match.start, match.end);
+      final url = normalizePreviewUrl(raw);
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () async {
+          final uri = Uri.tryParse(url);
+          if (uri != null) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          }
+        };
+      _recognizers.add(recognizer);
+      spans.add(
+        TextSpan(
+          text: raw,
+          style: widget.style?.copyWith(
+            color: widget.linkColor,
+            decoration: TextDecoration.underline,
+          ),
+          recognizer: recognizer,
+        ),
+      );
+      cursor = match.end;
+    }
+    if (cursor < widget.text.length) {
+      spans.add(TextSpan(text: widget.text.substring(cursor)));
+    }
+    return spans;
+  }
+
+  void _disposeRecognizers() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    _recognizers.clear();
+  }
+}
+
 /// C21u composer: a **floating capsule** bar (not a full-width bottom bar) with
+/// C37: replaces the composer while a voice message is being recorded — a red
+/// pulse, an elapsed timer, and Cancel / Send.
+class _VoiceRecordingBar extends StatelessWidget {
+  final ValueNotifier<Duration> elapsed;
+  final bool busy;
+  final VoidCallback onCancel;
+  final VoidCallback onSend;
+  const _VoiceRecordingBar({
+    required this.elapsed,
+    required this.busy,
+    required this.onCancel,
+    required this.onSend,
+  });
+
+  String _fmt(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: MaterialLocalizations.of(context).cancelButtonLabel,
+            onPressed: busy ? null : onCancel,
+            icon: Icon(Icons.delete_outline, color: scheme.error),
+          ),
+          Icon(Icons.fiber_manual_record, color: scheme.error, size: 12),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Row(
+              children: [
+                Text(MicaLocalizations.of(context).t('chat.recording')),
+                const SizedBox(width: 8),
+                ValueListenableBuilder<Duration>(
+                  valueListenable: elapsed,
+                  builder: (context, d, _) => Text(
+                    _fmt(d),
+                    style: const TextStyle(fontFeatures: [
+                      FontFeature.tabularFigures(),
+                    ]),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          busy
+              ? const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : IconButton.filled(
+                  tooltip: MicaLocalizations.of(context).t('chat.send'),
+                  onPressed: onSend,
+                  icon: const Icon(Icons.arrow_upward),
+                ),
+        ],
+      ),
+    );
+  }
+}
+
 /// `+` on the left, a themed "Message" capsule in the centre (voice inside when
 /// idle/empty, emoji when focused), and a send button outside on the right.
 /// Colors come from the Material scheme (surface / surfaceContainer / onSurface)
@@ -2053,6 +2346,7 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                   handle: widget.active.isGroup
                       ? null
                       : widget.active.chatIdentifier,
+                  participantHandles: widget.active.participants,
                   isGroup: widget.active.isGroup,
                   radius: 22,
                 ),

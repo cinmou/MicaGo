@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
@@ -435,7 +438,7 @@ class _NotificationsCardState extends State<_NotificationsCard> {
     final error = await widget.app.sendTestPush();
     if (!mounted) return;
     setState(() => _busy = false);
-    final msg = error ?? 'Test notification sent.';
+    final msg = error ?? MicaLocalizations.of(context).t('notif.testSent');
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text(msg)));
@@ -449,11 +452,8 @@ class _NotificationsCardState extends State<_NotificationsCard> {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
         ..showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Notifications are blocked. Enable them in Android Settings → '
-              'Apps → micaGO → Notifications.',
-            ),
+          SnackBar(
+            content: Text(MicaLocalizations.of(context).t('notif.permBlocked')),
           ),
         );
     }
@@ -462,6 +462,7 @@ class _NotificationsCardState extends State<_NotificationsCard> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppController>();
+    final strings = MicaLocalizations.of(context);
     final configured = app.pushConfigured;
     final scheme = Theme.of(context).colorScheme;
     return Card(
@@ -476,13 +477,13 @@ class _NotificationsCardState extends State<_NotificationsCard> {
             ),
             title: Text(
               configured
-                  ? 'Push notifications enabled'
-                  : 'Push notifications not configured',
+                  ? strings.t('notif.enabled')
+                  : strings.t('notif.notConfigured'),
             ),
             subtitle: Text(
               configured
-                  ? 'This device can be woken for new messages (${app.pushProvider.toUpperCase()}).'
-                  : 'Optional. Set up your own Firebase project on the Mac to enable background pushes. Messages still arrive while the app is open.',
+                  ? '${strings.t('notif.enabledBody')} (${app.pushProvider.toUpperCase()}).'
+                  : strings.t('notif.notConfiguredBody'),
             ),
             isThreeLine: true,
           ),
@@ -490,8 +491,8 @@ class _NotificationsCardState extends State<_NotificationsCard> {
             const Divider(height: 1),
             ListTile(
               leading: _leadingIcon(Icons.send_outlined),
-              title: const Text('Send test notification'),
-              subtitle: const Text('Delivers a test push to this device'),
+              title: Text(strings.t('notif.sendTest')),
+              subtitle: Text(strings.t('notif.sendTestBody')),
               trailing: _busy
                   ? const SizedBox(
                       width: 18,
@@ -513,15 +514,12 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                 Icons.warning_amber_outlined,
                 color: scheme.error,
               ),
-              title: const Text('Notifications are turned off'),
-              subtitle: const Text(
-                'Android is blocking notifications, so neither push nor '
-                'keep-alive can alert you. Turn them on to receive messages.',
-              ),
+              title: Text(strings.t('notif.permOff')),
+              subtitle: Text(strings.t('notif.permOffBody')),
               isThreeLine: true,
               trailing: TextButton(
                 onPressed: _enableNotifications,
-                child: const Text('Turn on'),
+                child: Text(strings.t('notif.turnOn')),
               ),
             ),
           ],
@@ -531,13 +529,8 @@ class _NotificationsCardState extends State<_NotificationsCard> {
             const Divider(height: 1),
             SwitchListTile(
               secondary: _leadingIcon(Icons.bolt_outlined),
-              title: const Text('Keep micaGO running in background'),
-              subtitle: const Text(
-                'Advanced. A foreground service holds the connection open and '
-                'shows local notifications even without Firebase — so you get '
-                'alerts with no push setup. Android/OEM battery limits can still '
-                'throttle it, and it uses more battery.',
-              ),
+              title: Text(strings.t('notif.keepAlive')),
+              subtitle: Text(strings.t('notif.keepAliveBody')),
               isThreeLine: true,
               value: app.keepAliveEnabled,
               onChanged: (v) => app.setKeepAliveEnabled(v),
@@ -580,9 +573,10 @@ class _NotificationDiagnosticsTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final rows = _rows();
+    final strings = MicaLocalizations.of(context);
     return ExpansionTile(
       leading: const SizedBox(width: 40, child: Icon(Icons.info_outline)),
-      title: const Text('Notification diagnostics'),
+      title: Text(strings.t('notif.diagnostics')),
       childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       children: [
         for (final r in rows)
@@ -607,7 +601,7 @@ class _NotificationDiagnosticsTile extends StatelessWidget {
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
             icon: const Icon(Icons.copy, size: 18),
-            label: const Text('Copy diagnostics'),
+            label: Text(strings.t('notif.copyDiagnostics')),
             onPressed: () {
               final text = [
                 'micaGO notification diagnostics',
@@ -617,7 +611,7 @@ class _NotificationDiagnosticsTile extends StatelessWidget {
               ScaffoldMessenger.of(context)
                 ..clearSnackBars()
                 ..showSnackBar(
-                  const SnackBar(content: Text('Diagnostics copied')),
+                  SnackBar(content: Text(strings.t('notif.diagnosticsCopied'))),
                 );
             },
           ),
@@ -691,6 +685,105 @@ class _SmsSendingCardState extends State<_SmsSendingCard> {
   }
 }
 
+class _ChatBackgroundPicker extends StatelessWidget {
+  final ThemeController theme;
+  const _ChatBackgroundPicker({required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = theme.chatBackgroundPath;
+    final file = path == null ? null : File(path);
+    final exists = file != null && file.existsSync();
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: exists
+                  ? Image.file(file, fit: BoxFit.cover)
+                  : Icon(
+                      Icons.wallpaper_outlined,
+                      color: scheme.onSurfaceVariant,
+                    ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(exists ? 'Custom image selected' : 'Default background'),
+                  const SizedBox(height: 4),
+                  Text(
+                    exists
+                        ? 'Shown behind message history and the input area.'
+                        : 'Choose any local image for your chat screen.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              onPressed: () => _pick(context),
+              icon: const Icon(Icons.photo_library_outlined),
+              label: Text(exists ? 'Change image' : 'Choose image'),
+            ),
+            if (exists)
+              OutlinedButton.icon(
+                onPressed: () => theme.clearChatBackground(),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Remove'),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pick(BuildContext context) async {
+    final image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 95,
+    );
+    if (image == null) return;
+    try {
+      await theme.setChatBackgroundFromFile(image.path);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Chat background updated')),
+        );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not use that image')),
+        );
+    }
+  }
+}
+
 class _AppearanceCard extends StatelessWidget {
   final ThemeController theme;
   const _AppearanceCard({required this.theme});
@@ -754,6 +847,14 @@ class _AppearanceCard extends StatelessWidget {
                   ),
               ],
             ),
+            const Divider(height: 28),
+
+            Text(
+              'Chat background',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            _ChatBackgroundPicker(theme: theme),
             const Divider(height: 28),
 
             Text(

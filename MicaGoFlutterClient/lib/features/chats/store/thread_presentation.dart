@@ -97,17 +97,30 @@ class ThreadPresentationBuilder {
     final rows = buildDisplayRows(messages, prefs);
     final byGuid = {for (final m in messages) m.guid: m};
 
-    // Delivery-label visibility: compact = latest outgoing only.
+    // Delivery-label visibility: compact = latest outgoing plus separate
+    // read/delivered boundaries, so the footer shows where the recipient read
+    // up to instead of collapsing everything onto the bottom-most outgoing row.
     String? lastOutgoingKey;
+    String? lastReadOutgoingKey;
+    String? lastDeliveredOutgoingKey;
     for (final m in messages) {
-      if (m.isFromMe) lastOutgoingKey = m.dedupeKey;
+      if (!m.isFromMe) continue;
+      lastOutgoingKey = m.dedupeKey;
+      final state = deliveryStateFor(m);
+      if (state == MessageDeliveryState.read) {
+        lastReadOutgoingKey = m.dedupeKey;
+      } else if (state == MessageDeliveryState.delivered) {
+        lastDeliveredOutgoingKey = m.dedupeKey;
+      }
     }
     bool showStatusFor(MessageModel m) {
       switch (prefs.deliveryLabels) {
         case DeliveryLabelMode.off:
           return false;
         case DeliveryLabelMode.compact:
-          return m.dedupeKey == lastOutgoingKey;
+          return m.dedupeKey == lastOutgoingKey ||
+              m.dedupeKey == lastReadOutgoingKey ||
+              m.dedupeKey == lastDeliveredOutgoingKey;
         case DeliveryLabelMode.detailed:
           return m.isFromMe;
       }
@@ -166,11 +179,7 @@ class ThreadPresentationBuilder {
           kind: row.kind,
           isSystem: isSystem,
           systemLabel: isSystem
-              ? _systemLabel(
-                  row.kind,
-                  m,
-                  senderName: resolveName(m.handleId),
-                )
+              ? _systemLabel(row.kind, m, senderName: resolveName(m.handleId))
               : null,
           mergedSystemCount: row.mergedSystemCount,
           senderLabel: (!isSystem && !m.isFromMe && isGroup)

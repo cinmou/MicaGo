@@ -241,6 +241,7 @@ class _ChatRow extends StatelessWidget {
       leading: HandleAvatar(
         title: title,
         handle: chat.isGroup ? null : chat.chatIdentifier,
+        participantHandles: chat.participants,
         isGroup: chat.isGroup,
       ),
       title: Row(
@@ -270,11 +271,7 @@ class _ChatRow extends StatelessWidget {
           ],
         ],
       ),
-      subtitle: Text(
-        _subtitle(),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      subtitle: Text(_subtitle(), maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: _trailing(context, chat),
     );
   }

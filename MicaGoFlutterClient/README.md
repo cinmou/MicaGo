@@ -5,7 +5,7 @@ over LAN or an optional public URL, sync chats and messages, send text and
 attachments, and (optionally) receive push notifications.
 
 See the [root README](../README.md) for the project overview and the
-[CHANGELOG](../CHANGELOG.md) for the development history.
+[CHANGELOG](../MicaGoServer/docs/CHANGELOG.md) for the development history.
 
 ## Features
 

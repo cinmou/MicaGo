@@ -24,6 +24,8 @@ Future<void> main() async {
   // C31: let the controller title local notifications with on-device contact
   // names (resolves live against the contacts index; null when matching is off).
   controller.contactNameResolver = contacts.displayNameFor;
+  // C32: and show the contact's avatar in the notification when available.
+  controller.contactAvatarResolver = contacts.thumbnailForHandle;
 
   runApp(
     MicaGoApp(

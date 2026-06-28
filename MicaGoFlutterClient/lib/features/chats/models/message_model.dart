@@ -60,6 +60,12 @@ class AttachmentModel {
       attachmentKind == 'image' ||
       (isSticker && displayKind == 'sticker') ||
       (mimeType?.startsWith('image/') ?? false);
+
+  /// C32: anything the server marks as a sticker, however it was flagged. Used
+  /// to route stickers (incl. third-party sticker packs) to the sticker renderer
+  /// so they never fall through to a generic/broken file card.
+  bool get isStickerLike =>
+      isSticker || displayKind == 'sticker' || attachmentKind == 'sticker';
   bool get canRenderSticker =>
       isSticker &&
       downloadUrl.isNotEmpty &&
@@ -83,11 +89,80 @@ class AttachmentModel {
   bool get isVideo =>
       attachmentKind == 'video' || (mimeType?.startsWith('video/') ?? false);
 
+  /// C37: an iMessage shared-location attachment (vlocation). Rendered as a
+  /// location card with "Open in Maps" rather than a raw file.
+  bool get isLocation =>
+      attachmentKind == 'location' ||
+      displayKind == 'location' ||
+      mimeType == 'text/x-vlocation' ||
+      uti == 'public.vlocation';
+  bool get isLinkPreview {
+    final value = displayName.trim();
+    return (mimeType == null || mimeType!.trim().isEmpty) &&
+        (value.startsWith('http://') || value.startsWith('https://'));
+  }
+
+  /// Apple URLBalloon/link-preview payloads can arrive as UUID-like file rows
+  /// with no MIME and no meaningful extension. BlueBubbles keeps those out of
+  /// `realAttachments`; MicaGo should not render them as blank file cards.
+  bool get isOpaquePreviewPayload {
+    if (isStickerLike || isLinkPreview || isImage || isAudio || isVideo) {
+      return false;
+    }
+    if ((mimeType?.trim().isNotEmpty ?? false) ||
+        (originalMimeType?.trim().isNotEmpty ?? false)) {
+      return false;
+    }
+    final name = displayName.trim();
+    final lowerUti = (uti ?? '').trim().toLowerCase();
+    final genericUti =
+        lowerUti.isEmpty ||
+        lowerUti == 'public.data' ||
+        lowerUti == 'public.item' ||
+        lowerUti == 'public.content';
+    final noUsefulExtension = !_hasKnownRenderableExtension(name);
+    return genericUti &&
+        noUsefulExtension &&
+        (attachmentKind == 'file' ||
+            attachmentKind == 'unknown' ||
+            displayKind == 'file' ||
+            displayKind == 'unknown');
+  }
+
   String get displayName => (transferName?.trim().isNotEmpty ?? false)
       ? transferName!.trim()
       : (filename?.trim().isNotEmpty ?? false)
       ? filename!.trim()
       : 'Attachment';
+
+  static bool _hasKnownRenderableExtension(String name) {
+    final lower = name.toLowerCase();
+    const exts = [
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.gif',
+      '.heic',
+      '.heif',
+      '.tif',
+      '.tiff',
+      '.webp',
+      '.bmp',
+      '.mov',
+      '.mp4',
+      '.m4v',
+      '.mp3',
+      '.m4a',
+      '.aac',
+      '.wav',
+      '.caf',
+      '.pdf',
+      '.txt',
+      '.vcf',
+      '.zip',
+    ];
+    return exts.any(lower.endsWith);
+  }
 
   factory AttachmentModel.fromJson(Map<String, dynamic> json) {
     int asInt(Object? v) => v is num ? v.toInt() : 0;
@@ -270,6 +345,16 @@ class MessageModel {
   bool get hasText => (text?.trim().isNotEmpty ?? false);
   bool get hasAttachments => attachments.isNotEmpty;
 
+  /// C37: handwritten / Digital Touch messages. Apple ships these as an
+  /// interactive balloon whose attachment is the already-rendered media (a PNG
+  /// for handwriting, a MOV for Digital Touch), so they render like normal
+  /// media — but with no chat bubble behind them (transparent), like a sticker.
+  bool get isHandwritten =>
+      balloonBundleId == 'com.apple.Handwriting.HandwritingProvider';
+  bool get isDigitalTouch =>
+      balloonBundleId == 'com.apple.DigitalTouchBalloonProvider';
+  bool get isEmbeddedMedia => isHandwritten || isDigitalTouch;
+
   /// Stable identity for de-duplication: real GUID if present, else the local
   /// temp id of an optimistic outgoing message.
   String get dedupeKey => guid.isNotEmpty ? guid : (tempId ?? '');
@@ -342,6 +427,7 @@ class MessageModel {
         (json['attachments'] as List?)
             ?.whereType<Map<String, dynamic>>()
             .map(AttachmentModel.fromJson)
+            .where((a) => !a.isOpaquePreviewPayload)
             .toList(growable: false) ??
         const <AttachmentModel>[];
     final reactions =

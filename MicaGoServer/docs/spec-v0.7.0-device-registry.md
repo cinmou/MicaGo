@@ -2,7 +2,11 @@
 
 ## Goal
 
-Add a lightweight server-side device registry so future Windows, Android, iOS, HarmonyOS, and web clients can register themselves and later receive push or realtime policy decisions.
+Add a lightweight server-side device registry so future Windows, Android, iOS, HarmonyOS, and web clients can register themselves for optional push delivery.
+
+This registry is **not** the Companion's Paired Devices surface. Paired Devices
+is the live list of authenticated clients connected to the server, exposed by
+`GET /api/server/connections`. FCM/webhook device registration remains separate.
 
 ## Storage
 
@@ -134,5 +138,6 @@ Deletes the device.
 ## Known Limitations
 
 - Device auth is still server-token based, not per-device scoped.
-- WebSocket sessions are not yet linked to registered device IDs.
-- The registry is sufficient for future client support, but not yet a full pairing system.
+- WebSocket sessions are intentionally separate from registered push devices.
+- The registry is sufficient for optional notification delivery, but it is not a
+  live pairing or active-connection system.

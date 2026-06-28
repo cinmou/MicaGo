@@ -11,6 +11,13 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Primary navigation, shown in the main sidebar list.
+    static let primary: [SidebarItem] = [
+        .dashboard, .connections, .syncControl, .notifications, .tutorials,
+    ]
+    /// Settings + tools, pinned to the bottom of the sidebar (native pattern).
+    static let bottom: [SidebarItem] = [.advanced, .debug, .log]
+
     var title: String {
         switch self {
         case .dashboard: return L10n.tr("sidebar.dashboard")
@@ -33,7 +40,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .log: return "doc.plaintext"
         case .notifications: return "bell"
         case .tutorials: return "book"
-        case .advanced: return "slider.horizontal.3"
+        case .advanced: return "gearshape"
         }
     }
 }
@@ -50,14 +57,35 @@ struct ContentView: View {
     @EnvironmentObject var runtime: RuntimeMonitor
     @EnvironmentObject var backend: BackendController
     @StateObject private var nav = NavState()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $nav.selection) { item in
-                Label(item.title, systemImage: item.symbol).tag(item)
+            // Native macOS sidebar: primary items in the scrolling list, with
+            // Settings + tools pinned at the bottom. Both lists are sidebar-styled
+            // and share the same selection, so exactly one row is ever highlighted.
+            List(selection: $nav.selection) {
+                ForEach(SidebarItem.primary) { item in
+                    Label(item.title, systemImage: item.symbol).tag(item)
+                }
             }
+            .listStyle(.sidebar)
             .navigationTitle("micaGO")
-            .frame(minWidth: 200)
+            .frame(minWidth: 215)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    List(selection: $nav.selection) {
+                        ForEach(SidebarItem.bottom) { item in
+                            Label(item.title, systemImage: item.symbol).tag(item)
+                        }
+                    }
+                    .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
+                    .scrollDisabled(true)
+                    .frame(height: 30 * CGFloat(SidebarItem.bottom.count) + 8)
+                }
+            }
         } detail: {
             NavigationStack {
                 ScrollView {
@@ -80,6 +108,12 @@ struct ContentView: View {
         }
         .environmentObject(nav)
         .frame(minWidth: 820, idealWidth: 1000, minHeight: 560, idealHeight: 720)
+        // Expose the WindowGroup's openWindow to AppKit so the menu-bar "Open
+        // Dashboard" reopens THIS window (native toolbar/titlebar) rather than a
+        // hand-rolled NSWindow that renders the toolbar differently.
+        .onAppear {
+            DashboardWindowOpener.shared.open = { openWindow(id: "dashboard") }
+        }
         // Bootstrap (config/poll/auto-start/runtime) is owned by the AppDelegate
         // so it runs even when launched silently with no window. Polling stays
         // alive for the menu-bar surface; it is not torn down when the window
@@ -377,18 +411,50 @@ private struct DashboardDevicesCard: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        SectionCard(title: "Paired Devices (\(model.devices.count))") {
-            if model.devices.isEmpty {
-                Text("No devices yet. A device appears here when a micaGO client connects and registers.")
+        SectionCard(title: "Paired Devices (\(model.activeConnections.count))") {
+            if model.activeConnections.isEmpty {
+                Text("No clients are connected to the server right now.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                ForEach(model.devices) { device in
-                    DeviceCardRow(device: device)
+                ForEach(model.activeConnections) { connection in
+                    ActiveConnectionRow(connection: connection)
                     Divider()
                 }
             }
         }
+    }
+}
+
+// MARK: - Shared active connection card
+
+private struct ActiveConnectionRow: View {
+    let connection: ActiveConnectionInfo
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "network")
+                .foregroundStyle(.green)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(connection.displayTitle).fontWeight(.medium)
+                Text(connection.subtitle)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 3) {
+                HStack(spacing: 5) {
+                    Circle().fill(Color.green).frame(width: 8, height: 8)
+                    Text("Connected").font(.caption).foregroundStyle(.green)
+                }
+                Text("since: \(connection.connectedLabel)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text("seen: \(connection.lastSeenLabel)")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -1421,9 +1487,10 @@ private struct DevicesSection: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        SectionCard(title: "Registered Devices (\(model.devices.count))") {
+        SectionCard(title: "Push Devices (\(model.devices.count))") {
             if model.devices.isEmpty {
-                Text("No devices registered.").foregroundStyle(.secondary)
+                Text("No push devices registered. FCM registration is optional and separate from active server connections.")
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(model.devices) { device in
                     DeviceCardRow(device: device, showTestPush: true)

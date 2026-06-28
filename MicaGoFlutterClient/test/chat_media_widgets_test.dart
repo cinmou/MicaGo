@@ -142,6 +142,125 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'a sticker falls back to raw bytes when preview conversion fails',
+    (tester) async {
+      final seen = <String>[];
+      final stickerApi = ApiClient(
+        baseUrl: 'http://localhost:0',
+        token: 't',
+        httpClient: MockClient((request) async {
+          seen.add(request.url.path);
+          if (request.url.path.endsWith('/preview')) {
+            return http.Response('preview unavailable', 501);
+          }
+          return http.Response.bytes(_png1x1, 200);
+        }),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AttachmentView(
+              api: stickerApi,
+              attachment: const AttachmentModel(
+                guid: 's-preview',
+                downloadUrl: '/api/attachments/s-preview',
+                previewUrl: '/api/attachments/s-preview/preview',
+                filename: 'sticker.heic',
+                isSticker: true,
+                attachmentKind: 'sticker',
+                displayKind: 'sticker',
+                needsPreviewConversion: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(seen, [
+        '/api/attachments/s-preview/preview',
+        '/api/attachments/s-preview',
+      ]);
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.text('Sticker'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'an un-renderable sticker shows a clean Sticker placeholder, not a file card',
+    (tester) async {
+      // A third-party sticker whose bytes can't be fetched/decoded.
+      final stickerApi = ApiClient(
+        baseUrl: 'http://localhost:0',
+        token: 't',
+        httpClient: MockClient((_) async => http.Response('nope', 500)),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AttachmentView(
+              api: stickerApi,
+              attachment: const AttachmentModel(
+                guid: 's2',
+                downloadUrl: '/api/attachments/s2',
+                filename: 'pack.heic',
+                isSticker: true,
+                attachmentKind: 'sticker',
+                displayKind: 'sticker',
+                needsPreviewConversion: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Clean "Sticker" placeholder — never a broken/empty file card.
+      expect(find.text('Sticker'), findsOneWidget);
+      expect(find.text('pack.heic'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('a location attachment renders a Location card with Open in Maps',
+      (tester) async {
+    final locApi = ApiClient(
+      baseUrl: 'http://localhost:0',
+      token: 't',
+      httpClient: MockClient(
+        (_) async => http.Response(
+          'BEGIN:VCARD\nURL:https://maps.apple.com/?ll=37.33,-122.03\nEND:VCARD',
+          200,
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AttachmentView(
+            api: locApi,
+            attachment: const AttachmentModel(
+              guid: 'loc1',
+              downloadUrl: '/api/attachments/loc1',
+              transferName: 'CL.loc.vcf',
+              mimeType: 'text/x-vlocation',
+              attachmentKind: 'location',
+              displayKind: 'location',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Location'), findsWidgets);
+    expect(find.text('Open in Maps'), findsOneWidget);
+    expect(find.byIcon(Icons.location_on), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('long-press opens normal message action menu', (tester) async {
     const msg = MessageModel(guid: 'm1', text: 'Copy me');
 

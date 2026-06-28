@@ -18,8 +18,8 @@ struct SyncControlPage: View {
 
     var body: some View {
         Group {
-            SectionCard(title: "Sync Control") {
-                Text("Choose which conversations are saved to the relay and which send push notifications. This is a privacy/management view — **not** a chat client. Blocking a chat stops *future* sync; messages already synced are kept.")
+            SectionCard(title: L10n.tr("sync.title")) {
+                Text(L10n.tr("sync.desc"))
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let error = model.lastError {
@@ -62,22 +62,22 @@ private struct SyncControlErrorCard: View {
     let message: String
 
     var body: some View {
-        SectionCard(title: "Couldn't load Sync Control") {
+        SectionCard(title: L10n.tr("sync.loadErrorTitle")) {
             Text(message)
                 .font(.callout).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("The server is reachable but a Sync Control request failed. If the backend was just updated, fully quit and relaunch it (migrations run on start). Then retry, or copy diagnostics to share.")
+            Text(L10n.tr("sync.loadErrorHelp"))
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button { Task { await model.loadSyncControl() } } label: {
-                    Label("Retry", systemImage: "arrow.clockwise")
+                    Label(L10n.tr("sync.retry"), systemImage: "arrow.clockwise")
                 }
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(model.syncControlDiagnosticsText, forType: .string)
                 } label: {
-                    Label("Copy diagnostics", systemImage: "doc.on.doc")
+                    Label(L10n.tr("sync.copyDiagnostics"), systemImage: "doc.on.doc")
                 }
                 Spacer()
             }
@@ -93,7 +93,7 @@ private struct BackfillSettingsCard: View {
     private let limits = [50, 100, 200, 500]
 
     var body: some View {
-        SectionCard(title: "Backfill & Services") {
+        SectionCard(title: L10n.tr("sync.backfill")) {
             Picker("Backfill mode", selection: binding(\.backfillMode)) {
                 Text("Global recent").tag("global_recent")
                 Text("Per chat recent").tag("per_chat_recent")
@@ -168,7 +168,7 @@ private struct ContactsCard: View {
     @EnvironmentObject var contacts: ContactsStore
 
     var body: some View {
-        SectionCard(title: "Contacts") {
+        SectionCard(title: L10n.tr("sync.contacts")) {
             HStack(spacing: 8) {
                 Image(systemName: contacts.isAuthorized ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.questionmark")
                     .foregroundStyle(contacts.isAuthorized ? Color.green : Color.secondary)
@@ -178,7 +178,7 @@ private struct ContactsCard: View {
                 }
                 Spacer()
                 if !contacts.isAuthorized {
-                    Button("Open System Settings") { contacts.openSystemSettings() }
+                    Button(L10n.tr("sync.openSystemSettings")) { contacts.openSystemSettings() }
                 }
             }
             if !contacts.isAuthorized {
@@ -202,7 +202,7 @@ private struct ContactSearchCard: View {
     @State private var query = ""
 
     var body: some View {
-        SectionCard(title: "Find a Contact") {
+        SectionCard(title: L10n.tr("sync.findContact")) {
             if !contacts.isAuthorized {
                 Text("Enable Contacts access (see above) to search for people and create handle rules.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -245,7 +245,7 @@ private struct DefaultPolicyCard: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        SectionCard(title: "Default Policy") {
+        SectionCard(title: L10n.tr("sync.defaultPolicy")) {
             Picker("Default sync", selection: Binding(
                 get: { model.syncRules?.defaultSyncPolicy ?? "allow_all" },
                 set: { newValue in
@@ -284,7 +284,7 @@ private struct RecentMessagesCard: View {
     private let counts = [20, 50, 100, 500]
 
     var body: some View {
-        SectionCard(title: "Recent Messages") {
+        SectionCard(title: L10n.tr("sync.recentMessages")) {
             HStack {
                 Text("Show").foregroundStyle(.secondary)
                 Picker("", selection: Binding(
@@ -371,7 +371,7 @@ private struct ChatsCard: View {
     @Binding var editorTarget: RuleTarget?
 
     var body: some View {
-        SectionCard(title: "Chats (\(model.chatsList.count))") {
+        SectionCard(title: "\(L10n.tr("sync.chats")) (\(model.chatsList.count))") {
             if model.chatsList.isEmpty {
                 Text("No chats synced yet.").font(.caption).foregroundStyle(.secondary)
             } else {
@@ -418,7 +418,7 @@ private struct RulesOverviewCard: View {
     @EnvironmentObject var contacts: ContactsStore
 
     var body: some View {
-        SectionCard(title: "Active Rules") {
+        SectionCard(title: L10n.tr("sync.activeRules")) {
             let rules = model.syncRules?.rules ?? []
             if rules.isEmpty {
                 Text("No overrides — the default policy applies to everything.")

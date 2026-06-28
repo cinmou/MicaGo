@@ -20,6 +20,12 @@ Mica-native, Go iMessage relay server plus a native macOS SwiftUI companion app.
 | [`README.md`](README.md) | This documentation index. |
 | [`../README.md`](../README.md) | Server top-level README: run/config/auth/smoke. |
 | [`../micago-mac-companion/README.md`](../micago-mac-companion/README.md) | Companion app README: open/build in Xcode. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Consolidated development/version history (update records live here, not in `/docs`). |
+| [`stickers-location-handwriting.md`](stickers-location-handwriting.md) | How stickers / location / handwriting / voice are classified + rendered (C37). |
+| [`notifications-and-chat-ui-map.md`](notifications-and-chat-ui-map.md) | Notification reliability + chat-UI file map. |
+
+> **Doc placement:** design/spec/update-record docs (software-facing) live **here**
+> in `MicaGoServer/docs/`. End-user tutorials live in the repo-root [`/docs`](../../docs/).
 
 ### Server specs (current source of truth, per area)
 
@@ -47,6 +53,7 @@ individual feature specs add detail and rationale.
 | [`spec-v0.11.5-message-fidelity.md`](spec-v0.11.5-message-fidelity.md) | **Implemented:** attachment kind/voice/UTI + MIME inference; typedstream `+!`/`+$` text-extraction fix. Additive `Attachment` fields. |
 | [`spec-v0.12.0-reliable-send-pipeline.md`](spec-v0.12.0-reliable-send-pipeline.md) | **Implemented:** hardened plain-text send — richer pending-send manager (status/resolve/reject/claim), 15s confirmation, `send:pending` event, structured `send_confirmation_timeout`. (Note: `v0.12.0` also used by the Firebase spec.) |
 | [`c26-imessage-advanced-semantics-actions.md`](c26-imessage-advanced-semantics-actions.md) | **Implemented:** sticker display semantics, capability-driven edit/undo-send/delete API surface, LAN endpoint startup refresh, and C26 limitations. |
+| [`spec-v0.32.0-sticker-preview.md`](spec-v0.32.0-sticker-preview.md) | **Implemented:** BlueBubbles-style sticker rendering compatibility via server PNG preview + client raw-byte fallback. |
 
 ### Companion app spec (current source of truth)
 
@@ -62,7 +69,7 @@ individual feature specs add detail and rationale.
 | [`spec-v0.11.2-companion-runtime-deployment.md`](spec-v0.11.2-companion-runtime-deployment.md) | **Planned:** bundle the Go backend in the app; companion-owned lifecycle (start/stop/restart, crash + backoff auto-restart), launch-at-login/auto-start/silent launch, menu-bar item, clear Full Disk Access failure surfacing. |
 | [`spec-v0.11.3-sync-control-and-privacy-rules.md`](spec-v0.11.3-sync-control-and-privacy-rules.md) | **Planned:** per-chat/per-handle sync + push rules (whitelist/blacklist), Sync Control + Recent Messages management view; future-sync-only first (no historical deletion). |
 | [`spec-v0.11.4-contacts-enrichment.md`](spec-v0.11.4-contacts-enrichment.md) | **Planned:** read-only, local-only macOS Contacts to map handles → names for rule editing; never uploaded. |
-| [`spec-v0.12.0-firebase-self-host.md`](spec-v0.12.0-firebase-self-host.md) | Self-host FCM push + optional Firestore **public-URL-only** sync; strict no-content/no-token privacy. **Implemented (in validation).** User setup guide: [`setup/firebase/`](setup/firebase/README.md). |
+| [`spec-v0.12.0-firebase-self-host.md`](spec-v0.12.0-firebase-self-host.md) | Self-host FCM push + optional Firestore **public-URL-only** sync; strict no-content/no-token privacy. **Implemented (in validation).** User setup guide lives in the repository user docs: [`../../docs/setup/firebase/`](../../docs/setup/firebase/README.md). |
 | [`spec-v0.13.0-scheduled-sending.md`](spec-v0.13.0-scheduled-sending.md) | **Deferred:** scheduled text sends; persistence, restart/sleep behavior, anti-misfire — sequenced last. |
 
 ### Status / gap reports
@@ -99,10 +106,10 @@ MicaGoServer/
     cmd/micago/              # main entry
     internal/                # app, config, httpapi, store, relaydb, send, realtime, notify, timeutil
     scripts/                 # smoke + inspect scripts (kept; not build output)
-    CHANGELOG.md             # currently only tracks v0.1.1 (stale; see PROJECT_STATUS)
   micago-mac-companion/      # native macOS SwiftUI controller (Xcode project)
-  docs/                      # you are here
+  docs/                      # you are here (software/design docs + CHANGELOG)
     README.md
+    CHANGELOG.md             # consolidated development/version history
     spec-v*.md               # server + companion specs
     v0.9.0-gap-analysis.md  v0.1.1-live-test-report.md
     micago-feature-decision-matrix.md  bluebubbles-full-audit.md

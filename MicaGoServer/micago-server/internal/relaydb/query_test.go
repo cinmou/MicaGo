@@ -129,6 +129,44 @@ func TestFindOutgoingMessageMatchExcludesClaimedRow(t *testing.T) {
 	}
 }
 
+// Apple marks a rich link's internal preview parts (thumbnail, favicon,
+// LinkPresentation payload) with hide_attachment=1 so they never show as
+// standalone attachments. They were leaking into the client as 2–4 small "file"
+// cards above the link; the messages API must exclude them (the debug view does).
+func TestListChatMessagesExcludesHiddenAttachments(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	stmts := []string{
+		`INSERT INTO chats (guid, chat_identifier, service_name, display_name, is_archived, updated_at) VALUES ('chat-L','cL','iMessage','Links',0,100)`,
+		`INSERT INTO messages (guid, chat_guid, source_rowid, text, service, date_created, is_from_me, is_read, is_delivered, cache_has_attachments, created_at) VALUES ('m-link','chat-L',20,'https://example.com','iMessage',2000,0,1,1,1,100)`,
+		`INSERT INTO attachments (guid, message_guid, filename, mime_type, transfer_name, total_bytes, is_outgoing, hide_attachment, created_at) VALUES
+			('a-thumb','m-link','thumb.png','image/png','thumb.png',2048,0,1,100),
+			('a-payload','m-link',NULL,NULL,'pluginPayload',512,0,1,100),
+			('a-photo','m-link','photo.jpg','image/jpeg','photo.jpg',50000,0,0,100)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.sqlDB.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgs, err := db.ListChatMessages(ctx, "chat-L", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	got := msgs[0].Attachments
+	if len(got) != 1 || got[0].GUID != "a-photo" {
+		guids := make([]string, len(got))
+		for i, a := range got {
+			guids[i] = a.GUID
+		}
+		t.Fatalf("hidden link-preview attachments leaked; expected only [a-photo], got %v", guids)
+	}
+}
+
 func seedRelayData(t *testing.T, db *DB) {
 	t.Helper()
 	tx, err := db.sqlDB.Begin()

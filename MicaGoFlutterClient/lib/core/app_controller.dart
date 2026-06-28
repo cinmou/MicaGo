@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +16,7 @@ import 'network/refresh_coordinator.dart';
 import 'network/websocket_client.dart';
 import 'storage/local_cache_store.dart';
 import 'storage/secure_store.dart';
+import '../features/chats/message_render.dart';
 import '../features/chats/models/message_model.dart';
 import '../features/chats/realtime_event_helpers.dart';
 
@@ -314,7 +316,19 @@ class AppController extends ChangeNotifier {
     _logConnectionSelection(
       'WS connect ${candidate.label}: ${candidate.wsUrl}',
     );
-    ws.connect(candidate.wsUrl, profile.token);
+    final platform = serverPlatformFor(defaultTargetPlatform, isWeb: kIsWeb);
+    ws.connect(
+      candidate.wsUrl,
+      profile.token,
+      metadata: {
+        'clientType': 'flutter',
+        'platform': platform,
+        'appVersion': kAppVersion,
+        'name': platform == 'unknown'
+            ? 'micaGO Flutter'
+            : 'micaGO ${platform[0].toUpperCase()}${platform.substring(1)}',
+      },
+    );
   }
 
   /// Foreground startup/resume entry point: test candidates first, then connect.
@@ -822,16 +836,27 @@ class AppController extends ChangeNotifier {
   /// name rather than a bare phone/email handle.
   String? Function(String? handle)? contactNameResolver;
 
-  /// Shows a local message notification through the shared, already-initialized
-  /// notifications plugin (set by [PushService] once local notifications are up,
-  /// independent of Firebase). The keep-alive path calls this.
+  /// Resolves a raw handle to the contact's avatar bytes (set from
+  /// ContactsService). Used to show the sender's photo in the notification (C32).
+  Future<Uint8List?> Function(String? handle)? contactAvatarResolver;
+
+  /// Shows a native MessagingStyle local notification through the shared,
+  /// already-initialized plugin (set by [PushService] once local notifications
+  /// are up, independent of Firebase). The keep-alive path calls this.
   Future<void> Function({
-    required String title,
-    String? body,
     required String? chatGuid,
-    required String? messageGuid,
+    required String messageGuid,
+    required String senderName,
+    required String conversationTitle,
+    String? body,
+    String? avatarFilePath,
+    bool isGroup,
   })?
   showLocalNotification;
+
+  /// Clears a chat's stacked conversation notification + buffer (set by
+  /// [PushService]); called when the user opens that chat.
+  Future<void> Function(String chatGuid)? clearChatNotification;
 
   // The server's notification preview mode governs how much a local notification
   // shows. We default to the common "sender + text" layout; `none`/`sender` hide
@@ -863,12 +888,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// C31: when the app is backgrounded and the keep-alive service is holding the
-  /// socket open (no Firebase needed), turn an incoming realtime message into a
-  /// local notification — same formatting, contact-name resolution, tap routing
-  /// and direct-reply action as the FCM path. Foreground messages are shown by
-  /// the UI, so this no-ops; the shared notification id dedupes against any FCM
-  /// notification for the same message (only one is shown).
+  /// C31/C32: when the app is backgrounded and the keep-alive service is holding
+  /// the socket open (no Firebase needed), turn an incoming realtime message into
+  /// a native MessagingStyle notification — contact name + avatar, stacked per
+  /// chat, same formatting as the FCM path. Foreground messages are shown by the
+  /// UI, so this no-ops; the shared per-chat id + message-guid dedup means any
+  /// FCM notification for the same message collapses into one.
   Future<void> _maybeNotifyBackgroundMessage(WsEvent e) async {
     if (_foreground || !_keepAliveEnabled) return;
     final show = showLocalNotification;
@@ -880,18 +905,46 @@ class AppController extends ChangeNotifier {
     }
     final chatGuid = chatGuidFromWsEvent(e);
     final contactName = contactNameResolver?.call(msg.handleId);
-    final title = messageNotificationTitle(
+    final senderName = messageNotificationTitle(
       contactName: contactName,
       handle: msg.handleId,
     );
-    final body = localNotificationBody(msg.text, _notificationPreview);
+    final body = localNotificationBody(
+      messagePreviewText(msg),
+      _notificationPreview,
+    );
+    // Contact avatar (best-effort): written to a temp file the plugin can read.
+    String? avatarPath;
+    try {
+      final bytes = await contactAvatarResolver?.call(msg.handleId);
+      if (bytes != null && bytes.isNotEmpty) {
+        avatarPath = await _writeAvatarFile(msg.handleId ?? senderName, bytes);
+      }
+    } catch (_) {
+      avatarPath = null; // fall back to the default monogram avatar
+    }
     await show(
-      title: title,
-      body: body,
       chatGuid: chatGuid,
       messageGuid: msg.guid,
+      senderName: senderName,
+      conversationTitle: senderName,
+      body: body,
+      avatarFilePath: avatarPath,
     );
     noteNotificationSource('keep-alive');
+  }
+
+  /// Writes contact-avatar bytes to a stable temp file (one per contact key) so
+  /// the notification plugin can reference it as a bitmap. Best-effort.
+  Future<String?> _writeAvatarFile(String key, Uint8List bytes) async {
+    try {
+      final safe = key.replaceAll(RegExp(r'[^A-Za-z0-9]'), '_');
+      final file = File('${Directory.systemTemp.path}/micago_avatar_$safe.png');
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
+    }
   }
 
   // C29: optional Android keep-alive foreground service. Persisted; default off.
@@ -973,6 +1026,8 @@ class AppController extends ChangeNotifier {
   void requestOpenChat(String chatGuid) {
     if (chatGuid.isEmpty) return;
     pendingOpenChat.value = chatGuid;
+    // C32: opening a chat dismisses its stacked conversation notification.
+    clearChatNotification?.call(chatGuid);
   }
 
   void clearPendingOpenChat() => pendingOpenChat.value = null;

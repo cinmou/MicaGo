@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_go/core/network/notification_display.dart';
 import 'package:mica_go/core/network/push_logic.dart';
 import 'package:mica_go/core/network/push_service.dart';
 
@@ -130,6 +131,19 @@ void main() {
       expect(localNotificationBody('hello', 'none'), isNull);
       expect(localNotificationBody('   ', 'sender_and_text'), isNull);
       expect(localNotificationBody(null, 'sender_and_text'), isNull);
+    });
+
+    test('dedup id is deterministic and positive (cross-isolate FCM/keep-alive)',
+        () {
+      // Same GUID → same id (so FCM + keep-alive collapse into one), different
+      // GUID → different id. Must not depend on String.hashCode (per-isolate).
+      final a = notificationIdForMessage('iMessage;-;+15550001/abc');
+      final b = notificationIdForMessage('iMessage;-;+15550001/abc');
+      final c = notificationIdForMessage('iMessage;-;+15550002/xyz');
+      expect(a, b);
+      expect(a, isNot(c));
+      expect(a, greaterThanOrEqualTo(0));
+      expect(notificationIdForMessage(null), notificationIdForMessage(''));
     });
   });
 }

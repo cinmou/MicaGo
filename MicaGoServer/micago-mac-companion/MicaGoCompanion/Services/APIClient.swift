@@ -18,7 +18,13 @@ struct APIClient {
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.timeoutInterval = 6
+        // Data loads like `GET /api/chats?limit=500` aggregate per-chat over the
+        // whole relay.db; on a large DB that can take a few seconds. A tight
+        // timeout here is what surfaced as "chats — The request timed out" even
+        // though the server was healthy. Give real headroom (the server is local
+        // / LAN, so a genuinely-down server still fails fast with a connection
+        // error, not a timeout).
+        req.timeoutInterval = 20
         if !token.isEmpty {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -35,7 +41,8 @@ struct APIClient {
     private static func session() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.waitsForConnectivity = false
-        config.timeoutIntervalForRequest = 4
+        // Was 4s — too tight for the larger Sync Control loads (see request()).
+        config.timeoutIntervalForRequest = 20
         return URLSession(configuration: config)
     }
 
@@ -69,6 +76,12 @@ struct APIClient {
         let (data, response) = try await Self.session().data(for: request("api/devices"))
         try Self.validate(response)
         return try JSONDecoder().decode(DeviceListResponse.self, from: data).data
+    }
+
+    func activeConnections() async throws -> [ActiveConnectionInfo] {
+        let (data, response) = try await Self.session().data(for: request("api/server/connections"))
+        try Self.validate(response)
+        return try JSONDecoder().decode(ActiveConnectionListResponse.self, from: data).data
     }
 
     /// C28: force the backend to drop its cached IMCore-helper probe and re-scan,

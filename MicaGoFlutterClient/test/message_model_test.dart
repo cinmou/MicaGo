@@ -58,6 +58,35 @@ void main() {
       expect(m.hasAttachments, isTrue);
     });
 
+    test('filters opaque URL preview payload attachments', () {
+      final m = MessageModel.fromJson({
+        'guid': 'g',
+        'text': 'https://privygallery.cinmou.uk',
+        'cacheHasAttachments': true,
+        'attachments': [
+          {
+            'guid': 'noise-1',
+            'filename': '88A910B7-31DB-48EF-8124-136AC0D0B9EF',
+            'transferName': '88A910B7-31DB-48EF-8124-136AC0D0B9EF',
+            'uti': 'public.data',
+            'attachmentKind': 'file',
+            'displayKind': 'file',
+            'downloadUrl': '/api/attachments/noise-1',
+            'totalBytes': 121000,
+          },
+          {
+            'guid': 'pdf',
+            'transferName': 'report.pdf',
+            'attachmentKind': 'file',
+            'displayKind': 'file',
+            'downloadUrl': '/api/attachments/pdf',
+          },
+        ],
+      });
+      expect(m.attachments, hasLength(1));
+      expect(m.attachments.single.guid, 'pdf');
+    });
+
     test('optimistic message is sending and keyed by tempId', () {
       final m = MessageModel.optimistic(
         tempId: 'tmp-1',
@@ -96,6 +125,19 @@ void main() {
     test('displayName falls back to a generic label', () {
       final a = AttachmentModel.fromJson({'guid': 'a', 'downloadUrl': '/x'});
       expect(a.displayName, 'Attachment');
+    });
+
+    test('detects opaque preview payload rows', () {
+      final a = AttachmentModel.fromJson({
+        'guid': 'a',
+        'filename': 'BD39B7FF-2910-4992-8CD3-7A084A942CF2',
+        'transferName': 'BD39B7FF-2910-4992-8CD3-7A084A942CF2',
+        'uti': 'public.data',
+        'attachmentKind': 'file',
+        'displayKind': 'file',
+        'downloadUrl': '/x',
+      });
+      expect(a.isOpaquePreviewPayload, isTrue);
     });
 
     test('prefers transferName for displayName', () {

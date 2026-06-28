@@ -1,5 +1,7 @@
 # MicaGo
 
+**English** · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md)
+
 **Use your own iMessage from your own Android phone — through your own Mac. No MicaGo cloud, no MicaGo account, no MicaGo relay.**
 
 MicaGo is a self‑hosted iMessage bridge. A small Go server runs on your Mac and
@@ -76,8 +78,8 @@ travels between **your** Mac and **your** devices.
   URL (your own tunnel) works from anywhere.
 - **Contacts matching.** Local, on‑device contact names (opt‑in; the address book
   is never uploaded).
-- **Paired devices.** The Companion lists connected devices with push/background
-  status and a test‑push action.
+- **Paired devices.** The Companion lists the clients currently connected to
+  your server over WebSocket. Optional push devices are managed separately.
 - **Optional extras** (all off by default): Firebase/FCM push, a keep‑alive
   background service, and the Edit/Unsend/Delete IMCore helper.
 
@@ -89,7 +91,7 @@ travels between **your** Mac and **your** devices.
 | `MicaGoServer/micago-mac-companion/` | The macOS SwiftUI menu‑bar Companion (runs/manages the server, pairing UI). |
 | `MicaGoFlutterClient/` | The Flutter Android client. |
 | `docs/` | User guides (getting started, remote access, manual test flow). |
-| `CHANGELOG.md` | Consolidated development/version history. |
+| `MicaGoServer/docs/CHANGELOG.md` | Consolidated development/version history. |
 
 > `Ref/` (if present locally) holds third‑party reference projects used during
 > development. It is **not** part of MicaGo and is git‑ignored.
@@ -229,7 +231,7 @@ Companion. MicaGo does not provide or manage a tunnel. See
 - [Android client connection](docs/android-client-connection.md)
 - [Remote access with Cloudflare Tunnel](docs/remote-access-cloudflare.md)
 - [Manual test flow](docs/manual-test-flow.md)
-- [CHANGELOG](CHANGELOG.md) — full development/version history
+- [CHANGELOG](MicaGoServer/docs/CHANGELOG.md) — full development/version history
 - Component READMEs: [`server`](MicaGoServer/README.md),
   [`Companion`](MicaGoServer/micago-mac-companion/README.md),
   [`client`](MicaGoFlutterClient/README.md)

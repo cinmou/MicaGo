@@ -187,17 +187,26 @@ class PushService {
     // The keep-alive path (in AppController) shows local notifications through
     // the same initialized plugin, so FCM + keep-alive dedupe by notification id.
     app.showLocalNotification = (
-            {required String title,
+            {required String? chatGuid,
+            required String messageGuid,
+            required String senderName,
+            required String conversationTitle,
             String? body,
-            required String? chatGuid,
-            required String? messageGuid}) =>
+            String? avatarFilePath,
+            bool isGroup = false}) =>
         showMessageNotification(
           _local,
-          title: title,
-          body: body,
           chatGuid: chatGuid,
           messageGuid: messageGuid,
+          senderName: senderName,
+          conversationTitle: conversationTitle,
+          body: body,
+          avatarFilePath: avatarFilePath,
+          isGroup: isGroup,
         );
+    // Opening a chat clears its stacked conversation notification.
+    app.clearChatNotification = (chatGuid) =>
+        cancelChatNotification(_local, chatGuid);
     await refreshNotificationPermission();
   }
 
@@ -216,7 +225,9 @@ class PushService {
   }
 
   Future<void> _initLocalNotifications() async {
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const android = AndroidInitializationSettings(
+      '@drawable/$androidNotificationSmallIcon',
+    );
     await _local.initialize(
       const InitializationSettings(android: android),
       onDidReceiveNotificationResponse: (resp) {
@@ -289,8 +300,11 @@ Future<bool> ensureBackgroundFirebase() async {
   }
 }
 
-/// Shared local-notification display used by the background handler. Deduped by
-/// the message GUID as the notification id so the same event can't stack.
+/// C32: shows the FCM (background isolate) notification as a native MessagingStyle
+/// conversation, stacked per chat. Deduped by message guid against the keep-alive
+/// path via the shared per-chat buffer + notification id. No contact avatar here
+/// (the background isolate has no contacts access); the server-resolved sender
+/// name is used, with the system monogram as the default avatar.
 Future<void> showPushNotification(RemoteMessage message) async {
   final data = message.data;
   // Single source of truth for "is there anything to show" (test pushes and
@@ -300,26 +314,26 @@ Future<void> showPushNotification(RemoteMessage message) async {
   final plugin = FlutterLocalNotificationsPlugin();
   await plugin.initialize(
     const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      android: AndroidInitializationSettings(
+        '@drawable/$androidNotificationSmallIcon',
+      ),
     ),
-    // Register the inline-reply handler for this isolate too, so a reply from a
-    // background/killed-app notification is delivered.
-    onDidReceiveBackgroundNotificationResponse: notificationBackgroundResponse,
   );
   final chatGuid = data['chatGuid'] as String?;
   // C31: "who it's from" — server-resolved sender/title, else the raw handle,
   // never a GUID or empty. (On-device contact resolution happens in the
   // keep-alive main-isolate path; the FCM isolate uses the server's name.)
-  final title = messageNotificationTitle(
+  final sender = messageNotificationTitle(
     serverTitle: data['title'] as String?,
     handle: data['handle'] as String?,
   );
   await showMessageNotification(
     plugin,
-    title: title,
-    body: notificationBody(data),
     chatGuid: chatGuid,
-    messageGuid: data['messageGuid'] as String?,
+    messageGuid: (data['messageGuid'] as String?) ?? '',
+    senderName: sender,
+    conversationTitle: sender,
+    body: notificationBody(data),
   );
 }
 

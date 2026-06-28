@@ -91,10 +91,24 @@ func TestAttachmentKindInference(t *testing.T) {
 			wantMime: "",
 		},
 		{
-			name:         "opaque type with name is a file",
+			name:         "opaque type with name is unknown",
 			transferName: sp("data.unknownext"),
-			wantKind:     AttachmentKindFile,
+			wantKind:     AttachmentKindUnknown,
 			wantMime:     "", // nothing maps this extension
+		},
+		{
+			name:         "uuid link-preview payload is unknown",
+			transferName: sp("88A910B7-31DB-48EF-8124-136AC0D0B9EF"),
+			filename:     sp("88A910B7-31DB-48EF-8124-136AC0D0B9EF"),
+			wantKind:     AttachmentKindUnknown,
+			wantMime:     "", // nothing maps this extension
+		},
+		{
+			name:         "generic public.data payload is unknown",
+			uti:          sp("public.data"),
+			transferName: sp("BD39B7FF-2910-4992-8CD3-7A084A942CF2"),
+			wantKind:     AttachmentKindUnknown,
+			wantMime:     "",
 		},
 	}
 
@@ -119,6 +133,37 @@ func TestAttachmentKindInference(t *testing.T) {
 				t.Errorf("InferMimeType = %v, want %q", gotMime, tc.wantMime)
 			}
 		})
+	}
+}
+
+// C37: location + UTI-based sticker classification.
+func TestAttachmentKindLocationAndStickerUTI(t *testing.T) {
+	sp := func(s string) *string { return &s }
+
+	// Shared-location payloads → location (not "file").
+	loc := AttachmentJSON{MimeType: sp("text/x-vlocation"), TransferName: sp("CL.loc.vcf")}
+	DecorateAttachmentJSON(&loc)
+	if loc.AttachmentKind != AttachmentKindLocation || loc.DisplayKind != DisplayKindLocation {
+		t.Fatalf("vlocation: kind=%q display=%q", loc.AttachmentKind, loc.DisplayKind)
+	}
+	locUTI := AttachmentJSON{Uti: sp("public.vlocation")}
+	DecorateAttachmentJSON(&locUTI)
+	if locUTI.AttachmentKind != AttachmentKindLocation {
+		t.Fatalf("public.vlocation: kind=%q", locUTI.AttachmentKind)
+	}
+
+	// A sticker whose is_sticker flag is missing but UTI says sticker.
+	st := AttachmentJSON{Uti: sp("com.apple.sticker"), MimeType: sp("image/png")}
+	DecorateAttachmentJSON(&st)
+	if st.AttachmentKind != AttachmentKindSticker || st.DisplayKind != DisplayKindSticker {
+		t.Fatalf("sticker UTI: kind=%q display=%q", st.AttachmentKind, st.DisplayKind)
+	}
+
+	// A normal image is still an image (no false sticker/location).
+	img := AttachmentJSON{MimeType: sp("image/jpeg"), TransferName: sp("photo.jpg")}
+	DecorateAttachmentJSON(&img)
+	if img.AttachmentKind != AttachmentKindImage {
+		t.Fatalf("image regressed: kind=%q", img.AttachmentKind)
 	}
 }
 
@@ -150,6 +195,29 @@ func TestInferMimeTypeNilWhenUnknown(t *testing.T) {
 	}
 }
 
+func TestIsAttachmentPreviewPayload(t *testing.T) {
+	noise := AttachmentJSON{
+		Filename:     sp("88A910B7-31DB-48EF-8124-136AC0D0B9EF"),
+		TransferName: sp("88A910B7-31DB-48EF-8124-136AC0D0B9EF"),
+	}
+	DecorateAttachmentJSON(&noise)
+	if !IsAttachmentPreviewPayload(noise) {
+		t.Fatal("expected untyped UUID payload to be hidden from real attachments")
+	}
+
+	pdf := AttachmentJSON{TransferName: sp("report.pdf")}
+	DecorateAttachmentJSON(&pdf)
+	if IsAttachmentPreviewPayload(pdf) {
+		t.Fatal("typed PDF attachment must remain visible")
+	}
+
+	sticker := AttachmentJSON{IsSticker: true, TransferName: sp("sticker")}
+	DecorateAttachmentJSON(&sticker)
+	if IsAttachmentPreviewPayload(sticker) {
+		t.Fatal("stickers must remain visible even when MIME is absent")
+	}
+}
+
 func TestDecorateAttachmentJSONFillsDerivedFields(t *testing.T) {
 	a := AttachmentJSON{Uti: sp("com.apple.coreaudio-format")}
 	DecorateAttachmentJSON(&a)
@@ -178,6 +246,40 @@ func TestDecorateAttachmentJSONMarksTIFFNotPreviewable(t *testing.T) {
 	}
 	if a.IsPreviewableImage {
 		t.Fatal("TIFF should not be marked previewable")
+	}
+	if a.DisplayKind != DisplayKindImageNeedsPreview {
+		t.Fatalf("displayKind = %q, want %q", a.DisplayKind, DisplayKindImageNeedsPreview)
+	}
+}
+
+func TestDecorateAttachmentJSONKeepsStickerDisplayKindWithPreview(t *testing.T) {
+	a := AttachmentJSON{IsSticker: true, Uti: sp("public.heic"), TransferName: sp("sticker.heic")}
+	DecorateAttachmentJSON(&a)
+	if a.AttachmentKind != AttachmentKindSticker {
+		t.Fatalf("kind = %q, want sticker", a.AttachmentKind)
+	}
+	if a.DisplayKind != DisplayKindSticker {
+		t.Fatalf("displayKind = %q, want %q", a.DisplayKind, DisplayKindSticker)
+	}
+	if !a.NeedsPreviewConversion {
+		t.Fatal("expected sticker to expose a PNG preview conversion path")
+	}
+	if a.MimeType == nil || *a.MimeType != "image/heic" {
+		t.Fatalf("mime = %v, want image/heic", a.MimeType)
+	}
+}
+
+func TestDecorateAttachmentJSONMarksHEICNeedsPreview(t *testing.T) {
+	a := AttachmentJSON{Uti: sp("public.heic"), TransferName: sp("photo.heic")}
+	DecorateAttachmentJSON(&a)
+	if a.AttachmentKind != AttachmentKindImage {
+		t.Fatalf("kind = %q, want image", a.AttachmentKind)
+	}
+	if !a.NeedsPreviewConversion {
+		t.Fatal("expected HEIC to need preview conversion for clients")
+	}
+	if a.IsPreviewableImage {
+		t.Fatal("HEIC should use the server-generated preview path")
 	}
 	if a.DisplayKind != DisplayKindImageNeedsPreview {
 		t.Fatalf("displayKind = %q, want %q", a.DisplayKind, DisplayKindImageNeedsPreview)

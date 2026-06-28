@@ -5,6 +5,8 @@
     <!-- Camera is used only for the QR pairing scanner (mobile_scanner). -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <!-- C37: record voice messages (requested at runtime when the user records). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- Read-only contacts, requested on demand for local handle→name matching.
          WRITE_CONTACTS is intentionally NOT declared; contacts are never
          modified or uploaded. -->

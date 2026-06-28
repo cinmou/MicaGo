@@ -3,6 +3,10 @@
 Reference for testing the Android client, the BlueBubbles notification gap
 analysis, and the chat-UI file map for later polish. (C30)
 
+> **C31 — notification reliability completion.** See
+> [notifications-setup.md](../../docs/notifications-setup.md) for the user-facing setup/test
+> guide. The C31 implementation notes are in [§6](#6-c31-notification-reliability).
+
 ## 1. Android stability audit
 
 Status of the common failure modes, with where each is handled. Most were
@@ -79,7 +83,7 @@ All under `MicaGoFlutterClient/lib/`:
 | Message bubble | `message_thread_screen.dart` · `_MessageBubble` / `_MessageBubbleState` (also `_SystemRow`, `_Footer`, `_DateSeparator`) |
 | Reaction chips / reply preview | `message_thread_screen.dart` · `_ReactionChips`, `_ReplyPreviewBlock` |
 | Message classification / render rules | `features/chats/message_render.dart`, `message_display.dart` |
-| Image / media rendering (inline) | `features/chats/attachment_views.dart` · `AttachmentView`, `_ImageAttachment`, `_VideoAttachment`, `_AudioAttachment`, `_FileAttachment`, `_PreviewUnavailableAttachment` |
+| Image / media rendering (inline) | `features/chats/attachment_views.dart` · `AttachmentView`, `_ImageAttachment`, `_VideoAttachment`, `_AudioAttachment`, `_FileAttachment`, `_PreviewUnavailableAttachment`, `_StickerAttachment`, `UrlPreviewCard` |
 | Full-screen media viewer | `features/chats/media_viewer.dart` · `MediaGalleryViewer`, `_ZoomableImage`, `FullscreenVideo` |
 | Attachment picker / preview strip | `features/chats/attachment_panel.dart` · `AttachmentPanel`, `_MediaTile`, `StagedAttachmentStrip` |
 | Input bar / composer | `message_thread_screen.dart` · `_Composer` / `_ComposerState` |
@@ -108,7 +112,7 @@ with care and re-run the message-render/semantics tests.
 ### Manual test checklist
 
 - [ ] No Firebase configured → app works on WS + delta; no crashes.
-- [ ] Firebase configured → token registers; Paired Devices shows the device.
+- [ ] Firebase configured → token registers; Push Devices shows the device.
 - [ ] Keep-alive off → no persistent notification.
 - [ ] Keep-alive on → persistent notification; survives app restart.
 - [ ] Foreground message → no duplicate notification (socket delivered it).
@@ -116,4 +120,118 @@ with care and re-run the message-render/semantics tests.
 - [ ] Killed-app push → best-effort notification (needs runtime options/keep-alive).
 - [ ] Notification tap → opens the correct chat.
 - [ ] Direct reply from the notification → message sends to that chat.
-- [ ] Paired Devices shows the Android device with correct push/background status.
+- [ ] Paired Devices shows active WebSocket connections; Push Devices shows
+  push/background status.
+
+## 6. C31 notification reliability
+
+Completes the notification path: real contact names, a keep-alive local-
+notification path that needs no Firebase, cross-path dedup, and diagnostics.
+
+### What changed
+
+**Server (`internal/notify`)**
+- The FCM data payload now carries `handle` (the raw sender address) alongside
+  `chatGuid`/`sourceRowId`/`title`/`body` (`payload.go`, `fcm.go`). Android
+  delivery is already `priority: high`.
+- `buildNotification` (`dispatcher.go`) uses the mature **"title = who, body =
+  what"** layout: the title is the sender (chat display name, else handle), the
+  body is the text only in `sender_and_text` mode; `none` stays a generic wake.
+  Never a GUID or empty title.
+
+**Android client**
+- `core/network/notification_display.dart` (new) — the single definition of the
+  message channel (high importance), group key, inline-reply action, and the
+  `notificationIdForMessage` dedup id. Both the FCM background isolate and the
+  keep-alive path render through `showMessageNotification`, so an FCM push and a
+  keep-alive notification for the same message **collapse into one** (same id).
+- `push_logic.dart` — pure, tested `messageNotificationTitle` (contact name →
+  server sender → handle → generic; never GUID/empty) and `localNotificationBody`
+  (honors the preview mode).
+- `push_service.dart` — local notifications now initialize **independently of
+  Firebase** (`_ensureLocalNotifications`), so keep-alive notifications work with
+  no FCM. Adds Android 13+ permission query/request. FCM display goes through the
+  shared presenter; the background isolate uses the server name + handle.
+- `app_controller.dart` — when the app is **backgrounded** and **keep-alive** is
+  on, an incoming realtime `message:new` becomes a local notification
+  (`_maybeNotifyBackgroundMessage`) with on-device contact-name resolution
+  (`contactNameResolver`), the same formatting, tap routing and reply action.
+  Foreground messages no-op (the UI shows them). Tracks `isForeground` from the
+  shell lifecycle. Adds diagnostics: notification permission, last notification
+  source, last direct-reply result.
+- `settings_screen.dart` — Android 13+ "Notifications are turned off" warning +
+  "Turn on", clearer Firebase-vs-keep-alive copy, and a **Notification
+  diagnostics** expander (copyable, token/text-free).
+
+### Dedup matrix (verified by design)
+
+| Case | Result |
+| --- | --- |
+| Foreground + WS | No system notification (UI shows it; `isForeground` guard). |
+| Background, FCM only | One FCM notification. |
+| Background, keep-alive only | One local notification (no Firebase). |
+| Background, FCM **and** keep-alive | One notification (shared id replaces). |
+| Missed push | Delta catch-up restores messages silently — no notification spam. |
+
+### Deferred (unchanged from C30, documented)
+
+Contact avatar, mark-as-read from the notification, conversation bubbles, and a
+group summary notification. Reasons in [§2](#2-bluebubbles-notification-gap-table).
+
+## 7. C32 release-candidate chat UX
+
+Three user-visible fixes (app renamed **micaGO**). Lightweight; no chat redesign.
+
+### Native-style notifications (Android MessagingStyle)
+
+- `showMessageNotification` (`notification_display.dart`) now builds an Android
+  **MessagingStyle** notification: `Person` (sender name + avatar), per-message
+  lines, conversation title. Replaces the old single-line style.
+- **Grouped/stacked by chat:** the notification id is keyed by **chat**
+  (`notificationIdForChat`), so new messages from the same chat update one
+  conversation notification instead of stacking separate ones.
+- A small persisted buffer (`notification_store.dart`, secure storage so both the
+  FCM background isolate and the keep-alive main isolate share it) holds the last
+  ~6 previews per chat for the stacked view, **dedups by message guid** (FCM +
+  keep-alive of the same message → one line), and is **cleared when the chat is
+  opened** (`cancelChatNotification`, wired through `requestOpenChat`).
+- **Contact name + avatar:** keep-alive path resolves both on-device (avatar via
+  a temp bitmap file → `BitmapFilePathAndroidIcon`); the FCM isolate uses the
+  server name + a default monogram. Never a GUID/empty title.
+- **Reply action removed** this pass (deferred — was C30/C31; not shown now).
+- Foreground dedup, Firebase-optional and keep-alive-optional all unchanged.
+
+### Third-party stickers
+
+- `AttachmentView` routes anything `isStickerLike` (`isSticker` /
+  `displayKind`/`attachmentKind == 'sticker'`) to a new `_StickerAttachment`
+  **first**, so stickers never fall through to a file/“TIFF” card.
+- It tries to render the image; on fetch/decode failure (common for third-party
+  packs in formats the server can't preview) it shows a clean **`_StickerPlaceholder`**
+  ("Sticker" chip) instead of a broken/empty card. Sending stickers not in scope.
+- BlueBubbles parity: stickers render as transparent media, tap toggles between
+  full and faint opacity, and long-press opens the media viewer.
+
+### URL previews
+
+- Plain text URLs remain tappable, and the first URL in a message now gets a
+  BlueBubbles-style `UrlPreviewCard`. The preview renders as its own block above
+  the original linked text bubble, without an extra border, so the URL remains
+  visible and tappable in the normal message bubble.
+- Rich-link attachments with no MIME type (`mimeType == null`) are treated as
+  link previews and reuse the same card. Metadata is fetched client-side and
+  cached in memory; the server does not fetch arbitrary URLs.
+- Current source audit note: BlueBubbles separates `realAttachments`
+  (`mimeType != null`) from URL `previewAttachments` (`mimeType == null`), which
+  explains why Apple URLBalloon payload records should not appear as ordinary
+  blank file cards. MicaGo mirrors that boundary by not promoting untyped opaque
+  rows (for example UUID-only URLBalloon resources) to ordinary file attachments;
+  typed files/media and stickers still render normally.
+
+### Mature media viewers (`media_viewer.dart`)
+
+- **Images:** animated **double-tap-to-zoom** (toward the tap point) on top of the
+  existing pinch-zoom + swipe-between gallery.
+- **Video:** center **play / pause / replay** button, **position / duration**
+  labels around a themed scrubber, **tap to show/hide** controls with auto-hide
+  while playing, and replay when finished (no more silent infinite loop).

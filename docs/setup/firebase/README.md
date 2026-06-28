@@ -25,6 +25,9 @@ Messaging is free).
 4. Point MicaGo at both files.
 5. Connect your phone and send a test push.
 
+Prefer a shorter checklist with topic-by-topic pages? See the
+[Firebase setup reference](overview.md).
+
 You'll end up giving MicaGo two files from *your* Firebase project:
 
 | File | Who uses it | What it's for |
@@ -139,8 +142,8 @@ No `google-services.json` is built into the app — it's loaded at runtime from
 
 ## Step 6 — Verify it works
 
-1. In the Companion, open the **Dashboard** (or **Advanced → Registered
-   Devices**) and find your phone under **Paired Devices**.
+1. In the Companion, open **Advanced → Push Devices** and find your phone in the
+   optional push registry.
 2. The device card should show **push: enabled (fcm)** and **background:
    enabled**.
 3. Tap the card's **⋯** menu → **Test Push**. You should get a notification on

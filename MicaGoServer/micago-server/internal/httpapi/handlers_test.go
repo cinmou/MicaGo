@@ -16,6 +16,7 @@ import (
 
 	"micagoserver/internal/config"
 	"micagoserver/internal/notify"
+	"micagoserver/internal/realtime"
 	"micagoserver/internal/relaydb"
 	micasend "micagoserver/internal/send"
 	"micagoserver/internal/store"
@@ -670,6 +671,43 @@ func TestGetServerStatus(t *testing.T) {
 	}
 	if status.Permissions.Automation.Status != "unknown" {
 		t.Fatalf("expected automation unknown, got %q", status.Permissions.Automation.Status)
+	}
+}
+
+func TestGetServerConnections(t *testing.T) {
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", &stubDeviceStore{}, stubNotifier{},
+		config.Config{HTTPAddr: "127.0.0.1:3000"},
+		StatusDeps{
+			Connections: func() []realtime.ClientSession {
+				return []realtime.ClientSession{{
+					ID:          "ws_1",
+					ClientName:  "Pixel",
+					ClientType:  "flutter",
+					Platform:    "android",
+					AppVersion:  "1.2.3",
+					ConnectedAt: 1717372800000,
+					LastSeenAt:  1717372801000,
+				}}
+			},
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/server/connections", nil)
+	rec := httptest.NewRecorder()
+	handlers.GetServerConnections(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var payload struct {
+		Data []realtime.ClientSession `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode connections: %v", err)
+	}
+	if len(payload.Data) != 1 || payload.Data[0].ID != "ws_1" {
+		t.Fatalf("unexpected connections payload: %+v", payload)
 	}
 }
 

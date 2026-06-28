@@ -13,7 +13,14 @@ final class AppModel: ObservableObject {
     @Published var authValid = false
     @Published var status: ServerStatus?
     @Published var devices: [DeviceInfo] = []
+    @Published var activeConnections: [ActiveConnectionInfo] = []
     @Published var lastError: String?
+    /// C36: a failure from the 3s background poll's best-effort diagnostic fetches
+    /// (status / connections / devices / urls). Recorded for Debug only — it must
+    /// NOT become a user-facing error banner, because the server is already
+    /// reachable + authed. (It used to leak into `lastError` and show up in the
+    /// Sync Control header as a spurious "Server returned HTTP 500".)
+    @Published var lastPollError: String?
 
     // Connection endpoints (v0.11)
     @Published var urls: ServerURLs?
@@ -253,6 +260,7 @@ final class AppModel: ObservableObject {
             authValid = false
             status = nil
             devices = []
+            activeConnections = []
             urls = nil
             return
         }
@@ -263,6 +271,7 @@ final class AppModel: ObservableObject {
         guard isUp else {
             status = nil
             devices = []
+            activeConnections = []
             authValid = false
             return
         }
@@ -279,17 +288,23 @@ final class AppModel: ObservableObject {
         // discovery — and only the explicit Save path (which calls urls directly)
         // refreshed it. Endpoint discovery now always runs when the server is
         // up + authed, exactly like a Save does.
-        var anyError: String?
-        do { status = try await client.status() } catch { anyError = error.localizedDescription }
-        do { devices = try await client.devices() } catch { anyError = error.localizedDescription }
+        var pollError: String?
+        do { status = try await client.status() } catch { pollError = error.localizedDescription }
+        do { activeConnections = try await client.activeConnections() } catch { pollError = error.localizedDescription }
+        do { devices = try await client.devices() } catch { pollError = error.localizedDescription }
         do {
             let fetched = try await client.serverURLs()
             applyURLs(fetched)
         } catch {
-            anyError = error.localizedDescription
+            pollError = error.localizedDescription
         }
         seedNotificationsForm()
-        lastError = anyError
+        // C36: the server is reachable + authed here (we passed those guards), so
+        // a failed best-effort diagnostic fetch is NOT a user-facing error — record
+        // it for Debug and clear any stale actionable banner. This stops a transient
+        // poll 500 from showing up as "Server returned HTTP 500" in Sync Control.
+        lastPollError = pollError
+        lastError = nil
     }
 
     // Seed the notifications form once from the server status (the
@@ -459,11 +474,16 @@ final class AppModel: ObservableObject {
         do { recentMessages = try await client.recentMessages(limit: recentCount) }
         catch { failures.append("recent messages — \(error.localizedDescription)") }
 
+        // Clear any stale top-of-page error either way: on success there's nothing
+        // to show, and on failure the dedicated error card explains exactly which
+        // request failed — so a leftover "Server returned HTTP 500" header line
+        // (from an earlier poll/action) would only contradict it.
+        lastError = nil
         if failures.isEmpty {
             syncControlError = nil
-            lastError = nil
         } else {
-            syncControlError = "These requests failed:\n" + failures.map { "• \($0)" }.joined(separator: "\n")
+            syncControlError = L10n.tr("sync.requestsFailed") + "\n"
+                + failures.map { "• \($0)" }.joined(separator: "\n")
         }
     }
 
@@ -475,6 +495,9 @@ final class AppModel: ObservableObject {
         lines.append("reachable: \(reachable)  authValid: \(authValid)")
         lines.append("loaded: chats \(chatsList.count) · recent \(recentMessages.count) · rules \(syncRules?.rules.count ?? 0)")
         lines.append("error: \(syncControlError ?? "none")")
+        // Background-poll diagnostic failure (status/connections/devices/urls).
+        // Captured here so it isn't swallowed, but never shown as a banner.
+        lines.append("pollDiagnostic: \(lastPollError ?? "none")")
         return lines.joined(separator: "\n")
     }
 

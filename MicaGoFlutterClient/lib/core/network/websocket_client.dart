@@ -57,7 +57,11 @@ class WebSocketClient extends ChangeNotifier {
   // platforms that allow custom WebSocket headers (Android/iOS via
   // IOWebSocketChannel). MicaGo accepts both; the header keeps the token out of
   // the URL (logs/proxies). Keep `?token=` only as the web fallback.
-  void connect(String wsUrl, String token) {
+  void connect(
+    String wsUrl,
+    String token, {
+    Map<String, String> metadata = const {},
+  }) {
     disconnect();
 
     final base = Uri.tryParse(wsUrl);
@@ -69,6 +73,7 @@ class WebSocketClient extends ChangeNotifier {
       queryParameters: {
         ...base.queryParameters,
         if (token.isNotEmpty) 'token': token,
+        ...metadata,
       },
     );
 

@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
-import '../../features/chats/message_render.dart' show reactionTargetGuid;
+import '../../features/chats/message_render.dart'
+    show messagePreviewText, reactionTargetGuid;
 import '../../features/chats/models/chat_summary.dart';
 import '../../features/chats/models/message_model.dart';
 
@@ -12,12 +13,10 @@ class LocalCacheStore {
   String? _path;
 
   // Bump on any schema OR pipeline-semantics change. C12 (v2): the server now
-  // ships a single canonical renderable timeline (debug-only/noise rows are
-  // filtered server-side and never broadcast). A v1 cache may still hold noise
-  // rows persisted under the old pipeline, so the upgrade is destructive: drop
-  // and recreate. The app is unreleased, so discarding the local cache is safe —
-  // it is repopulated from the server on next sync.
-  static const int _schemaVersion = 2;
+  // ships a single canonical renderable timeline. Bump this when renderability
+  // semantics change, because cached JSON may carry old attachment/noise rows
+  // even after the server has learned to filter them.
+  static const int _schemaVersion = 3;
 
   Future<void> open() async {
     if (_db != null) return;
@@ -464,15 +463,8 @@ CREATE TABLE metadata (
   }
 
   String _previewForMessage(MessageModel message) {
-    final text = message.text?.trim() ?? '';
-    if (text.isNotEmpty) return text;
-    if (message.attachments.isNotEmpty) {
-      return message.attachments.first.displayName;
-    }
-    if (message.isRetracted) return 'Message unsent';
-    return 'Message';
+    return messagePreviewText(message);
   }
-
 
   bool _isReactionAdd(MessageModel message) {
     final t = message.associatedMessageType;

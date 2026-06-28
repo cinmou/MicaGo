@@ -68,4 +68,8 @@ class SecureStore {
   Future<void> writeValue(String key, String value) async {
     await _storage.write(key: key, value: value);
   }
+
+  Future<void> deleteValue(String key) async {
+    await _storage.delete(key: key);
+  }
 }

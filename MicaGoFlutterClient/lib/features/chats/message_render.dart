@@ -324,6 +324,26 @@ MessageDeliveryState deliveryStateFor(MessageModel m) {
   return MessageDeliveryState.sent;
 }
 
+String attachmentPreviewLabel(AttachmentModel attachment) {
+  if (attachment.isStickerLike) return '（贴纸）';
+  if (attachment.isVoiceMessage) return '（语音）';
+  if (attachment.isImage) return '（图片）';
+  if (attachment.isVideo) return '（视频）';
+  if (attachment.isAudio) return '（音频）';
+  if (attachment.isLinkPreview) return '（链接）';
+  return '（文件）';
+}
+
+String messagePreviewText(MessageModel message) {
+  final text = displayText(message);
+  if (text != null && text.isNotEmpty) return text;
+  if (message.attachments.isNotEmpty) {
+    return attachmentPreviewLabel(message.attachments.first);
+  }
+  if (message.isRetracted) return 'Message unsent';
+  return 'Message';
+}
+
 /// A sender label that is never blank/"null"/raw placeholder.
 /// [contactName] is the caller's resolved local-contact name (or null).
 String resolveSenderLabel(
@@ -646,7 +666,7 @@ ThreadDiagnostics computeThreadDiagnostics(List<MessageModel> messages) {
 
 String threadDiagnosticsReport(ThreadDiagnostics d) {
   final buf = StringBuffer()
-    ..writeln('MicaGo message compatibility diagnostics')
+    ..writeln('micaGO message compatibility diagnostics')
     ..writeln('total: ${d.total}')
     ..writeln('text: ${d.text}')
     ..writeln('image: ${d.image}  audio: ${d.audio}  file: ${d.file}')

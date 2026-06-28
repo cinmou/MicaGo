@@ -50,6 +50,39 @@ void main() {
     expect(messages.single.text, 'hello');
   });
 
+  test('drops cached opaque URL preview payload attachments', () async {
+    await store.replaceServerPage('chat-1', [
+      MessageModel.fromJson({
+        'guid': 'm1',
+        'chatGuid': 'chat-1',
+        'text': 'https://privygallery.cinmou.uk',
+        'cacheHasAttachments': true,
+        'attachments': [
+          {
+            'guid': 'payload',
+            'filename': '88A910B7-31DB-48EF-8124-136AC0D0B9EF',
+            'transferName': '88A910B7-31DB-48EF-8124-136AC0D0B9EF',
+            'uti': 'public.data',
+            'attachmentKind': 'file',
+            'displayKind': 'file',
+            'downloadUrl': '/api/attachments/payload',
+          },
+          {
+            'guid': 'doc',
+            'transferName': 'report.pdf',
+            'attachmentKind': 'file',
+            'displayKind': 'file',
+            'downloadUrl': '/api/attachments/doc',
+          },
+        ],
+      }),
+    ]);
+
+    final messages = await store.listMessages('chat-1');
+    expect(messages.single.attachments, hasLength(1));
+    expect(messages.single.attachments.single.guid, 'doc');
+  });
+
   test('diagnostics reports local DB path schema and counts', () async {
     await store.upsertChats([
       const ChatSummary(guid: 'chat-1', hasRenderableMessages: true),

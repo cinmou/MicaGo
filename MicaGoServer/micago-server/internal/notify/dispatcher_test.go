@@ -156,6 +156,36 @@ func TestDispatchNewMessagesFakeProvider(t *testing.T) {
 	}
 }
 
+func TestDispatchUsesAttachmentPreviewWhenTextIsEmpty(t *testing.T) {
+	fake := &fakeProvider{}
+	d := NewDispatcher(config.Config{NotificationsEnabled: true, NotificationPreview: "sender_and_text"})
+	d.providers["fcm"] = fake
+
+	events := []relaydb.NotificationEvent{{
+		ChatGUID:       "chat-1",
+		ChatIdentifier: ptr("Photos"),
+		Message: store.MessageJSON{
+			GUID: "msg-photo",
+			Attachments: []store.AttachmentJSON{{
+				GUID:           "att-1",
+				MimeType:       ptr("image/jpeg"),
+				AttachmentKind: "image",
+			}},
+		},
+	}}
+	devices := []store.DeviceRecord{{ID: "on", PushProvider: "fcm", PushEnabled: true}}
+
+	if err := d.DispatchNewMessages(context.Background(), devices, events); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.sent) != 1 {
+		t.Fatalf("expected 1 push, got %d", len(fake.sent))
+	}
+	if fake.sent[0].notification.Body != "（图片）" {
+		t.Fatalf("expected image preview label, got %q", fake.sent[0].notification.Body)
+	}
+}
+
 func TestDispatchSkipsOwnMessages(t *testing.T) {
 	fake := &fakeProvider{}
 	d := NewDispatcher(config.Config{NotificationsEnabled: true, NotificationPreview: "sender"})

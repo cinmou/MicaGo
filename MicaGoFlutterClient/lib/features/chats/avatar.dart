@@ -92,6 +92,7 @@ class ContactAvatar extends StatelessWidget {
 class HandleAvatar extends StatelessWidget {
   final String title;
   final String? handle;
+  final List<String> participantHandles;
   final bool isGroup;
   final double radius;
 
@@ -99,6 +100,7 @@ class HandleAvatar extends StatelessWidget {
     super.key,
     required this.title,
     required this.handle,
+    this.participantHandles = const [],
     this.isGroup = false,
     this.radius = 20,
   });
@@ -110,8 +112,29 @@ class HandleAvatar extends StatelessWidget {
       isGroup: isGroup,
       radius: radius,
     );
-    if (isGroup || handle == null || handle!.isEmpty) return fallback;
     final contacts = context.watch<ContactsService>();
+    if (isGroup) {
+      final handles = participantHandles
+          .map((h) => h.trim())
+          .where((h) => h.isNotEmpty)
+          .toList(growable: false);
+      if (handles.length < 2 || !contacts.isReady) return fallback;
+      return FutureBuilder<List<_GroupAvatarEntry>>(
+        future: _loadGroupEntries(contacts, handles),
+        builder: (context, snap) {
+          final entries =
+              snap.data ??
+              [for (final h in handles.take(4)) _GroupAvatarEntry(handle: h)];
+          return _GroupAvatar(
+            title: title,
+            entries: entries,
+            totalCount: handles.length,
+            radius: radius,
+          );
+        },
+      );
+    }
+    if (handle == null || handle!.isEmpty) return fallback;
     if (!contacts.isReady) return fallback;
     return FutureBuilder<Uint8List?>(
       future: contacts.thumbnailForHandle(handle),
@@ -125,6 +148,126 @@ class HandleAvatar extends StatelessWidget {
           photo: bytes,
         );
       },
+    );
+  }
+
+  Future<List<_GroupAvatarEntry>> _loadGroupEntries(
+    ContactsService contacts,
+    List<String> handles,
+  ) async {
+    final entries = <_GroupAvatarEntry>[];
+    for (final handle in handles.take(6)) {
+      entries.add(
+        _GroupAvatarEntry(
+          handle: handle,
+          photo: await contacts.thumbnailForHandle(handle),
+        ),
+      );
+    }
+    entries.sort((a, b) {
+      final aPhoto = a.photo != null && a.photo!.isNotEmpty;
+      final bPhoto = b.photo != null && b.photo!.isNotEmpty;
+      if (aPhoto == bPhoto) return 0;
+      return aPhoto ? -1 : 1;
+    });
+    return entries.take(4).toList(growable: false);
+  }
+}
+
+class _GroupAvatarEntry {
+  final String handle;
+  final Uint8List? photo;
+  const _GroupAvatarEntry({required this.handle, this.photo});
+}
+
+class _GroupAvatar extends StatelessWidget {
+  final String title;
+  final List<_GroupAvatarEntry> entries;
+  final int totalCount;
+  final double radius;
+
+  const _GroupAvatar({
+    required this.title,
+    required this.entries,
+    required this.totalCount,
+    required this.radius,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final size = radius * 2;
+    final childRadius = radius * 0.58;
+    final visible = entries.take(4).toList(growable: false);
+    if (visible.length < 2) {
+      return ContactAvatar(title: title, isGroup: true, radius: radius);
+    }
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          for (var i = 0; i < visible.length; i++)
+            Positioned(
+              left: _offset(i, visible.length, size).dx,
+              top: _offset(i, visible.length, size).dy,
+              child: _MiniAvatar(
+                entry: visible[i],
+                radius: childRadius,
+                showOverflow:
+                    totalCount > visible.length && i == visible.length - 1,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Offset _offset(int index, int count, double size) {
+    final small = radius * 1.16;
+    if (count == 2) {
+      return index == 0 ? Offset(0, 0) : Offset(size - small, size - small);
+    }
+    if (count == 3) {
+      return [
+        Offset((size - small) / 2, 0),
+        Offset(0, size - small),
+        Offset(size - small, size - small),
+      ][index];
+    }
+    return [
+      Offset(0, 0),
+      Offset(size - small, 0),
+      Offset(0, size - small),
+      Offset(size - small, size - small),
+    ][index];
+  }
+}
+
+class _MiniAvatar extends StatelessWidget {
+  final _GroupAvatarEntry entry;
+  final double radius;
+  final bool showOverflow;
+
+  const _MiniAvatar({
+    required this.entry,
+    required this.radius,
+    required this.showOverflow,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final avatar = ContactAvatar(
+      title: entry.handle,
+      radius: radius,
+      photo: entry.photo,
+    );
+    if (!showOverflow) return avatar;
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+      foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+      child: Icon(Icons.group, size: radius),
     );
   }
 }

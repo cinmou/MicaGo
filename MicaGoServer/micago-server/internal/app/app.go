@@ -257,11 +257,17 @@ func Run(options Options) error {
 		return nil
 	}
 
+	// The startup sync is best-effort: a transient or data-shaped chat.db read
+	// error must NOT take the whole HTTP API down (Sync Control, Paired Devices,
+	// chats all read the cached relay.db and stay useful). We log the failure and
+	// record it in the sync diagnostics (surfaced in the UI as lastSyncError);
+	// the periodic + mtime sync loops keep retrying. Not swallowed — logged loudly.
 	startupSync, err := syncAndBroadcast(ctx, "startup")
 	if err != nil {
-		return err
+		log.Printf("startup sync failed (serving cached relay.db; will retry): %v", err)
+	} else {
+		logSyncResult(startupSync, true)
 	}
-	logSyncResult(startupSync, true)
 
 	// C11: a single coalescing sync engine consumes all background triggers so a
 	// burst of WAL/mtime/send triggers never piles up (and never gets dropped).
@@ -339,6 +345,7 @@ func Run(options Options) error {
 	statusDeps := httpapi.StatusDeps{
 		APIStore:     "relaydb",
 		ClientCount:  hub.ClientCount,
+		Connections:  hub.Clients,
 		SyncState:    relay.GetSyncState,
 		Network:      netController,
 		Capabilities: capabilities,

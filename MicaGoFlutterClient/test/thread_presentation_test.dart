@@ -17,6 +17,10 @@ MessageModel _m({
   String? expressiveSendStyleId,
   bool isRetracted = false,
   bool isEdited = false,
+  bool isRead = false,
+  bool isDelivered = false,
+  int? dateRead,
+  int? dateDelivered,
   int? dateEdited,
   bool cacheHasAttachments = false,
   String? semanticKind,
@@ -35,6 +39,10 @@ MessageModel _m({
   expressiveSendStyleId: expressiveSendStyleId,
   isRetracted: isRetracted,
   isEdited: isEdited,
+  isRead: isRead,
+  isDelivered: isDelivered,
+  dateRead: dateRead,
+  dateDelivered: dateDelivered,
   dateEdited: dateEdited,
   cacheHasAttachments: cacheHasAttachments,
   semanticKind: semanticKind,
@@ -186,12 +194,27 @@ void main() {
   });
 
   test(
-    'compact delivery visibility: only the latest outgoing shows status',
+    'compact delivery visibility shows separate read and delivered markers',
     () {
       final items = _build(
         [
-          _m(guid: 'o1', text: 'one', isFromMe: true, dateCreated: 1000),
-          _m(guid: 'o2', text: 'two', isFromMe: true, dateCreated: 2000),
+          _m(
+            guid: 'read',
+            text: 'one',
+            isFromMe: true,
+            isRead: true,
+            dateRead: 1500,
+            dateCreated: 1000,
+          ),
+          _m(
+            guid: 'delivered',
+            text: 'two',
+            isFromMe: true,
+            isDelivered: true,
+            dateDelivered: 2500,
+            dateCreated: 2000,
+          ),
+          _m(guid: 'latest', text: 'three', isFromMe: true, dateCreated: 3000),
         ],
         prefs: const MessageDisplayPrefs(
           deliveryLabels: DeliveryLabelMode.compact,
@@ -199,10 +222,17 @@ void main() {
       );
       final msgs = items.whereType<MessageViewItem>().toList();
       expect(
-        msgs.firstWhere((m) => m.message.guid == 'o1').showStatus,
-        isFalse,
+        msgs.firstWhere((m) => m.message.guid == 'read').showStatus,
+        isTrue,
       );
-      expect(msgs.firstWhere((m) => m.message.guid == 'o2').showStatus, isTrue);
+      expect(
+        msgs.firstWhere((m) => m.message.guid == 'delivered').showStatus,
+        isTrue,
+      );
+      expect(
+        msgs.firstWhere((m) => m.message.guid == 'latest').showStatus,
+        isTrue,
+      );
     },
   );
 

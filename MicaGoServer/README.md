@@ -106,6 +106,7 @@ of truth for behavior and wire format:
 
 - [`docs/spec-v0.6.0-security.md`](docs/spec-v0.6.0-security.md) — auth & security
 - [`docs/spec-v0.7.0-device-registry.md`](docs/spec-v0.7.0-device-registry.md) — device registry
+- [`docs/spec-v0.14.0-active-connections.md`](docs/spec-v0.14.0-active-connections.md) — active connected clients / Paired Devices
 - [`docs/spec-v0.8.0-notification-provider.md`](docs/spec-v0.8.0-notification-provider.md) — notification providers
 - [`docs/spec-v0.9.0-client-api-contract.md`](docs/spec-v0.9.0-client-api-contract.md) — stable client-facing API contract
 - [`docs/spec-v0.10.0-mac-companion.md`](docs/spec-v0.10.0-mac-companion.md) — native macOS companion app + `GET /api/server/status`
@@ -120,8 +121,10 @@ is the current code and the public README/user guides.
 The Mac-side control surface is a native SwiftUI app under
 [`../micago-mac-companion/`](../micago-mac-companion/) — **not** a WebUI. It
 launches/stops this server binary and reads its local control API
-(`/api/server/status`, `/api/server/urls`, `/api/devices`, …) to show status,
+(`/api/server/status`, `/api/server/urls`, `/api/server/connections`,
+`/api/devices`, …) to show status,
 **connection endpoints** (local/LAN/optional public), the bearer token,
-registered devices, notification provider status, and permission diagnostics.
+active connected clients, registered push devices, notification provider status,
+and permission diagnostics.
 See [`docs/spec-v0.10.0-mac-companion.md`](docs/spec-v0.10.0-mac-companion.md)
 and [`docs/spec-v0.11.0-connection-endpoints.md`](docs/spec-v0.11.0-connection-endpoints.md).

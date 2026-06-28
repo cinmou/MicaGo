@@ -1,5 +1,7 @@
 # Getting Started with MicaGo
 
+**English** · [简体中文](getting-started.zh-Hans.md) · [繁體中文](getting-started.zh-Hant.md)
+
 This guide walks you through your first MicaGo setup and the recommended order
 to test each connection.
 

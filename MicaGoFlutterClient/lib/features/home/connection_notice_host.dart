@@ -63,7 +63,7 @@ class _ConnectionNoticeHostState extends State<ConnectionNoticeHost> {
       context: context,
       builder: (ctx) => AlertDialog(
         icon: const Icon(Icons.cloud_off),
-        title: const Text('Can’t reach your MicaGo server'),
+        title: const Text('Can’t reach your micaGO server'),
         content: const Text(
           'The app couldn’t connect to your Mac server within 10 seconds.\n\n'
           '• Check that the MicaGo server is running on your Mac.\n'

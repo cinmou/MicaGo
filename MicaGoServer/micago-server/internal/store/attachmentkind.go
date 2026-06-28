@@ -11,12 +11,13 @@ import (
 // the is_sticker flag, and the file extension. They are advisory only: clients
 // that need precision should still inspect mimeType/uti.
 const (
-	AttachmentKindImage   = "image"
-	AttachmentKindVideo   = "video"
-	AttachmentKindAudio   = "audio"
-	AttachmentKindFile    = "file"
-	AttachmentKindSticker = "sticker"
-	AttachmentKindUnknown = "unknown"
+	AttachmentKindImage    = "image"
+	AttachmentKindVideo    = "video"
+	AttachmentKindAudio    = "audio"
+	AttachmentKindFile     = "file"
+	AttachmentKindSticker  = "sticker"
+	AttachmentKindLocation = "location" // C37: iMessage shared-location (vlocation)
+	AttachmentKindUnknown  = "unknown"
 
 	DisplayKindImage             = "image"
 	DisplayKindImageNeedsPreview = "image_needs_preview"
@@ -25,6 +26,7 @@ const (
 	DisplayKindVoice             = "voice"
 	DisplayKindFile              = "file"
 	DisplayKindSticker           = "sticker"
+	DisplayKindLocation          = "location"
 	DisplayKindUnknown           = "unknown"
 )
 
@@ -114,9 +116,49 @@ func InferMimeType(mimeType, uti, transferName, filename *string) *string {
 	return nil
 }
 
+// IsLocationAttachment reports an iMessage shared-location row. Apple stores the
+// "Share My Location"/"Send My Current Location" payload as a small vlocation
+// file (a .loc.vcf carrying an Apple Maps URL). Detected by MIME/UTI/extension.
+func IsLocationAttachment(mimeType, uti, transferName, filename *string) bool {
+	m := strings.ToLower(strings.TrimSpace(deref(mimeType)))
+	if m == "text/x-vlocation" || m == "text/vlocation" {
+		return true
+	}
+	u := strings.ToLower(strings.TrimSpace(deref(uti)))
+	if u == "public.vlocation" || u == "com.apple.mapkit.map-item" {
+		return true
+	}
+	for _, name := range []string{deref(transferName), deref(filename)} {
+		l := strings.ToLower(strings.TrimSpace(name))
+		if strings.HasSuffix(l, ".loc.vcf") || strings.HasSuffix(l, ".vlocation") {
+			return true
+		}
+	}
+	return false
+}
+
+// isStickerUTI catches stickers whose chat.db is_sticker flag is missing/0 — e.g.
+// some third-party sticker packs — by their UTI. Apple sticker payloads carry a
+// sticker UTI even when the flag isn't set.
+func isStickerUTI(uti *string) bool {
+	u := strings.ToLower(strings.TrimSpace(deref(uti)))
+	if u == "" {
+		return false
+	}
+	return u == "com.apple.sticker" ||
+		strings.HasPrefix(u, "com.apple.sticker") ||
+		strings.HasSuffix(u, ".sticker") ||
+		strings.Contains(u, ".sticker.")
+}
+
 // AttachmentKind classifies an attachment into a coarse, stable bucket.
 func AttachmentKind(isSticker bool, mimeType, uti, transferName, filename *string) string {
-	if isSticker {
+	// C37: location BEFORE the generic file fallback — a vlocation has a text MIME
+	// that would otherwise classify as "file".
+	if IsLocationAttachment(mimeType, uti, transferName, filename) {
+		return AttachmentKindLocation
+	}
+	if isSticker || isStickerUTI(uti) {
 		return AttachmentKindSticker
 	}
 
@@ -147,8 +189,12 @@ func AttachmentKind(isSticker bool, mimeType, uti, transferName, filename *strin
 		return AttachmentKindAudio
 	}
 
-	// We have *some* identifying info (name/mime/uti) but it's not media: file.
-	if effective != "" || u != "" || strings.TrimSpace(deref(transferName)) != "" || strings.TrimSpace(deref(filename)) != "" {
+	// We have a typed identity but it's not media: file. A bare filename or an
+	// unknown/generic UTI with no MIME/known extension is intentionally left
+	// unknown. Apple URLBalloon/link-preview payloads often look like UUID files
+	// (sometimes public.data) with no useful type, and BlueBubbles keeps those
+	// out of realAttachments.
+	if effective != "" {
 		return AttachmentKindFile
 	}
 
@@ -188,22 +234,50 @@ func IsTIFFAttachment(mimeType, uti, transferName, filename *string) bool {
 	return false
 }
 
+func NeedsPreviewConversion(isSticker bool, mimeType, uti, transferName, filename *string) bool {
+	if isSticker {
+		return true
+	}
+	if IsTIFFAttachment(mimeType, uti, transferName, filename) {
+		return true
+	}
+	m := strings.ToLower(strings.TrimSpace(deref(mimeType)))
+	if m == "image/heic" || m == "image/heif" || m == "image/heic-sequence" || m == "image/heif-sequence" {
+		return true
+	}
+	u := strings.ToLower(strings.TrimSpace(deref(uti)))
+	if u == "public.heic" || u == "public.heif" || u == "public.heic-sequence" || u == "public.heif-sequence" {
+		return true
+	}
+	for _, name := range []string{deref(transferName), deref(filename)} {
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext == ".heic" || ext == ".heif" || ext == ".heics" {
+			return true
+		}
+	}
+	return false
+}
+
 func IsPreviewableImage(kind string, mimeType, uti, transferName, filename *string) bool {
 	if kind != AttachmentKindImage {
 		return false
 	}
-	return !IsTIFFAttachment(mimeType, uti, transferName, filename)
+	return !NeedsPreviewConversion(false, mimeType, uti, transferName, filename)
 }
 
 func DisplayKind(kind string, isVoice bool, needsPreviewConversion bool) string {
-	if needsPreviewConversion {
-		return DisplayKindImageNeedsPreview
-	}
 	if isVoice {
 		return DisplayKindVoice
 	}
 	switch kind {
+	case AttachmentKindLocation:
+		return DisplayKindLocation
+	case AttachmentKindSticker:
+		return DisplayKindSticker
 	case AttachmentKindImage:
+		if needsPreviewConversion {
+			return DisplayKindImageNeedsPreview
+		}
 		return DisplayKindImage
 	case AttachmentKindVideo:
 		return DisplayKindVideo
@@ -211,11 +285,21 @@ func DisplayKind(kind string, isVoice bool, needsPreviewConversion bool) string 
 		return DisplayKindAudio
 	case AttachmentKindFile:
 		return DisplayKindFile
-	case AttachmentKindSticker:
-		return DisplayKindSticker
 	default:
 		return DisplayKindUnknown
 	}
+}
+
+// IsAttachmentPreviewPayload reports attachment rows that belong to Apple's
+// rich-link/interactive payload rather than a user-visible file. BlueBubbles'
+// equivalent boundary is realAttachments (mimeType != nil) vs previewAttachments
+// (mimeType == nil). We keep the rule conservative: typed media/files and
+// stickers still render, while untyped opaque rows do not become blank cards.
+func IsAttachmentPreviewPayload(a AttachmentJSON) bool {
+	if a.IsSticker {
+		return false
+	}
+	return a.AttachmentKind == AttachmentKindUnknown && a.MimeType == nil
 }
 
 // DecorateAttachmentJSON fills the additive, derived fields on an AttachmentJSON
@@ -232,7 +316,7 @@ func DecorateAttachmentJSON(a *AttachmentJSON) {
 	a.MimeType = InferMimeType(a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.AttachmentKind = AttachmentKind(a.IsSticker, a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.IsVoiceMessage = IsVoiceMessage(a.Uti, a.MimeType)
-	a.NeedsPreviewConversion = IsTIFFAttachment(a.MimeType, a.Uti, a.TransferName, a.Filename)
+	a.NeedsPreviewConversion = NeedsPreviewConversion(a.IsSticker, a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.IsPreviewableImage = IsPreviewableImage(a.AttachmentKind, a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.DisplayKind = DisplayKind(a.AttachmentKind, a.IsVoiceMessage, a.NeedsPreviewConversion)
 }

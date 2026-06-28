@@ -49,6 +49,11 @@ class _MemoryStore implements SecureStore {
   Future<void> writeValue(String key, String value) async {
     _values[key] = value;
   }
+
+  @override
+  Future<void> deleteValue(String key) async {
+    _values.remove(key);
+  }
 }
 
 void main() {

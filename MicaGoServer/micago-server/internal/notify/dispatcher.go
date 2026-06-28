@@ -234,7 +234,7 @@ func buildNotification(event relaydb.NotificationEvent, previewMode string) Noti
 		if sender != "" {
 			title = sender
 		}
-		body = strings.TrimSpace(stringValue(event.Message.Text))
+		body = messagePreviewText(event.Message)
 	default: // "sender" (and any unknown value): show who, not what.
 		if sender != "" {
 			title = sender
@@ -256,6 +256,31 @@ func buildNotification(event relaydb.NotificationEvent, previewMode string) Noti
 		Handle:      handle,
 		PreviewMode: previewMode,
 		CreatedAt:   time.Now().UnixMilli(),
+	}
+}
+
+func messagePreviewText(message store.MessageJSON) string {
+	if text := strings.TrimSpace(stringValue(message.Text)); text != "" {
+		return text
+	}
+	if len(message.Attachments) == 0 {
+		return ""
+	}
+	a := message.Attachments[0]
+	mime := strings.TrimSpace(stringValue(a.MimeType))
+	switch {
+	case a.IsSticker || a.DisplayKind == "sticker" || a.AttachmentKind == "sticker":
+		return "（贴纸）"
+	case a.IsVoiceMessage:
+		return "（语音）"
+	case a.AttachmentKind == "image" || strings.HasPrefix(mime, "image/"):
+		return "（图片）"
+	case a.AttachmentKind == "video" || strings.HasPrefix(mime, "video/"):
+		return "（视频）"
+	case a.AttachmentKind == "audio" || strings.HasPrefix(mime, "audio/"):
+		return "（音频）"
+	default:
+		return "（文件）"
 	}
 }
 

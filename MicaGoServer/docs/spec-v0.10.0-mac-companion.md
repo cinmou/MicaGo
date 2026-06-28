@@ -57,7 +57,8 @@ the bearer token except `GET /api/health`.
 | `POST /api/auth/check` | confirm the token is accepted |
 | `GET /api/server/info` | name, version, capability flags, provider list |
 | `GET /api/server/status` | **new in v0.9** — runtime status + diagnostics |
-| `GET /api/devices` | registered device list |
+| `GET /api/server/connections` | active authenticated WebSocket sessions |
+| `GET /api/devices` | optional push-device registry |
 
 ### `GET /api/server/status` (new)
 
@@ -115,7 +116,8 @@ guidance to verify in System Settings.
 | **Connection endpoints (local/LAN/public)** | `GET /api/server/urls` (v0.11) | `APIClient`; local/LAN always present, public optional |
 | **Bearer token** | `~/.micago/config.yaml` → `auth.token` | `ConfigReader`; the token is read locally and **never** fetched from the API |
 | **Current server status** | `GET /api/server/status` (after `GET /api/health` + `POST /api/auth/check`) | `APIClient`, polled every ~3s while the window is open |
-| **Paired devices** | `GET /api/devices` → `data[]` | `APIClient` |
+| **Paired devices** | `GET /api/server/connections` → `data[]` | active authenticated WebSocket sessions, not push registration |
+| **Push devices** | `GET /api/devices` → `data[]` | optional notification registry + Test Push |
 | **Notification provider status** | `notifications` block of `/api/server/status` | shows enabled/provider/preview and implemented vs stub providers |
 | **Permission diagnostics** | `permissions` block of `/api/server/status` | Full Disk Access, Attachments, Automation |
 
@@ -167,12 +169,14 @@ files added to the `MicaGoCompanion/` folder are picked up automatically — no
    a **pairing QR code** encoding `{baseUrl, websocketUrl, token}` for the
    **selected** endpoint (Local for this Mac, LAN for same-network, Public for
    remote) — a per-pairing choice, not a server mode.
-5. **Registered devices** — list from `GET /api/devices`.
-6. **Notification provider status** — enabled/provider/preview + implemented vs
+5. **Paired devices** — active authenticated WebSocket sessions from
+   `GET /api/server/connections`.
+6. **Push devices** — optional notification registry from `GET /api/devices`.
+7. **Notification provider status** — enabled/provider/preview + implemented vs
    stub providers.
-7. **Permission diagnostics** — Full Disk Access, Attachments, Automation, with
+8. **Permission diagnostics** — Full Disk Access, Attachments, Automation, with
    color-coded status and remediation hints.
-8. **Launch at Login** — a conservative `SMAppService.mainApp` toggle
+9. **Launch at Login** — a conservative `SMAppService.mainApp` toggle
    (macOS 13+), with a visible status string and graceful error handling.
 9. **No chat UI** — this app is only the Mac server controller.
 
@@ -224,8 +228,8 @@ Deployment target: macOS 13.0. Bundle id: `com.micago.companion`.
 first server launch creates `~/.micago/config.yaml` with a random token.
 
 1. **Open & build** the Xcode project; confirm it builds and the window opens
-   with the eight sections (Server, Connection Endpoints, Token, Devices,
-   Notifications, Diagnostics, Launch at Login, Server Log).
+   with the sections (Server, Connection Endpoints, Token, Paired Devices,
+   Push Devices, Notifications, Diagnostics, Launch at Login, Server Log).
 2. **Binary detection** — the path row shows a green seal when
    `~/.micago/bin/micago` exists; otherwise an orange warning. Use **Choose…**
    to point at another binary if needed.
