@@ -652,6 +652,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
       senderName: m.senderLabel,
       body: m.body,
       reactions: m.reactions,
+      stickers: m.stickers,
       reply: m.reply,
       effectHint: m.effectHint,
       showStatus: m.showStatus,
@@ -666,6 +667,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
         position,
         chatGuid: _active.guid,
         api: api,
+        onRetracted: (guid) => _controller.markRetractedLocally(guid),
         onChanged: () => _controller.load(showSpinner: false),
       ),
     );
@@ -710,6 +712,7 @@ Future<void> showMessageActionMenu(
   Offset globalPosition, {
   String? chatGuid,
   ApiClient? api,
+  void Function(String guid)? onRetracted,
   Future<void> Function()? onChanged,
 }) async {
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -821,7 +824,10 @@ Future<void> showMessageActionMenu(
         context,
         () => api.retractMessage(chatGuid, message.guid),
         success: 'Undo send queued',
-        onChanged: onChanged,
+        onChanged: () async {
+          await onChanged?.call();
+          onRetracted?.call(message.guid);
+        },
       );
       break;
     case MessageAction.delete:
@@ -971,6 +977,7 @@ class _MessageBubble extends StatefulWidget {
   /// Tapbacks merged onto this message (chips), the quoted reply (if any), and
   /// the send-effect hint label (if any).
   final List<MessageModel> reactions;
+  final List<MessageModel> stickers;
   final ReplyPreview? reply;
   final String? effectHint;
   final VoidCallback onRetry;
@@ -984,6 +991,7 @@ class _MessageBubble extends StatefulWidget {
     required this.showStatus,
     required this.showTimestamp,
     this.reactions = const [],
+    this.stickers = const [],
     this.reply,
     this.effectHint,
     required this.onRetry,
@@ -1004,6 +1012,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final message = widget.message;
     final api = widget.api;
     final reactions = widget.reactions;
+    final stickers = widget.stickers;
     final reply = widget.reply;
     final effectHint = widget.effectHint;
     final scheme = Theme.of(context).colorScheme;
@@ -1134,20 +1143,34 @@ class _MessageBubbleState extends State<_MessageBubble> {
       ),
     );
 
-    final bubbleWithReactions = reactions.isEmpty
+    final bubbleWithOverlays = reactions.isEmpty && stickers.isEmpty
         ? bubble
         : Semantics(
             container: true,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
-                Padding(padding: const EdgeInsets.only(top: 8), child: bubble),
-                Positioned(
-                  top: -4,
-                  right: fromMe ? null : 4,
-                  left: fromMe ? 4 : null,
-                  child: _ReactionChips(reactions: reactions),
+                Padding(
+                  padding: EdgeInsets.only(top: stickers.isEmpty ? 8 : 22),
+                  child: bubble,
                 ),
+                if (stickers.isNotEmpty && api != null)
+                  Positioned(
+                    top: -4,
+                    right: fromMe ? 4 : null,
+                    left: fromMe ? null : 4,
+                    child: _AssociatedStickerStrip(
+                      api: api,
+                      stickers: stickers,
+                    ),
+                  ),
+                if (reactions.isNotEmpty)
+                  Positioned(
+                    top: stickers.isEmpty ? -4 : 8,
+                    right: fromMe ? null : 4,
+                    left: fromMe ? 4 : null,
+                    child: _ReactionChips(reactions: reactions),
+                  ),
               ],
             ),
           );
@@ -1162,7 +1185,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
           UrlPreviewCard(url: previewUrl),
           const SizedBox(height: 4),
         ],
-        bubbleWithReactions,
+        bubbleWithOverlays,
         _Footer(
           message: message,
           showStatus: widget.showStatus,
@@ -1220,6 +1243,43 @@ class _ReactionChips extends StatelessWidget {
       child: Text(
         byHandle.values.map((k) => tapbackEmoji(k)).join(' '),
         style: const TextStyle(fontSize: 11),
+      ),
+    );
+  }
+}
+
+/// BlueBubbles-style associated stickers: sticker messages (associated type
+/// 1000) are rendered as a compact, transparent strip over the target bubble.
+class _AssociatedStickerStrip extends StatelessWidget {
+  final ApiClient api;
+  final List<MessageModel> stickers;
+  const _AssociatedStickerStrip({required this.api, required this.stickers});
+
+  @override
+  Widget build(BuildContext context) {
+    final attachments = [
+      for (final message in stickers)
+        for (final attachment in message.attachments)
+          if (attachment.isStickerLike) attachment,
+    ];
+    if (attachments.isEmpty) return const SizedBox.shrink();
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.6,
+        maxHeight: 100,
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final attachment in attachments)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: AttachmentView(api: api, attachment: attachment),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1565,9 +1625,9 @@ class _VoiceRecordingBar extends StatelessWidget {
                   valueListenable: elapsed,
                   builder: (context, d, _) => Text(
                     _fmt(d),
-                    style: const TextStyle(fontFeatures: [
-                      FontFeature.tabularFigures(),
-                    ]),
+                    style: const TextStyle(
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ),
               ],

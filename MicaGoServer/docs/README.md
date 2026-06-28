@@ -53,7 +53,7 @@ individual feature specs add detail and rationale.
 | [`spec-v0.11.5-message-fidelity.md`](spec-v0.11.5-message-fidelity.md) | **Implemented:** attachment kind/voice/UTI + MIME inference; typedstream `+!`/`+$` text-extraction fix. Additive `Attachment` fields. |
 | [`spec-v0.12.0-reliable-send-pipeline.md`](spec-v0.12.0-reliable-send-pipeline.md) | **Implemented:** hardened plain-text send — richer pending-send manager (status/resolve/reject/claim), 15s confirmation, `send:pending` event, structured `send_confirmation_timeout`. (Note: `v0.12.0` also used by the Firebase spec.) |
 | [`c26-imessage-advanced-semantics-actions.md`](c26-imessage-advanced-semantics-actions.md) | **Implemented:** sticker display semantics, capability-driven edit/undo-send/delete API surface, LAN endpoint startup refresh, and C26 limitations. |
-| [`spec-v0.32.0-sticker-preview.md`](spec-v0.32.0-sticker-preview.md) | **Implemented:** BlueBubbles-style sticker rendering compatibility via server PNG preview + client raw-byte fallback. |
+| [`spec-v0.32.0-sticker-preview.md`](spec-v0.32.0-sticker-preview.md) | **Implemented:** BlueBubbles-style sticker/voice media compatibility: sticker PNG preview, associated sticker overlay, voice-note classification, kept-audio noise hiding. |
 
 ### Companion app spec (current source of truth)
 

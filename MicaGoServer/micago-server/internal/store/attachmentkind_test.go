@@ -65,6 +65,20 @@ func TestAttachmentKindInference(t *testing.T) {
 			wantMime:  "audio/mpeg",
 		},
 		{
+			name:         "mica recorded m4a is a voice message",
+			transferName: sp("voice_1717372800000.m4a"),
+			wantKind:     AttachmentKindAudio,
+			wantVoice:    true,
+			wantMime:     "audio/mp4",
+		},
+		{
+			name:         "regular m4a is ordinary audio",
+			transferName: sp("song.m4a"),
+			wantKind:     AttachmentKindAudio,
+			wantVoice:    false,
+			wantMime:     "audio/mp4",
+		},
+		{
 			name:     "video by mime",
 			mimeType: sp("video/quicktime"),
 			uti:      sp("com.apple.quicktime-movie"),
@@ -119,7 +133,7 @@ func TestAttachmentKindInference(t *testing.T) {
 				t.Errorf("AttachmentKind = %q, want %q", gotKind, tc.wantKind)
 			}
 
-			gotVoice := IsVoiceMessage(tc.uti, tc.mimeType)
+			gotVoice := IsVoiceMessage(tc.uti, tc.mimeType, tc.transferName, tc.filename)
 			if gotVoice != tc.wantVoice {
 				t.Errorf("IsVoiceMessage = %v, want %v", gotVoice, tc.wantVoice)
 			}

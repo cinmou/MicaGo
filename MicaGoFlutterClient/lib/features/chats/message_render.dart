@@ -188,6 +188,18 @@ bool isReaction(MessageModel m) {
   return (m.associatedMessageGuid?.isNotEmpty ?? false);
 }
 
+/// BlueBubbles treats associated_message_type 1000 as a sticker attached to a
+/// target message, not as a standalone message row.
+bool isAssociatedSticker(MessageModel m) =>
+    m.associatedMessageType == 1000 &&
+    (m.associatedMessageGuid?.trim().isNotEmpty ?? false) &&
+    m.hasAttachments;
+
+/// BlueBubbles hides the "kept an audio message" service row when it carries a
+/// subject. The actual voice attachment is the renderable content.
+bool isKeptAudioNotice(MessageModel m) =>
+    m.itemType == 5 && (m.subject?.trim().isNotEmpty ?? false);
+
 /// The emoji glyph for a tapback (for chips on the target bubble).
 String tapbackEmoji(TapbackKind kind) {
   switch (kind) {

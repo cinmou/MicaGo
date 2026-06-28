@@ -186,6 +186,17 @@ class ThreadController extends ChangeNotifier {
     await send(text);
   }
 
+  void markRetractedLocally(String guid, {int? dateRetracted}) {
+    if (guid.isEmpty) return;
+    final applied = _col.applyUnsend(
+      guid,
+      dateRetracted ?? DateTime.now().millisecondsSinceEpoch,
+    );
+    if (!applied) return;
+    state = ThreadState.loaded;
+    notifyListeners();
+  }
+
   // C19 attachment send. Unlike text, the server cannot reconcile an attachment
   // by content (there is no text to match), so we do NOT add a persistent
   // optimistic bubble — that would duplicate the real row. Instead we surface a

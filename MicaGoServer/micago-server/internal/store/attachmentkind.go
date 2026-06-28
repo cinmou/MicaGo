@@ -201,10 +201,11 @@ func AttachmentKind(isSticker bool, mimeType, uti, transferName, filename *strin
 	return AttachmentKindUnknown
 }
 
-// IsVoiceMessage reports whether the attachment is an iMessage voice memo,
-// identified by the CAF container UTI/MIME. This is the reliable signal
-// available at the attachment level without reading message.is_audio_message.
-func IsVoiceMessage(uti, mimeType *string) bool {
+// IsVoiceMessage reports whether the attachment is an iMessage voice memo.
+// CAF is Apple's canonical container; MicaGo-recorded voice notes are sent as
+// voice_*.m4a because Flutter/Android cannot produce CAF without a native
+// encoder. Those are still user-created voice messages, not arbitrary music.
+func IsVoiceMessage(uti, mimeType *string, names ...*string) bool {
 	if u := strings.TrimSpace(deref(uti)); u != "" {
 		if _, ok := voiceMessageUTIs[u]; ok {
 			return true
@@ -212,6 +213,12 @@ func IsVoiceMessage(uti, mimeType *string) bool {
 	}
 	if m := strings.ToLower(strings.TrimSpace(deref(mimeType))); m == "audio/x-caf" || m == "audio/caf" {
 		return true
+	}
+	for _, namePtr := range names {
+		name := strings.ToLower(strings.TrimSpace(filepath.Base(deref(namePtr))))
+		if strings.HasPrefix(name, "voice_") && (strings.HasSuffix(name, ".m4a") || strings.HasSuffix(name, ".aac")) {
+			return true
+		}
 	}
 	return false
 }
@@ -315,7 +322,7 @@ func DecorateAttachmentJSON(a *AttachmentJSON) {
 	}
 	a.MimeType = InferMimeType(a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.AttachmentKind = AttachmentKind(a.IsSticker, a.MimeType, a.Uti, a.TransferName, a.Filename)
-	a.IsVoiceMessage = IsVoiceMessage(a.Uti, a.MimeType)
+	a.IsVoiceMessage = IsVoiceMessage(a.Uti, a.MimeType, a.TransferName, a.Filename)
 	a.NeedsPreviewConversion = NeedsPreviewConversion(a.IsSticker, a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.IsPreviewableImage = IsPreviewableImage(a.AttachmentKind, a.MimeType, a.Uti, a.TransferName, a.Filename)
 	a.DisplayKind = DisplayKind(a.AttachmentKind, a.IsVoiceMessage, a.NeedsPreviewConversion)

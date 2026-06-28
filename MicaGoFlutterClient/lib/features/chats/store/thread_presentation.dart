@@ -54,6 +54,7 @@ class MessageViewItem extends ThreadViewItem {
   final String? body; // sanitized display text (null = none)
   final ReplyPreview? reply;
   final List<MessageModel> reactions;
+  final List<MessageModel> stickers;
   final String? effectHint;
   final MessageDeliveryState deliveryState;
   final bool showStatus; // whether to render a delivery label
@@ -69,6 +70,7 @@ class MessageViewItem extends ThreadViewItem {
     required this.body,
     required this.reply,
     required this.reactions,
+    required this.stickers,
     required this.effectHint,
     required this.deliveryState,
     required this.showStatus,
@@ -192,6 +194,7 @@ class ThreadPresentationBuilder {
           body: isSystem ? null : displayText(m),
           reply: isSystem ? null : replyFor(m),
           reactions: row.reactions,
+          stickers: row.stickers,
           effectHint: (!isSystem && prefs.showEffectHints)
               ? effectLabel(m.expressiveSendStyleId)
               : null,

@@ -8,6 +8,7 @@ const _day = 24 * 60 * 60 * 1000;
 MessageModel _m({
   required String guid,
   String? text,
+  String? subject,
   bool isFromMe = false,
   String? handleId,
   int? dateCreated,
@@ -23,6 +24,7 @@ MessageModel _m({
   int? dateDelivered,
   int? dateEdited,
   bool cacheHasAttachments = false,
+  List<AttachmentModel> attachments = const [],
   String? semanticKind,
   String? renderRecommendation,
   String? unsupportedReason,
@@ -30,6 +32,7 @@ MessageModel _m({
 }) => MessageModel(
   guid: guid,
   text: text,
+  subject: subject,
   isFromMe: isFromMe,
   handleId: handleId,
   dateCreated: dateCreated,
@@ -45,6 +48,7 @@ MessageModel _m({
   dateDelivered: dateDelivered,
   dateEdited: dateEdited,
   cacheHasAttachments: cacheHasAttachments,
+  attachments: attachments,
   semanticKind: semanticKind,
   renderRecommendation: renderRecommendation,
   unsupportedReason: unsupportedReason,
@@ -77,6 +81,60 @@ void main() {
     final separators = items.whereType<DateSeparatorItem>().length;
     expect(separators, 2); // two distinct days
     expect(items.first, isA<DateSeparatorItem>());
+  });
+
+  test('associated sticker is merged onto target, not rendered as a row', () {
+    final items = _build([
+      _m(guid: 'target', text: 'base', dateCreated: 1000),
+      _m(
+        guid: 'sticker-row',
+        associatedMessageType: 1000,
+        associatedMessageGuid: 'p:0/target',
+        dateCreated: 1100,
+        attachments: const [
+          AttachmentModel(
+            guid: 'sticker-attachment',
+            downloadUrl: '/api/attachments/sticker-attachment',
+            isSticker: true,
+            attachmentKind: 'sticker',
+            displayKind: 'sticker',
+          ),
+        ],
+      ),
+    ]);
+
+    final msgs = items.whereType<MessageViewItem>().toList();
+    expect(msgs.length, 1);
+    expect(msgs.single.message.guid, 'target');
+    expect(msgs.single.stickers.single.guid, 'sticker-row');
+  });
+
+  test('kept-audio notice rows are hidden like BlueBubbles', () {
+    final items = _build([
+      _m(
+        guid: 'voice',
+        dateCreated: 1000,
+        attachments: const [
+          AttachmentModel(
+            guid: 'voice-file',
+            downloadUrl: '/api/attachments/voice-file',
+            attachmentKind: 'audio',
+            isVoiceMessage: true,
+            displayKind: 'voice',
+          ),
+        ],
+      ),
+      _m(
+        guid: 'kept',
+        subject: 'Audio Message',
+        itemType: 5,
+        dateCreated: 1100,
+      ),
+    ]);
+
+    final msgs = items.whereType<MessageViewItem>().toList();
+    expect(msgs.length, 1);
+    expect(msgs.single.message.guid, 'voice');
   });
 
   test('precomputes body + sender label (group, incoming) via resolver', () {

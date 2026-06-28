@@ -101,6 +101,9 @@ class DisplayRow {
   /// Tapbacks merged onto this (message) row, when [MessageDisplayPrefs.mergeTapbacks].
   final List<MessageModel> reactions;
 
+  /// Sticker associated-message rows merged onto this target row.
+  final List<MessageModel> stickers;
+
   /// Number of system messages collapsed into this row (1 = not merged).
   final int mergedSystemCount;
 
@@ -111,6 +114,7 @@ class DisplayRow {
     required this.message,
     required this.kind,
     this.reactions = const [],
+    this.stickers = const [],
     this.mergedSystemCount = 1,
     this.mergedMessages = const [],
   });
@@ -133,10 +137,23 @@ List<DisplayRow> buildDisplayRows(
 ) {
   // 1) If merging tapbacks, map target guid → reactions and mark them consumed.
   final reactionsByTarget = <String, List<MessageModel>>{};
+  final stickersByTarget = <String, List<MessageModel>>{};
   final consumed = <String>{};
-  if (prefs.mergeTapbacks) {
-    final guids = {for (final m in messages) m.guid};
-    for (final m in messages) {
+  final guids = {for (final m in messages) m.guid};
+  for (final m in messages) {
+    if (isKeptAudioNotice(m)) {
+      consumed.add(m.dedupeKey);
+      continue;
+    }
+    if (isAssociatedSticker(m)) {
+      final target = reactionTargetGuid(m.associatedMessageGuid);
+      if (target != null && guids.contains(target)) {
+        stickersByTarget.putIfAbsent(target, () => []).add(m);
+        consumed.add(m.dedupeKey);
+      }
+      continue;
+    }
+    if (prefs.mergeTapbacks) {
       if (renderableKindFor(m) != MessageRenderableKind.reaction) continue;
       final target = reactionTargetGuid(m.associatedMessageGuid);
       if (target != null && guids.contains(target)) {
@@ -184,6 +201,7 @@ List<DisplayRow> buildDisplayRows(
         message: m,
         kind: kind,
         reactions: reactionsByTarget[m.guid] ?? const [],
+        stickers: stickersByTarget[m.guid] ?? const [],
       ),
     );
   }

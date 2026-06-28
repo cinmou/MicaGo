@@ -40,9 +40,14 @@ Three components:
 - **Companion:** `Localization.swift` (`L10n.tr`) covers the sidebar + menu
   (en/zhHans/zhHant). Most dashboard body text is still hardcoded English (large
   follow-up).
-- **Docs:** `README.zh-Hans.md` / `README.zh-Hant.md` and
-  `docs/getting-started.zh-Hans.md` / `.zh-Hant.md`, each with a language switcher
-  at the top. zh-Hant uses Taiwan terms (伺服器/訊息/預設/推播/貼圖/權杖/影片).
+- **Docs:** `README.md` + `README.zh-Hans.md` / `.zh-Hant.md` and `docs/index.md` +
+  `index.zh-Hans.md` / `.zh-Hant.md` and `docs/getting-started.*` — each with a
+  language switcher. C38 restyled the README + docs hub in a hero / language-switcher
+  / key-links-bar / emoji-section / capability-table / "what it does vs does not do" /
+  honest-limitations / closing-CTA style (centered `<div>` blocks render on GitHub).
+  zh-Hant uses Taiwan terms (伺服器/訊息/預設/推播/貼圖/權杖/影片). The 4 individual
+  guides (android-client-connection / remote-access-cloudflare / notifications-setup /
+  manual-test-flow) are still English-only — the localized index marks them "(英文)".
 
 ## Stickers / location / handwriting (C37, backend v0.32)
 
