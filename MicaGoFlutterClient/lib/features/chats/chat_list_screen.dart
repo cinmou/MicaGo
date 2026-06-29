@@ -451,6 +451,7 @@ class _ChatRailRow extends StatelessWidget {
         ? resolvedName
         : chat.title;
     final unreadCount = merged.unreadCount;
+    final hasUnread = merged.hasUnread;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       child: Material(
@@ -474,7 +475,7 @@ class _ChatRailRow extends StatelessWidget {
                   isGroup: chat.isGroup,
                   radius: 22,
                 ),
-                if (unreadCount > 0)
+                if (hasUnread)
                   Positioned(
                     top: 9,
                     right: 11,

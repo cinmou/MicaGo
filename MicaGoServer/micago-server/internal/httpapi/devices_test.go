@@ -26,7 +26,7 @@ func newDeviceHandlers() (*Handlers, *stubDeviceStore) {
 func TestRegisterAndroidDeviceWithoutFirebaseAppears(t *testing.T) {
 	h, _ := newDeviceHandlers()
 
-	body := `{"id":"abc123","name":"MicaGo client","appVersion":"v0.37.0","platform":"android","mode":"lan","clientType":"flutter","pushProvider":"none","pushEnabled":false,"background":false}`
+	body := `{"id":"abc123","name":"MicaGo client","appVersion":"v0.50.0","platform":"android","mode":"lan","clientType":"flutter","pushProvider":"none","pushEnabled":false,"background":false}`
 	rec := httptest.NewRecorder()
 	h.RegisterDevice(rec, httptest.NewRequest(http.MethodPost, "/api/devices/register", bytes.NewBufferString(body)))
 	if rec.Code != http.StatusOK {
