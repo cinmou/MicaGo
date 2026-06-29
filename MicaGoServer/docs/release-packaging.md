@@ -89,7 +89,9 @@ The workflow builds:
 ## Release Notes Template
 
 ```md
-## micaGO 0.50.0
+## micaGO 0.50.0 Beta
+
+This is a beta release for early testing and feedback. It is not yet a stable production release.
 
 ### Highlights
 - Mac Companion now ships with the Go backend bundled inside the app.
@@ -102,4 +104,5 @@ The workflow builds:
 ### Known Notes
 - macOS Gatekeeper requires signed and notarized builds for a smooth public release.
 - Android production distribution should use a real release keystore instead of debug signing.
+- UI and sync behavior may still change before the first stable release.
 ```
