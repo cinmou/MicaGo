@@ -10,11 +10,7 @@ import '../chats/chats_pane.dart';
 import '../settings/settings_screen.dart';
 import 'connection_notice_host.dart';
 
-/// The post-pairing app shell: a native Material 3 messenger layout with an
-/// adaptive bottom NavigationBar (narrow) / side NavigationRail (wide).
-///
-/// Lean nav (Mategram-style): only **Chats** and **Settings**. People /
-/// Connection / Diagnostics / Debug all live inside Settings now.
+/// The post-pairing app shell: chat-first, with Settings as a secondary page.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -23,14 +19,10 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
-  int _index = 0;
   PushService? _push;
   AppController? _app;
-
-  static const _destinations = <_Destination>[
-    _Destination('nav.chats', Icons.chat_bubble_outline, Icons.chat_bubble),
-    _Destination('nav.settings', Icons.settings_outlined, Icons.settings),
-  ];
+  final ValueNotifier<int> _searchRequests = ValueNotifier<int>(0);
+  static const double _tabletBreakpoint = 840;
 
   @override
   void initState() {
@@ -52,7 +44,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   void _onOpenChatRequested() {
     if (_app?.pendingOpenChat.value == null) return;
-    if (_index != 0) setState(() => _index = 0);
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   @override
@@ -75,104 +68,74 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   void dispose() {
     _app?.pendingOpenChat.removeListener(_onOpenChatRequested);
     WidgetsBinding.instance.removeObserver(this);
+    _searchRequests.dispose();
     super.dispose();
   }
 
-  Widget _body(int index) {
-    switch (index) {
-      case 0:
-        return const ChatsPane();
-      case 1:
-        return const SettingsScreen();
-      default:
-        return const SizedBox.shrink();
-    }
+  void _openSettings() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen()));
   }
 
   @override
   Widget build(BuildContext context) {
-    final wide = MediaQuery.of(context).size.width >= 720;
     final strings = MicaLocalizations.of(context);
-
-    final scaffold = Scaffold(
-      appBar: AppBar(title: Text(strings.t(_destinations[_index].label))),
-      body: SafeArea(
-        // C19: connection banner (offline / public-fallback) + recovery snackbars.
-        child: ConnectionNoticeHost(
-          child: IndexedStack(
-            index: _index,
-            children: [
-              for (var i = 0; i < _destinations.length; i++)
-                // Build lazily-ish: only the visible body needs to be live, but
-                // IndexedStack keeps state across tab switches.
-                _body(i),
-            ],
-          ),
-        ),
+    final scheme = Theme.of(context).colorScheme;
+    final tablet = MediaQuery.sizeOf(context).width >= _tabletBreakpoint;
+    final headerBg = _homeAccent1_100(scheme);
+    final pageBg = _homeAccent1_50(scheme);
+    final chats = ConnectionNoticeHost(
+      child: ChatsPane(
+        searchRequests: _searchRequests,
+        onSearchRequested: () => _searchRequests.value++,
+        onOpenSettings: _openSettings,
       ),
-      bottomNavigationBar: wide
-          ? null
-          : NavigationBar(
-              selectedIndex: _index,
-              onDestinationSelected: (i) => setState(() => _index = i),
-              destinations: [
-                for (final d in _destinations)
-                  NavigationDestination(
-                    icon: Icon(d.icon),
-                    selectedIcon: Icon(d.selectedIcon),
-                    label: strings.t(d.label),
-                  ),
-              ],
-            ),
     );
-
-    if (!wide) return scaffold;
-
-    // Wide layout: side rail + the same scaffold body.
     return Scaffold(
-      body: SafeArea(
-        child: Row(
-          children: [
-            NavigationRail(
-              selectedIndex: _index,
-              onDestinationSelected: (i) => setState(() => _index = i),
-              // Center the rail items vertically within the rail (default is
-              // top-aligned). Alignment only — the destinations are unchanged.
-              groupAlignment: 0.0,
-              labelType: NavigationRailLabelType.all,
-              destinations: [
-                for (final d in _destinations)
-                  NavigationRailDestination(
-                    icon: Icon(d.icon),
-                    selectedIcon: Icon(d.selectedIcon),
-                    label: Text(strings.t(d.label)),
-                  ),
+      backgroundColor: pageBg,
+      appBar: tablet
+          ? null
+          : AppBar(
+              centerTitle: true,
+              backgroundColor: headerBg,
+              surfaceTintColor: Colors.transparent,
+              leading: IconButton(
+                tooltip: 'Search',
+                icon: const Icon(Icons.search),
+                onPressed: () => _searchRequests.value++,
+              ),
+              title: const Text('micaGO'),
+              actions: [
+                IconButton(
+                  tooltip: strings.t('nav.settings'),
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: _openSettings,
+                ),
               ],
             ),
-            const VerticalDivider(width: 1),
-            Expanded(
-              child: Scaffold(
-                appBar: AppBar(title: Text(_destinations[_index].label)),
-                body: ConnectionNoticeHost(
-                  child: IndexedStack(
-                    index: _index,
-                    children: [
-                      for (var i = 0; i < _destinations.length; i++) _body(i),
-                    ],
-                  ),
+      body: tablet
+          ? SafeArea(bottom: false, child: chats)
+          : DecoratedBox(
+              decoration: BoxDecoration(color: headerBg),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(color: pageBg),
+                  child: SafeArea(top: false, bottom: false, child: chats),
                 ),
               ),
             ),
-          ],
-        ),
-      ),
     );
   }
 }
 
-class _Destination {
-  final String label;
-  final IconData icon;
-  final IconData selectedIcon;
-  const _Destination(this.label, this.icon, this.selectedIcon);
-}
+Color _homeAccent1_50(ColorScheme scheme) =>
+    Color.alphaBlend(scheme.primary.withValues(alpha: 0.10), scheme.surface);
+
+Color _homeAccent1_100(ColorScheme scheme) => Color.alphaBlend(
+  scheme.primary.withValues(alpha: 0.18),
+  scheme.surfaceContainerLowest,
+);

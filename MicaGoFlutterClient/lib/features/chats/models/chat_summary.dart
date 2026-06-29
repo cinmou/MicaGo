@@ -26,6 +26,11 @@ class ChatSummary {
   final String? lastMessagePreview;
   final int? lastMessageAt; // Unix epoch ms
   final int? unreadCount;
+  // C43: the watermark-derived unread dot. `hasUnread` is the source of truth
+  // for showing the dot (set by the cache from latestRenderableAt vs the local
+  // read watermark); `latestFromMe` whether the newest message is outgoing.
+  final bool hasUnread;
+  final bool latestFromMe;
   final List<String> participants;
   final bool? isGroupRaw; // explicit flag if the server provides one
   final bool isPinned;
@@ -49,6 +54,8 @@ class ChatSummary {
     this.lastMessagePreview,
     this.lastMessageAt,
     this.unreadCount,
+    this.hasUnread = false,
+    this.latestFromMe = false,
     this.participants = const [],
     this.isGroupRaw,
     this.isPinned = false,
@@ -122,8 +129,6 @@ class ChatSummary {
     return String.fromCharCode(word.runes.first).toUpperCase();
   }
 
-  bool get hasUnread => (unreadCount ?? 0) > 0;
-
   ChatSummary copyWith({
     String? guid,
     String? chatIdentifier,
@@ -137,6 +142,8 @@ class ChatSummary {
     String? lastMessagePreview,
     int? lastMessageAt,
     int? unreadCount,
+    bool? hasUnread,
+    bool? latestFromMe,
     List<String>? participants,
     bool? isGroupRaw,
     bool? isPinned,
@@ -158,6 +165,8 @@ class ChatSummary {
       lastMessagePreview: lastMessagePreview ?? this.lastMessagePreview,
       lastMessageAt: lastMessageAt ?? this.lastMessageAt,
       unreadCount: unreadCount ?? this.unreadCount,
+      hasUnread: hasUnread ?? this.hasUnread,
+      latestFromMe: latestFromMe ?? this.latestFromMe,
       participants: participants ?? this.participants,
       isGroupRaw: isGroupRaw ?? this.isGroupRaw,
       isPinned: isPinned ?? this.isPinned,
@@ -191,6 +200,10 @@ class ChatSummary {
           asInt(json['lastMessageAt']) ??
           asInt(json['lastMessageDate']),
       unreadCount: asInt(json['unreadCount']),
+      // hasUnread is cache-derived (not a server field); latestRenderableFromMe
+      // comes from the server (C43).
+      hasUnread: (json['hasUnread'] as bool?) ?? false,
+      latestFromMe: (json['latestRenderableFromMe'] as bool?) ?? false,
       participants:
           (json['participants'] as List?)?.whereType<String>().toList(
             growable: false,
@@ -218,6 +231,7 @@ class ChatSummary {
     'latestRenderablePreview': lastMessagePreview,
     'latestRenderableAt': lastMessageAt,
     'unreadCount': unreadCount,
+    'latestRenderableFromMe': latestFromMe,
     'participants': participants,
     'isGroup': isGroupRaw,
     'isPinned': isPinned,

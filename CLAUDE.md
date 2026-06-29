@@ -49,6 +49,133 @@ Three components:
   guides (android-client-connection / remote-access-cloudflare / notifications-setup /
   manual-test-flow) are still English-only — the localized index marks them "(英文)".
 
+## Chat-row crash fix + cleanup (C44, backend v0.36)
+
+- **White-screen fix.** The chat row used a `ListTile` whose `trailing` (time +
+  draggable badge) could be reported full-width → "Trailing widget consumes the
+  entire tile width" layout assertion → blank home page. Rebuilt `_ChatRow` as a
+  custom `Row` (`InkWell` + avatar + `Expanded` title/preview + trailing column),
+  so there's no `ListTile` trailing-width constraint. Same visual spec (tinted
+  rounded card for numbered unread, plain dot otherwise).
+- **Badge controller crash fix.** `_DraggableUnreadBadge` held the spring
+  `AnimationController` in a **lazy** `late final = AnimationController(...)`. When
+  the badge was removed the same frame it appeared, the field was first constructed
+  inside `dispose()`, which touches an inherited widget (`TickerMode`) on a
+  deactivated element → "Looking up a deactivated widget's ancestor is unsafe."
+  Now created eagerly in `initState`.
+- **Dead-code cleanup.** Removed the zero-caller `ChatListController.hideChat`
+  (single) and `ChatListController.alwaysShowChat`. Kept `setChatAlwaysVisible`
+  (still tested + part of the hidden-chat filter).
+- Versions bumped to **0.36.0** (Go, Flutter pubspec + `kAppVersion`, Companion).
+
+## Watermark-derived unread dot (C43)
+
+- **The home unread dot is now derived from chat data, not a live counter.**
+  Replaced the fragile "increment `unreadCount` only on WS/delta `message:new`"
+  model (which missed app-closed / FCM-wake / reconnect cases) with BlueBubbles'
+  rule, computed on every refresh:
+  `hasUnread = latestRenderableAt > lastSeenAt && !latestRenderableFromMe`.
+- **Server:** `ChatJSON.latestRenderableFromMe` (added to the `ListChats` query —
+  the `is_from_me` of the latest renderable message). Additive; no version bump.
+- **Client cache (schema v5):** new `chats.last_seen_at` + `chats.latest_from_me`
+  columns. `last_seen_at` is seeded to the chat's latest **only on first insert**
+  (existing history starts "seen"); `bumpChatWithMessage` advances
+  `latest_renderable_at`/`latest_from_me` but leaves the watermark behind unless
+  `seen` (my message OR the chat is open); `markChatsSeen` catches the watermark up
+  (open / mark-read / badge-drag). `_chatFromRow` derives `hasUnread`. `load()` now
+  displays from the cache (filtered to the server's guids) so reload/delta/resume/
+  pull-to-refresh all agree.
+- **Decoupled from notifications entirely** — FCM/WS/keep-alive never gate the dot.
+  `ChatSummary.hasUnread` is the source of truth; `unreadCount` is only the badge
+  number. Visuals: `hasUnread && count>0` → tinted rounded card + red number pill;
+  `hasUnread && count==0` → plain accent dot, no tint; `!hasUnread` → normal row.
+- **Draggable badge** (`_DraggableUnreadBadge`): long-press the badge to grab, drag
+  it away; past ~44px on release → `markRoutesRead` (advances `lastSeenAt`, dot
+  clears); under → elastic spring-back. Doesn't open the chat (long-press gesture,
+  no scroll conflict).
+- **Deleted** the old `clearUnreadForChats` / `setChatUnreadCount` / `unreadCounts`
+  cache methods and the `load()` unread-overlay.
+
+## Pin/hide + test-contact Debug card (C42, backend v0.34)
+
+- **Test contact, two-way via the Companion Debug card.** New
+  `POST /api/test-contact/inbound` injects a message *from* the test contact
+  (`is_from_me=0`) + broadcasts `message:new` → pushes to the phone like a received
+  iMessage (`internal/relaydb/testcontact.go` `AppendTestInboundMessage`; handler in
+  `internal/httpapi/testcontact.go`). The Companion's **Message Inspector** (Debug)
+  has a `TestContactDebugCard` pinned at the top: a 2-way scratchpad (text field →
+  inbound; the phone's loopback replies poll in via `GET /api/chats/{guid}/messages`).
+  Each **server (re)start resets** the conversation to just the greeting
+  (`ResetTestContactMessages`, called from `app.Run`).
+- **Sync Control ↔ Debug alignment.** `RecentMessagesCard` now fetches
+  `messages/recent?debug=true` (the full raw set — no silently dropped rows) and
+  shows a bracketed placeholder (`[图片]`/`[视频]`/`[语音]`/`[贴图]`/`[文件]`, via
+  `RecentMessage.previewLabel` + `RecentAttachment.placeholder`) instead of a blank
+  "(no text)" row.
+- **Client pin/hide (chat-level + message-level), all client-only.** Cache schema
+  **v4**: `chats.pinned` column + a `hidden_messages` tombstone table (kept out of
+  the messages table so a server re-sync's delete+reinsert can't resurrect a hidden
+  message). Chat list: **swipe right = clear the unread dot, swipe left = hide**
+  (`Dismissible`); **long-press = Pin/Unpin or Hide** (`_showChatMenu`). Pinned chats
+  sort to the top (`ORDER BY pinned DESC`). Thread: long-press a message → **Hide**
+  (`MessageAction.hide` → `ThreadController.hideMessage`). Settings → **Hidden items**:
+  "Release hidden messages" + "Release hidden contacts" (`_HiddenItemsCard`).
+- **Fixed a latent bug:** `upsertChats` used `ConflictAlgorithm.replace`, which
+  delete+reinserts and **reset the flag columns** (`hidden`/`always_visible`/`pinned`)
+  on every server refresh. Switched to `INSERT … ON CONFLICT(guid) DO UPDATE` that
+  only rewrites json/timestamp, so the flags persist.
+- **Requires rebuilding the bundled backend** (new endpoint + reset-on-start) and the
+  client (schema v4 rebuilds the cache).
+
+## Unread badges (C41)
+
+- The chat-list card shows a circular unread count (`_UnreadCountPill` in
+  `chat_list_screen.dart`). The count is **client-tracked** — the server's
+  `ChatJSON` does not carry unread.
+- **Ownership:** the local cache holds the count. `bumpChatWithMessage(markUnread:)`
+  increments on an incoming WS `message:new`; the list's `markRoutesRead` (run from
+  `_openMerged`, the single thread-entry point for both panes and notification
+  deep-links) clears on open; `_switchRoute` clears a sibling route on switch.
+- **The bug that was fixed:** `load()` displayed the raw server list (no unread), so
+  every reload wiped the badges even though `upsertChats` preserved the count in the
+  cache. `load()` now overlays the cached counts (`LocalCacheStore.unreadCounts()`)
+  onto the authoritative server result — badges survive reloads, and chats the
+  server drops still disappear (don't read the whole list back from cache, which
+  never prunes).
+- **Idempotent increment:** `_patchMessageEvent` checks `hasMessageGuid` **before**
+  the upsert and only marks unread for a genuinely new guid, so a replayed WS event
+  can't over-count.
+- **Cleanup:** removed the redundant unread-clear in `MessageThreadScreen.initState`
+  (the list's `markRoutesRead` already clears every open). `setActiveChatGuid` keeps
+  the open route from re-incrementing while on screen.
+
+## Offline test contact (C40)
+
+- A self-contained **loopback test contact** (`test@micago.cinmou` — a domain
+  that does not resolve, so nothing can ever be delivered). Lets you exercise the
+  chat/notification pipeline without messaging a real person.
+- **Server** (`internal/testcontact` constants + `internal/relaydb/testcontact.go`):
+  a synthetic chat `iMessage;-;test@micago.cinmou` upserted into relay.db with a
+  seeded inbound greeting. `SetTestContactEnabled` seeds/removes it; the on/off
+  flag lives in `sync_state` (`test_contact_enabled`). Synthetic message rows use
+  **NULL `source_rowid`** on purpose — the delta cursor is `MAX(source_rowid)`, so
+  a synthetic rowid would corrupt real incremental sync; NULL keeps them out of
+  the delta watermark entirely (they still show on chat open via `date_created`
+  and live over WS). Endpoints: `GET/PUT /api/test-contact`.
+- **Send interception** (`internal/httpapi`): `SendText` branches to
+  `sendTestLoopback` for the test chat **before** any AppleScript/Messages
+  machinery — it records the message as a delivered outgoing row and confirms it
+  over the normal `send:match` path. `SendAttachment` rejects the test chat
+  (text-only). Nothing ever reaches Messages.app. No auto-reply (record-only).
+- **Client**: a **Settings → Testing** switch (`_TestContactCard`,
+  `AppController.setTestContactEnabled` → `PUT /api/test-contact`). Enabling
+  broadcasts the greeting as `message:new`; the chat-list controller reloads via a
+  new `AppController.chatListReloads` signal (also fired on disable) so the chat
+  appears/disappears without a manual refresh. New l10n: `settings.testing` +
+  `settings.testContact*`.
+- **Requires rebuilding the bundled backend** (new endpoints + send interception)
+  and the client.
+
 ## Sticker bytes not served (C39)
 
 - **Client showed "贴纸" but no image** because the sticker's file lives in

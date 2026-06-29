@@ -25,6 +25,20 @@ class MessageDelta {
   });
 }
 
+class TestContactConfig {
+  final bool available;
+  final bool enabled;
+
+  const TestContactConfig({required this.available, required this.enabled});
+
+  factory TestContactConfig.fromJson(Map<String, dynamic> json) {
+    return TestContactConfig(
+      available: (json['available'] as bool?) ?? true,
+      enabled: (json['enabled'] as bool?) ?? false,
+    );
+  }
+}
+
 class MessageActionCapabilities {
   final bool available;
   final bool edit;
@@ -466,6 +480,52 @@ class ApiClient {
       return null;
     }
   }
+
+  /// `GET /api/test-contact` — current offline loopback test-contact settings.
+  /// Returns null on any failure (the toggle then shows unavailable).
+  Future<TestContactConfig?> getTestContactConfig() async {
+    try {
+      final res = await _send(
+        () => _http
+            .get(_uri('/api/test-contact'), headers: _authHeaders)
+            .timeout(const Duration(seconds: 10)),
+      );
+      if (res.statusCode != 200) return null;
+      return TestContactConfig.fromJson(_decodeObject(res));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool?> getTestContactEnabled() async =>
+      (await getTestContactConfig())?.enabled;
+
+  /// `PUT /api/test-contact` — update the offline test contact. Returns the
+  /// new config, or null on failure.
+  Future<TestContactConfig?> setTestContact({bool? enabled}) async {
+    try {
+      final body = <String, Object?>{};
+      if (enabled != null) body['enabled'] = enabled;
+      final res = await _send(
+        () => _http
+            .put(
+              _uri('/api/test-contact'),
+              headers: {..._authHeaders, 'Content-Type': 'application/json'},
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 15)),
+      );
+      if (res.statusCode != 200) return null;
+      return TestContactConfig.fromJson(_decodeObject(res));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `PUT /api/test-contact` — turn the offline test contact on or off. Returns
+  /// the new state, or null on failure.
+  Future<bool?> setTestContactEnabled(bool enabled) async =>
+      (await setTestContact(enabled: enabled))?.enabled;
 
   /// `POST /api/devices/register` — register this client so the server/Companion
   /// can show a connected device (C19). [body] is a small identity built by

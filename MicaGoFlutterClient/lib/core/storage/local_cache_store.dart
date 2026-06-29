@@ -16,7 +16,10 @@ class LocalCacheStore {
   // ships a single canonical renderable timeline. Bump this when renderability
   // semantics change, because cached JSON may carry old attachment/noise rows
   // even after the server has learned to filter them.
-  static const int _schemaVersion = 3;
+  // v4: chats.pinned + a hidden_messages tombstone table (C42 pin/hide).
+  // v5: chats.last_seen_at + chats.latest_from_me drive the watermark-derived
+  // unread dot (C43) — unread is computed from the data, not a fragile counter.
+  static const int _schemaVersion = 5;
 
   Future<void> open() async {
     if (_db != null) return;
@@ -42,7 +45,17 @@ CREATE TABLE chats (
   latest_renderable_at INTEGER,
   hidden INTEGER NOT NULL DEFAULT 0,
   always_visible INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  latest_from_me INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
+);
+''');
+    // Tombstones for client-side message hiding. Kept out of the messages table
+    // so a server re-sync (delete + reinsert) never resurrects a hidden message.
+    await db.execute('''
+CREATE TABLE hidden_messages (
+  guid TEXT PRIMARY KEY
 );
 ''');
     await db.execute('''
@@ -77,6 +90,7 @@ CREATE TABLE metadata (
     await db.execute('DROP TABLE IF EXISTS messages;');
     await db.execute('DROP TABLE IF EXISTS chats;');
     await db.execute('DROP TABLE IF EXISTS metadata;');
+    await db.execute('DROP TABLE IF EXISTS hidden_messages;');
     await _createSchema(db);
   }
 
@@ -97,9 +111,11 @@ CREATE TABLE metadata (
     bool includeHidden = false,
   }) async {
     final db = await _ready();
+    // Pinned chats sort to the top; within each group, newest activity first.
     final rows = await db.query(
       'chats',
-      orderBy: 'COALESCE(latest_renderable_at, 0) DESC, updated_at DESC',
+      orderBy:
+          'pinned DESC, COALESCE(latest_renderable_at, 0) DESC, updated_at DESC',
     );
     return rows
         .map(_chatFromRow)
@@ -110,15 +126,64 @@ CREATE TABLE metadata (
 
   Future<void> upsertChats(Iterable<ChatSummary> chats) async {
     final db = await _ready();
+    final existingRows = await db.query(
+      'chats',
+      columns: const ['guid', 'json'],
+    );
+    final existingUnread = <String, int>{};
+    for (final row in existingRows) {
+      final guid = row['guid'] as String?;
+      if (guid == null) continue;
+      try {
+        final raw = jsonDecode(row['json'] as String) as Map<String, dynamic>;
+        final count = ChatSummary.fromJson(raw).unreadCount;
+        if (count != null && count > 0) existingUnread[guid] = count;
+      } catch (_) {
+        // Ignore corrupt cache rows; the fresh server row will replace them.
+      }
+    }
     final batch = db.batch();
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final chat in chats) {
-      batch.insert('chats', {
-        'guid': chat.guid,
-        'json': jsonEncode(chat.toJson()),
-        'latest_renderable_at': chat.lastMessageAt,
-        'updated_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      final mergedUnread = chat.unreadCount ?? existingUnread[chat.guid];
+      final next = mergedUnread == null
+          ? chat
+          : chat.copyWith(unreadCount: mergedUnread);
+      // ON CONFLICT DO UPDATE (not REPLACE) so the local flag columns survive a
+      // server refresh. last_seen_at is set ONLY on first insert (= the chat's
+      // current latest) so existing history starts "seen" — it is intentionally
+      // absent from the UPDATE clause so later messages become unread.
+      batch.rawInsert(
+        '''
+INSERT INTO chats (guid, json, latest_renderable_at, latest_from_me, last_seen_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(guid) DO UPDATE SET
+  json = excluded.json,
+  latest_renderable_at = excluded.latest_renderable_at,
+  latest_from_me = excluded.latest_from_me,
+  updated_at = excluded.updated_at
+''',
+        [
+          next.guid,
+          jsonEncode(next.toJson()),
+          next.lastMessageAt,
+          next.latestFromMe ? 1 : 0,
+          next.lastMessageAt ?? 0,
+          now,
+        ],
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> removeChats(Iterable<String> guids) async {
+    final ids = guids.where((g) => g.trim().isNotEmpty).toSet();
+    if (ids.isEmpty) return;
+    final db = await _ready();
+    final batch = db.batch();
+    for (final guid in ids) {
+      batch.delete('messages', where: 'chat_guid = ?', whereArgs: [guid]);
+      batch.delete('chats', where: 'guid = ?', whereArgs: [guid]);
     }
     await batch.commit(noResult: true);
   }
@@ -133,6 +198,7 @@ CREATE TABLE metadata (
     );
   }
 
+  /// Forces a noise-only chat to stay visible (overrides the renderable filter).
   Future<void> setChatAlwaysVisible(String guid, bool visible) async {
     final db = await _ready();
     await db.update(
@@ -143,14 +209,78 @@ CREATE TABLE metadata (
     );
   }
 
+  // C42: pin/hide management. pinned/hidden live in columns so a server upsert
+  // (which only rewrites the json blob) never resets them.
+
+  Future<void> setChatPinned(String guid, bool pinned) async {
+    final db = await _ready();
+    await db.update(
+      'chats',
+      {'pinned': pinned ? 1 : 0},
+      where: 'guid = ?',
+      whereArgs: [guid],
+    );
+  }
+
+  /// Number of user-hidden chats (excludes always-visible overrides).
+  Future<int> hiddenChatCount() async {
+    final db = await _ready();
+    final r = await db.rawQuery(
+      'SELECT COUNT(*) AS n FROM chats WHERE hidden = 1 AND always_visible = 0',
+    );
+    return (r.first['n'] as int?) ?? 0;
+  }
+
+  /// Un-hides every hidden chat. Returns how many were restored.
+  Future<int> releaseAllHiddenChats() async {
+    final db = await _ready();
+    return db.update('chats', {'hidden': 0}, where: 'hidden = 1');
+  }
+
+  /// Hides a single message on the client only (a tombstone; the server copy is
+  /// untouched). Idempotent.
+  Future<void> setMessageHidden(String guid, bool hidden) async {
+    if (guid.isEmpty) return;
+    final db = await _ready();
+    if (hidden) {
+      await db.insert('hidden_messages', {
+        'guid': guid,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    } else {
+      await db.delete('hidden_messages', where: 'guid = ?', whereArgs: [guid]);
+    }
+  }
+
+  Future<int> hiddenMessageCount() async {
+    final db = await _ready();
+    final r = await db.rawQuery('SELECT COUNT(*) AS n FROM hidden_messages');
+    return (r.first['n'] as int?) ?? 0;
+  }
+
+  /// The set of client-hidden message guids, to filter server-fetched pages that
+  /// bypass the cache read.
+  Future<Set<String>> hiddenMessageGuids() async {
+    final db = await _ready();
+    final rows = await db.query('hidden_messages', columns: const ['guid']);
+    return {for (final r in rows) r['guid'] as String};
+  }
+
+  /// Restores every client-hidden message. Returns how many were released.
+  Future<int> releaseAllHiddenMessages() async {
+    final db = await _ready();
+    return db.delete('hidden_messages');
+  }
+
   Future<List<MessageModel>> listMessages(
     String chatGuid, {
     int limit = 200,
   }) async {
     final db = await _ready();
+    // Exclude client-hidden messages (tombstoned in hidden_messages).
     final rows = await db.query(
       'messages',
-      where: 'chat_guid = ?',
+      where:
+          'chat_guid = ? AND (guid IS NULL OR guid NOT IN (SELECT guid FROM hidden_messages))',
       whereArgs: [chatGuid],
       orderBy: 'date_created DESC, updated_at DESC',
       limit: limit,
@@ -193,7 +323,17 @@ CREATE TABLE metadata (
     await batch.commit(noResult: true);
   }
 
-  Future<bool> bumpChatWithMessage(MessageModel message) async {
+  /// Advances a chat's latest-message state from an incoming/outgoing message.
+  ///
+  /// [seen] (the message is mine OR its chat is open) also advances the read
+  /// watermark so the chat does not light an unread dot; otherwise the watermark
+  /// is left behind so the chat reads as unread (C43). [markUnread] only bumps
+  /// the auxiliary numeric count — the dot itself is derived from the watermark.
+  Future<bool> bumpChatWithMessage(
+    MessageModel message, {
+    bool markUnread = false,
+    bool seen = false,
+  }) async {
     final chatGuid = message.chatGuid;
     if (chatGuid == null || chatGuid.isEmpty) return false;
     final db = await _ready();
@@ -209,24 +349,61 @@ CREATE TABLE metadata (
     if (at == null) return true;
     final current = chat.lastMessageAt ?? 0;
     if (at < current) return true;
+    final unreadCount = seen
+        ? 0
+        : markUnread
+        ? (chat.unreadCount ?? 0) + 1
+        : chat.unreadCount;
     final bumped = chat.copyWith(
       lastMessageAt: at,
       lastMessagePreview: _previewForMessage(message),
+      unreadCount: unreadCount,
+      latestFromMe: message.isFromMe,
       hasRenderableMessages: true,
       unsupportedOnly: false,
       hiddenReason: '',
     );
-    await db.update(
-      'chats',
-      {
-        'json': jsonEncode(bumped.toJson()),
-        'latest_renderable_at': at,
-        'updated_at': DateTime.now().millisecondsSinceEpoch,
-      },
-      where: 'guid = ?',
-      whereArgs: [chatGuid],
-    );
+    final values = <String, Object?>{
+      'json': jsonEncode(bumped.toJson()),
+      'latest_renderable_at': at,
+      'latest_from_me': message.isFromMe ? 1 : 0,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    };
+    // Only advance the watermark when the user has effectively seen it.
+    if (seen) values['last_seen_at'] = at;
+    await db.update('chats', values, where: 'guid = ?', whereArgs: [chatGuid]);
     return true;
+  }
+
+  /// Marks chats as read: the watermark catches up to the latest message, which
+  /// clears the derived unread dot, and the auxiliary count is zeroed. Called on
+  /// chat open, mark-as-read, and the drag-to-dismiss badge gesture (C43).
+  Future<void> markChatsSeen(Iterable<String> guids) async {
+    final db = await _ready();
+    final batch = db.batch();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final guid in guids) {
+      final rows = await db.query(
+        'chats',
+        where: 'guid = ?',
+        whereArgs: [guid],
+        limit: 1,
+      );
+      if (rows.isEmpty) continue;
+      final latestAt = (rows.first['latest_renderable_at'] as int?) ?? 0;
+      final chat = _chatFromRow(rows.first).copyWith(unreadCount: 0);
+      batch.update(
+        'chats',
+        {
+          'json': jsonEncode(chat.toJson()),
+          'last_seen_at': latestAt,
+          'updated_at': now,
+        },
+        where: 'guid = ?',
+        whereArgs: [guid],
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   Future<void> addPending(String chatGuid, MessageModel message) async {
@@ -434,11 +611,25 @@ CREATE TABLE metadata (
 
   ChatSummary _chatFromRow(Map<String, Object?> row) {
     final raw = jsonDecode(row['json'] as String) as Map<String, dynamic>;
-    final chat = ChatSummary.fromJson(raw);
+    final pinned = (row['pinned'] as int? ?? 0) != 0;
     final alwaysVisible = (row['always_visible'] as int? ?? 0) != 0;
-    return alwaysVisible && !chat.hasRenderableMessages
-        ? ChatSummary.fromJson({...raw, 'hasRenderableMessages': true})
-        : chat;
+    final latestAt = (row['latest_renderable_at'] as int?) ?? 0;
+    final lastSeenAt = (row['last_seen_at'] as int?) ?? 0;
+    final latestFromMe = (row['latest_from_me'] as int? ?? 0) != 0;
+    // C43: the unread dot is derived here from the data — the chat's latest
+    // renderable message is newer than this client last saw, and not from me.
+    final hasUnread = latestAt > lastSeenAt && !latestFromMe;
+    // pinned/hasUnread/latestFromMe live in columns (survive server upserts);
+    // fold them into the model.
+    final merged = {
+      ...raw,
+      'isPinned': pinned,
+      'hasUnread': hasUnread,
+      'latestRenderableFromMe': latestFromMe,
+      if (alwaysVisible && raw['hasRenderableMessages'] != true)
+        'hasRenderableMessages': true,
+    };
+    return ChatSummary.fromJson(merged);
   }
 
   bool _isHiddenRow(List<Map<String, Object?>> rows, String guid) {

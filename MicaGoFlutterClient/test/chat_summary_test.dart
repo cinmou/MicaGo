@@ -47,7 +47,9 @@ void main() {
         'isMuted': true,
         'isGroup': true,
       });
-      expect(c.hasUnread, isTrue);
+      // C43: hasUnread is the watermark-derived dot, not unreadCount > 0; the
+      // server payload doesn't carry it, so it stays false while the count parses.
+      expect(c.hasUnread, isFalse);
       expect(c.unreadCount, 3);
       expect(c.lastMessagePreview, 'see you soon');
       expect(c.lastMessageAt, 1717372800000);

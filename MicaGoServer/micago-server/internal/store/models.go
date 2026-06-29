@@ -42,18 +42,23 @@ type ChatJSON struct {
 	// capabilities — the client consumes these booleans directly and never
 	// re-derives sendability from the service + setting. They match exactly what
 	// the send handlers enforce.
-	CanSendText        bool    `json:"canSendText"`
-	CanSendAttachments bool    `json:"canSendAttachments"`
-	DisplayName        *string `json:"displayName"`
-	IsArchived         bool    `json:"isArchived"`
+	CanSendText        bool     `json:"canSendText"`
+	CanSendAttachments bool     `json:"canSendAttachments"`
+	DisplayName        *string  `json:"displayName"`
+	IsArchived         bool     `json:"isArchived"`
+	Participants       []string `json:"participants,omitempty"`
 
 	// C7 renderable-timeline summary (additive). Populated by the relay store so
 	// the client can hide noisy chats and show a real last-message preview.
 	HasRenderableMessages   bool    `json:"hasRenderableMessages"`
 	LatestRenderableAt      *int64  `json:"latestRenderableAt,omitempty"`
 	LatestRenderablePreview *string `json:"latestRenderablePreview,omitempty"`
-	UnsupportedOnly         bool    `json:"unsupportedOnly"`
-	HiddenReason            string  `json:"hiddenReason,omitempty"` // "" | "debug_only" | "empty"
+	// LatestRenderableFromMe reports whether the latest renderable message is
+	// outgoing — the client uses it so a chat whose newest message was sent by me
+	// (from the Mac or another device) never lights an unread dot.
+	LatestRenderableFromMe bool   `json:"latestRenderableFromMe"`
+	UnsupportedOnly        bool   `json:"unsupportedOnly"`
+	HiddenReason           string `json:"hiddenReason,omitempty"` // "" | "debug_only" | "empty"
 }
 
 type MessageJSON struct {

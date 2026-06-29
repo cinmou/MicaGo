@@ -13,18 +13,21 @@ ChatSummary chat(String guid, String handle, String effective, {int? at}) =>
 
 void main() {
   group('virtual contact merge (client-only)', () {
-    test('iMessage-phone + iMessage-email + SMS-phone for one contact merge', () {
-      final chats = [
-        chat('iMessage;-;+1555', '+1555', 'imessage', at: 100),
-        chat('iMessage;-;a@b.com', 'a@b.com', 'imessage', at: 90),
-        chat('SMS;-;+1555', '+1555', 'sms', at: 110),
-      ];
-      // All three resolve to the same contact.
-      final merged = mergeChatsByContact(chats, (_) => 'contact-7');
-      expect(merged.length, 1);
-      expect(merged.first.isMerged, isTrue);
-      expect(merged.first.routes.length, 3);
-    });
+    test(
+      'iMessage-phone + iMessage-email + SMS-phone for one contact merge',
+      () {
+        final chats = [
+          chat('iMessage;-;+1555', '+1555', 'imessage', at: 100),
+          chat('iMessage;-;a@b.com', 'a@b.com', 'imessage', at: 90),
+          chat('SMS;-;+1555', '+1555', 'sms', at: 110),
+        ];
+        // All three resolve to the same contact.
+        final merged = mergeChatsByContact(chats, (_) => 'contact-7');
+        expect(merged.length, 1);
+        expect(merged.first.isMerged, isTrue);
+        expect(merged.first.routes.length, 3);
+      },
+    );
 
     test('default route prefers iMessage even if SMS is more recent', () {
       final chats = [
@@ -83,6 +86,29 @@ void main() {
       final merged = mergeChatsByContact(chats, (_) => 'c1').first;
       expect(merged.lastMessageAt, 200);
       expect(merged.lastMessagePreview, 'newest sms');
+    });
+
+    test('unread count sums every route; hasUnread is per-route derived', () {
+      final merged = mergeChatsByContact([
+        ChatSummary.fromJson({
+          'guid': 'iMessage;-;+1555',
+          'chatIdentifier': '+1555',
+          'effectiveService': 'imessage',
+          'unreadCount': 2,
+          'hasUnread': true,
+        }),
+        ChatSummary.fromJson({
+          'guid': 'SMS;-;+1555',
+          'chatIdentifier': '+1555',
+          'effectiveService': 'sms',
+          'unreadCount': 3,
+        }),
+      ], (_) => 'c1').single;
+
+      expect(merged.unreadCount, 5);
+      // C43: the dot is the derived watermark state — any unread route makes the
+      // merged contact unread, independent of the count.
+      expect(merged.hasUnread, isTrue);
     });
   });
 }

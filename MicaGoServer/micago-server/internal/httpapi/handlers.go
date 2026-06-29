@@ -27,6 +27,7 @@ import (
 	"micagoserver/internal/relaydb"
 	micasend "micagoserver/internal/send"
 	"micagoserver/internal/store"
+	"micagoserver/internal/testcontact"
 	"micagoserver/internal/version"
 )
 
@@ -191,6 +192,7 @@ type Handlers struct {
 	syncNow         func(context.Context) (store.ServerSyncDiagnostics, error)
 	syncSettings    syncSettingsService
 	actions         imessage.Performer
+	testContact     testContactStore
 }
 
 // SetRuleService wires the v0.11.3 sync-rule store after construction (kept off
@@ -687,6 +689,14 @@ func (h *Handlers) chatSendable(ctx context.Context, chatInfo *store.ChatInfo) (
 }
 
 func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
+	// The offline test contact loops back into relay.db instead of Messages.app,
+	// so it needs none of the AppleScript send machinery — branch before the
+	// send-dependency check.
+	if testcontact.IsTestChatGUID(r.PathValue("guid")) {
+		h.sendTestLoopback(w, r)
+		return
+	}
+
 	if h.send == nil || h.send.Pending == nil || h.send.Sender == nil {
 		writeInternalError(w)
 		return
@@ -889,6 +899,12 @@ const maxOutgoingAttachmentBytes = 100 << 20
 // arrives through the normal sync/WS path. The send is gated to iMessage only —
 // SMS/RCS/unknown chats are read-only on the client and rejected here too.
 func (h *Handlers) SendAttachment(w http.ResponseWriter, r *http.Request) {
+	// The offline test contact is text-only (no real send path to carry bytes).
+	if testcontact.IsTestChatGUID(r.PathValue("guid")) {
+		writeBadRequest(w, "the test contact supports text messages only")
+		return
+	}
+
 	if h.send == nil || h.send.Sender == nil {
 		writeInternalError(w)
 		return

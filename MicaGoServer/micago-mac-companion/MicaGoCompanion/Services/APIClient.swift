@@ -193,10 +193,13 @@ struct APIClient {
 
     /// Recent messages for the management view (not a chat client).
     func recentMessages(limit: Int) async throws -> [RecentMessage] {
+        // debug=true bypasses the renderable filter so the list matches the
+        // Debug inspector's full set (no silently dropped rows / blank gaps).
         let (data, response) = try await Self.session().data(for: request(
             "api/messages/recent",
             query: [URLQueryItem(name: "limit", value: "\(limit)"),
-                    URLQueryItem(name: "service", value: "all")]))
+                    URLQueryItem(name: "service", value: "all"),
+                    URLQueryItem(name: "debug", value: "true")]))
         try Self.validate(response, body: data)
         return try JSONDecoder().decode(RecentMessagesResponse.self, from: data).data
     }
@@ -319,6 +322,48 @@ struct APIClient {
             throw APIError.status(http.statusCode)
         }
     }
+
+    // MARK: - Test contact (offline loopback)
+
+    /// GET /api/test-contact — whether the offline test contact is on.
+    func testContactInfo() async throws -> TestContactInfo {
+        let (data, response) = try await Self.session().data(for: request("api/test-contact"))
+        try Self.validate(response, body: data)
+        return try JSONDecoder().decode(TestContactInfo.self, from: data)
+    }
+
+    /// PUT /api/test-contact — turn the offline test contact on or off.
+    func setTestContact(enabled: Bool) async throws -> TestContactInfo {
+        let req = try jsonRequest("api/test-contact", method: "PUT", body: ["enabled": enabled])
+        let (data, response) = try await Self.session().data(for: req)
+        try Self.validate(response, body: data)
+        // PUT returns {enabled}; re-read for the full info shape.
+        _ = data
+        return try await testContactInfo()
+    }
+
+    /// POST /api/test-contact/inbound — inject a message *from* the test contact,
+    /// which pushes to the client like a received iMessage.
+    func sendTestInbound(_ text: String) async throws {
+        let req = try jsonRequest("api/test-contact/inbound", method: "POST", body: ["text": text])
+        let (data, response) = try await Self.session().data(for: req)
+        try Self.validate(response, body: data)
+    }
+
+    /// GET /api/chats/{guid}/messages — the conversation, newest first.
+    func chatMessages(guid: String, limit: Int = 200) async throws -> [RecentMessage] {
+        let req = request("api/chats/\(guid)/messages", query: [URLQueryItem(name: "limit", value: "\(limit)")])
+        let (data, response) = try await Self.session().data(for: req)
+        try Self.validate(response, body: data)
+        return try JSONDecoder().decode(RecentMessagesResponse.self, from: data).data
+    }
+}
+
+struct TestContactInfo: Codable {
+    var available: Bool
+    var enabled: Bool
+    var handle: String?
+    var chatGuid: String?
 }
 
 enum APIError: LocalizedError {

@@ -22,6 +22,7 @@ class ChatListController extends ChangeNotifier {
   String? error;
   StreamSubscription<WsEvent>? _wsSub;
   StreamSubscription<MessageModel>? _deltaSub;
+  StreamSubscription<void>? _reloadSub;
   Timer? _reloadDebounce;
 
   /// When true, also request debug-only/noise-only chats from the server.
@@ -31,10 +32,14 @@ class ChatListController extends ChangeNotifier {
 
   void startRealtime() {
     _wsSub ??= app.ws.events.listen(_onWsEvent);
-    // C21: a delta catch-up message means a chat summary changed — reload the
-    // list (debounced) so the last-message preview/order updates even when no
-    // WebSocket event fired.
-    _deltaSub ??= app.deltaMessages.listen((_) => _scheduleServerReload());
+    // Delta catch-up is already applied to the cache by AppController. The chat
+    // list only needs a lightweight cache refresh here; doing another upsert per
+    // message doubles DB work and hurts scrolling/resume performance.
+    _deltaSub ??= app.deltaMessages.listen(
+      (_) => unawaited(_reloadFromCache()),
+    );
+    // The test contact toggling on/off adds/removes a chat off-band.
+    _reloadSub ??= app.chatListReloads.listen((_) => _scheduleServerReload());
     unawaited(app.catchUp(reason: 'chat-list'));
   }
 
@@ -73,8 +78,14 @@ class ChatListController extends ChangeNotifier {
     try {
       final result = await api.getChats(debug: includeDebug);
       await app.cache.upsertChats(result);
-      chats = result;
-      state = result.isEmpty ? ChatListState.empty : ChatListState.loaded;
+      // Display from the cache, restricted to the chats the server still returns.
+      // The cache derives the unread dot (watermark) and pin order, so a full
+      // reload, delta, resume, or pull-to-refresh all yield the same correct
+      // unread state — independent of FCM / WS / notifications (C43).
+      final live = {for (final c in result) c.guid};
+      final cached = await app.cache.listChats(includeDebug: includeDebug);
+      chats = cached.where((c) => live.contains(c.guid)).toList();
+      state = chats.isEmpty ? ChatListState.empty : ChatListState.loaded;
       error = null;
     } on ApiException catch (e) {
       final cached = await app.cache.listChats(includeDebug: includeDebug);
@@ -90,14 +101,20 @@ class ChatListController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> hideChat(String guid, bool hidden) async {
-    await app.cache.setChatHidden(guid, hidden);
+  /// C42: hide every route of a (possibly merged) contact, then reload once.
+  Future<void> hideChats(Iterable<String> guids) async {
+    for (final guid in guids) {
+      await app.cache.setChatHidden(guid, true);
+    }
     chats = await app.cache.listChats(includeDebug: includeDebug);
     notifyListeners();
   }
 
-  Future<void> alwaysShowChat(String guid, bool visible) async {
-    await app.cache.setChatAlwaysVisible(guid, visible);
+  /// C42: pin/unpin every route of a contact so the merged card sorts to the top.
+  Future<void> setPinned(Iterable<String> guids, bool pinned) async {
+    for (final guid in guids) {
+      await app.cache.setChatPinned(guid, pinned);
+    }
     chats = await app.cache.listChats(includeDebug: includeDebug);
     notifyListeners();
   }
@@ -152,23 +169,57 @@ class ChatListController extends ChangeNotifier {
         await app.markRealtimeEventApplied(e);
         return;
       }
-
-      await app.cache.upsertMessage(chatGuid, msg);
-      final known = await app.cache.bumpChatWithMessage(msg);
-      if (!known) {
-        await app.recordRealtimeFallback(chatListReload: true);
-        _scheduleServerReload();
-        return;
-      }
-      chats = await app.cache.listChats(includeDebug: includeDebug);
-      state = chats.isEmpty ? ChatListState.empty : ChatListState.loaded;
-      error = null;
+      final known = await _patchMessage(msg);
+      if (!known) return;
       await app.markRealtimeEventApplied(e, localDbWrites: 2);
-      notifyListeners();
     } catch (_) {
       await app.recordRealtimeFallback(chatListReload: true);
       _scheduleServerReload();
     }
+  }
+
+  Future<bool> _patchMessage(MessageModel msg) async {
+    final chatGuid = msg.chatGuid;
+    if (chatGuid == null || chatGuid.isEmpty) {
+      return false;
+    }
+    try {
+      // Only a genuinely new message bumps the unread count, so a replayed or
+      // duplicate event (WS reconnect, FCM catch-up, resume) can never over-count.
+      // Checked before upsert; otherwise every message would look known.
+      final isNew =
+          msg.guid.isEmpty || !await app.cache.hasMessageGuid(msg.guid);
+      await app.cache.upsertMessage(chatGuid, msg);
+      // seen = my own message, or the chat is already open → keep the watermark
+      // caught up so it never shows unread for what the user is looking at.
+      final seen = msg.isFromMe || app.isChatActive(chatGuid);
+      final known = await app.cache.bumpChatWithMessage(
+        msg,
+        markUnread: isNew && !seen,
+        seen: seen,
+      );
+      if (!known) {
+        await app.recordRealtimeFallback(chatListReload: true);
+        _scheduleServerReload();
+        return false;
+      }
+      chats = await app.cache.listChats(includeDebug: includeDebug);
+      state = chats.isEmpty ? ChatListState.empty : ChatListState.loaded;
+      error = null;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      await app.recordRealtimeFallback(chatListReload: true);
+      _scheduleServerReload();
+      return false;
+    }
+  }
+
+  Future<void> _reloadFromCache() async {
+    chats = await app.cache.listChats(includeDebug: includeDebug);
+    state = chats.isEmpty ? ChatListState.empty : ChatListState.loaded;
+    error = null;
+    notifyListeners();
   }
 
   Future<void> _patchUnsendEvent(WsEvent e) async {
@@ -207,11 +258,19 @@ class ChatListController extends ChangeNotifier {
 
   int? _asInt(Object? value) => value is num ? value.toInt() : null;
 
+  Future<void> markRoutesRead(Iterable<String> guids) async {
+    await app.cache.markChatsSeen(guids);
+    chats = await app.cache.listChats(includeDebug: includeDebug);
+    state = chats.isEmpty ? ChatListState.empty : ChatListState.loaded;
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     _reloadDebounce?.cancel();
     _wsSub?.cancel();
     _deltaSub?.cancel();
+    _reloadSub?.cancel();
     super.dispose();
   }
 }

@@ -146,6 +146,215 @@ void main() {
     },
   );
 
+  test('a newer incoming message derives hasUnread (watermark)', () async {
+    // Inserted with its current latest (20) as the seen watermark.
+    await store.upsertChats([
+      const ChatSummary(
+        guid: 'chat-1',
+        chatIdentifier: '+15550001',
+        lastMessageAt: 20,
+        lastMessagePreview: 'old',
+      ),
+    ]);
+    expect((await store.listChats()).single.hasUnread, isFalse,
+        reason: 'existing history starts seen');
+
+    final ok = await store.bumpChatWithMessage(
+      MessageModel.fromJson({
+        'guid': 'm2',
+        'chatGuid': 'chat-1',
+        'text': 'new',
+        'isFromMe': false,
+        'dateCreated': 30,
+      }),
+      markUnread: true,
+    );
+
+    final chat = (await store.listChats()).single;
+    expect(ok, isTrue);
+    expect(chat.hasUnread, isTrue, reason: '30 > seen 20 and not from me');
+    expect(chat.unreadCount, 1);
+  });
+
+  test('my own newer message does not light unread', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 20, lastMessagePreview: 'x'),
+    ]);
+    await store.bumpChatWithMessage(
+      MessageModel.fromJson({
+        'guid': 'mine',
+        'chatGuid': 'c1',
+        'text': 'sent',
+        'isFromMe': true,
+        'dateCreated': 40,
+      }),
+      seen: true,
+    );
+    expect((await store.listChats()).single.hasUnread, isFalse);
+  });
+
+  test('markChatsSeen advances the watermark and clears the dot', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 20, lastMessagePreview: 'x'),
+    ]);
+    await store.bumpChatWithMessage(
+      MessageModel.fromJson({
+        'guid': 'in',
+        'chatGuid': 'c1',
+        'text': 'hi',
+        'isFromMe': false,
+        'dateCreated': 30,
+      }),
+      markUnread: true,
+    );
+    expect((await store.listChats()).single.hasUnread, isTrue);
+
+    await store.markChatsSeen(['c1']);
+    final chat = (await store.listChats()).single;
+    expect(chat.hasUnread, isFalse);
+    expect(chat.unreadCount, 0);
+  });
+
+  test('a server refresh keeps a chat read until a newer message', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 20, lastMessagePreview: 'x'),
+    ]);
+    await store.markChatsSeen(['c1']);
+    // Re-sending the same latest (20) on refresh must not re-light unread.
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 20, lastMessagePreview: 'x'),
+    ]);
+    expect((await store.listChats()).single.hasUnread, isFalse);
+    // A genuinely newer incoming message (from the server's latestFromMe=false)
+    // does light it.
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 50, lastMessagePreview: 'new'),
+    ]);
+    expect((await store.listChats()).single.hasUnread, isTrue);
+  });
+
+  test('removeChats deletes cached chat rows and message history', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'test-chat', lastMessagePreview: 'old'),
+    ]);
+    await store.replaceServerPage('test-chat', [
+      MessageModel.fromJson({
+        'guid': 'm1',
+        'chatGuid': 'test-chat',
+        'text': 'cached',
+        'dateCreated': 20,
+      }),
+    ]);
+
+    await store.removeChats(['test-chat']);
+
+    expect(await store.listChats(includeHidden: true), isEmpty);
+    expect(await store.listMessages('test-chat'), isEmpty);
+  });
+
+  test('pinned chats sort to the top and survive a server upsert', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'chat-old', lastMessageAt: 10),
+      const ChatSummary(guid: 'chat-new', lastMessageAt: 99),
+    ]);
+    await store.setChatPinned('chat-old', true);
+
+    var chats = await store.listChats();
+    expect(chats.first.guid, 'chat-old', reason: 'pinned chat is first');
+    expect(chats.first.isPinned, isTrue);
+
+    // A server refresh (no pin field) must not reset the pin.
+    await store.upsertChats([
+      const ChatSummary(guid: 'chat-old', lastMessageAt: 10),
+      const ChatSummary(guid: 'chat-new', lastMessageAt: 99),
+    ]);
+    chats = await store.listChats();
+    expect(chats.first.guid, 'chat-old');
+  });
+
+  test('hidden message is filtered from the thread and restorable', () async {
+    await store.upsertChats([const ChatSummary(guid: 'c1', lastMessageAt: 1)]);
+    await store.replaceServerPage('c1', [
+      MessageModel.fromJson({
+        'guid': 'a',
+        'chatGuid': 'c1',
+        'text': 'keep',
+        'dateCreated': 1,
+      }),
+      MessageModel.fromJson({
+        'guid': 'b',
+        'chatGuid': 'c1',
+        'text': 'hide me',
+        'dateCreated': 2,
+      }),
+    ]);
+
+    await store.setMessageHidden('b', true);
+    expect((await store.listMessages('c1')).map((m) => m.guid), ['a']);
+    expect(await store.hiddenMessageCount(), 1);
+
+    // A re-sync (delete + reinsert) must not resurrect the hidden message.
+    await store.replaceServerPage('c1', [
+      MessageModel.fromJson({
+        'guid': 'a',
+        'chatGuid': 'c1',
+        'text': 'keep',
+        'dateCreated': 1,
+      }),
+      MessageModel.fromJson({
+        'guid': 'b',
+        'chatGuid': 'c1',
+        'text': 'hide me',
+        'dateCreated': 2,
+      }),
+    ]);
+    expect((await store.listMessages('c1')).length, 1);
+
+    expect(await store.releaseAllHiddenMessages(), 1);
+    expect((await store.listMessages('c1')).length, 2);
+  });
+
+  test('hidden chat count + release restores the contact', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 1, lastMessagePreview: 'x'),
+      const ChatSummary(guid: 'c2', lastMessageAt: 2, lastMessagePreview: 'y'),
+    ]);
+    await store.setChatHidden('c1', true);
+
+    expect(await store.hiddenChatCount(), 1);
+    expect((await store.listChats()).map((c) => c.guid), ['c2']);
+
+    expect(await store.releaseAllHiddenChats(), 1);
+    expect((await store.listChats()).length, 2);
+  });
+
+
+  test(
+    'server chat refresh preserves local unread when server omits it',
+    () async {
+      await store.upsertChats([
+        const ChatSummary(
+          guid: 'chat-1',
+          lastMessageAt: 20,
+          lastMessagePreview: 'old',
+          unreadCount: 3,
+        ),
+      ]);
+
+      await store.upsertChats([
+        const ChatSummary(
+          guid: 'chat-1',
+          lastMessageAt: 40,
+          lastMessagePreview: 'server',
+        ),
+      ]);
+
+      final chat = (await store.listChats()).single;
+      expect(chat.lastMessagePreview, 'server');
+      expect(chat.unreadCount, 3);
+    },
+  );
+
   test('older message event does not move chat preview backward', () async {
     await store.upsertChats([
       const ChatSummary(

@@ -138,7 +138,12 @@ class ThreadPresentationBuilder {
       if (!isReply(m)) return null;
       final target = byGuid[m.threadOriginatorGuid];
       if (target == null) {
-        return const ReplyPreview(sender: '', text: null, targetLoaded: false);
+        return ReplyPreview(
+          sender: '',
+          text: null,
+          targetLoaded: false,
+          targetGuid: m.threadOriginatorGuid,
+        );
       }
       return ReplyPreview(
         sender: resolveSenderLabel(
@@ -148,6 +153,7 @@ class ThreadPresentationBuilder {
         ),
         text: displayText(target),
         targetLoaded: true,
+        targetGuid: target.guid,
       );
     }
 

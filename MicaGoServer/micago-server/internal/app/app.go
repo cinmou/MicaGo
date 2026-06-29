@@ -373,6 +373,13 @@ func Run(options Options) error {
 
 	handlers := httpapi.NewHandlers(relay, log.Default(), sendDeps, relay, cfg.AttachmentsRoot, relay, dispatcher, cfg, statusDeps)
 	handlers.SetRuleService(relay)                   // v0.11.3 sync rules backed by relay.db
+	handlers.SetTestContactService(relay)            // offline loopback test contact
+	// Each server (re)start resets the test conversation to a clean scratchpad.
+	if enabled, terr := relay.TestContactEnabled(ctx); terr == nil && enabled {
+		if rerr := relay.ResetTestContactMessages(ctx); rerr != nil {
+			log.Printf("reset test contact messages: %v", rerr)
+		}
+	}
 	handlers.SetSyncSettingsService(relay)           // C13 service scope + backfill strategy
 	handlers.SetNotificationConfigurator(dispatcher) // v0.12 live FCM/Firebase config
 	handlers.SetMessageActionPerformer(imessage.NewHelperPerformer(""))

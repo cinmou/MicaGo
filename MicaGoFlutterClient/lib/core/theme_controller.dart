@@ -9,7 +9,23 @@ import 'storage/secure_store.dart';
 
 /// Theme color choice. `system` = use Android 12+ dynamic (Material You) colors
 /// when available; the rest are fixed seed colors.
-enum ThemeColorChoice { system, micago, blue, green, purple, orange }
+enum ThemeColorChoice {
+  system,
+  micago,
+  bicao,
+  wisteria,
+  citrus,
+  blackWhite,
+  paleGold,
+  wineRed,
+  blueGreen,
+  indigo,
+  enshuNezu,
+  suoh,
+  dianthus,
+  witheredGrass,
+  amber,
+}
 
 /// Language choice. Null locale follows the system.
 enum LanguageChoice { system, english, simplifiedChinese, traditionalChinese }
@@ -33,14 +49,32 @@ class ThemeController extends ChangeNotifier {
       case ThemeColorChoice.system:
       case ThemeColorChoice.micago:
         return MicaGoTheme.seed;
-      case ThemeColorChoice.blue:
-        return const Color(0xFF1565C0);
-      case ThemeColorChoice.green:
+      case ThemeColorChoice.bicao:
         return const Color(0xFF2E7D32);
-      case ThemeColorChoice.purple:
-        return const Color(0xFF6A1B9A);
-      case ThemeColorChoice.orange:
+      case ThemeColorChoice.wisteria:
+        return const Color(0xFF7E6BAE);
+      case ThemeColorChoice.citrus:
         return const Color(0xFFE65100);
+      case ThemeColorChoice.blackWhite:
+        return const Color(0xFF2E2E2E);
+      case ThemeColorChoice.paleGold:
+        return const Color(0xFFB89B5E);
+      case ThemeColorChoice.wineRed:
+        return const Color(0xFF6E2639);
+      case ThemeColorChoice.blueGreen:
+        return const Color(0xFF1F6F6A);
+      case ThemeColorChoice.indigo:
+        return const Color(0xFF2F3A73);
+      case ThemeColorChoice.enshuNezu:
+        return const Color(0xFF6E7F80);
+      case ThemeColorChoice.suoh:
+        return const Color(0xFF7E2639);
+      case ThemeColorChoice.dianthus:
+        return const Color(0xFFC07A8B);
+      case ThemeColorChoice.witheredGrass:
+        return const Color(0xFF9C8A4F);
+      case ThemeColorChoice.amber:
+        return const Color(0xFFB8792B);
     }
   }
 
@@ -136,7 +170,13 @@ class ThemeController extends ChangeNotifier {
   );
   ThemeColorChoice _parseColor(String? v) => ThemeColorChoice.values.firstWhere(
     (c) => c.name == v,
-    orElse: () => ThemeColorChoice.system,
+    orElse: () => switch (v) {
+      'blue' => ThemeColorChoice.micago,
+      'green' => ThemeColorChoice.bicao,
+      'purple' => ThemeColorChoice.wisteria,
+      'orange' => ThemeColorChoice.citrus,
+      _ => ThemeColorChoice.system,
+    },
   );
   LanguageChoice _parseLang(String? v) {
     if (v == 'chinese') return LanguageChoice.simplifiedChinese;

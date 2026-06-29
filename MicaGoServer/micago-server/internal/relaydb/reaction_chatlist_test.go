@@ -86,3 +86,41 @@ func TestIsReactionForSyncRow(t *testing.T) {
 		t.Fatal("sticker (1000) is below the reaction range")
 	}
 }
+
+// C43: ListChats reports whether the latest renderable message is outgoing, so
+// the client's watermark-derived unread dot can ignore chats whose newest
+// message I sent (from the Mac / another device).
+func TestListChatsReportsLatestRenderableFromMe(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	src := fakeSemanticSource{
+		chats: []store.SyncChatRow{
+			{GUID: "incoming", ServiceName: strp("iMessage")},
+			{GUID: "mine", ServiceName: strp("iMessage")},
+		},
+		messages: []store.SyncMessageRow{
+			{ChatGUID: "incoming", SourceRowID: 1, GUID: "a", Text: strp("hi"), DateCreated: intp(1000), IsFromMe: false},
+			{ChatGUID: "mine", SourceRowID: 2, GUID: "b", Text: strp("older from them"), DateCreated: intp(1000), IsFromMe: false},
+			{ChatGUID: "mine", SourceRowID: 3, GUID: "c", Text: strp("my reply"), DateCreated: intp(2000), IsFromMe: true},
+		},
+	}
+	if _, err := SyncOnce(ctx, src, db, 100, 0); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	chats, err := db.ListChats(ctx, 50, 0, true, "all", false)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	got := map[string]bool{}
+	for _, c := range chats {
+		got[c.GUID] = c.LatestRenderableFromMe
+	}
+	if got["incoming"] {
+		t.Error("incoming chat's latest message is from them; want LatestRenderableFromMe=false")
+	}
+	if !got["mine"] {
+		t.Error("mine chat's latest message is my reply; want LatestRenderableFromMe=true")
+	}
+}

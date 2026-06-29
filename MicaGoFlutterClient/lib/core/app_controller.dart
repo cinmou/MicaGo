@@ -139,6 +139,13 @@ class AppController extends ChangeNotifier {
   bool get isForeground => _foreground;
   void setForeground(bool value) => _foreground = value;
 
+  String? _activeChatGuid;
+  bool isChatActive(String chatGuid) => _activeChatGuid == chatGuid;
+
+  void setActiveChatGuid(String? chatGuid) {
+    _activeChatGuid = chatGuid;
+  }
+
   static const _mutedChatsKey = 'micago.muted_chats.v1';
   final Set<String> _mutedChats = <String>{};
   bool isChatMuted(String chatGuid) => _mutedChats.contains(chatGuid);
@@ -540,6 +547,13 @@ class AppController extends ChangeNotifier {
   /// subscribe and patch their state (GUID dedup prevents duplicate bubbles).
   Stream<MessageModel> get deltaMessages => _deltaController.stream;
 
+  final StreamController<void> _chatReloadController =
+      StreamController<void>.broadcast();
+
+  /// Fires when something off-band changed the chat set (e.g. the test contact
+  /// was toggled) and the chat-list controller should reload from the server.
+  Stream<void> get chatListReloads => _chatReloadController.stream;
+
   /// Fetches everything newer than the persisted cursor and applies it to the
   /// cache + open views, paging until caught up. Idempotent and safe to call on
   /// reconnect, resume, startup, and the fallback poll.
@@ -557,7 +571,18 @@ class AppController extends ChangeNotifier {
         for (final msg in delta.messages) {
           final chatGuid = msg.chatGuid;
           if (chatGuid != null && chatGuid.isNotEmpty) {
+            final isNew =
+                msg.guid.isEmpty || !await cache.hasMessageGuid(msg.guid);
             await cache.upsertMessage(chatGuid, msg);
+            final seen = msg.isFromMe || isChatActive(chatGuid);
+            final knownChat = await cache.bumpChatWithMessage(
+              msg,
+              markUnread: isNew && !seen,
+              seen: seen,
+            );
+            if (!knownChat && !_chatReloadController.isClosed) {
+              _chatReloadController.add(null);
+            }
           }
           _deltaController.add(msg);
         }
@@ -714,6 +739,56 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     return true;
   }
+
+  /// Whether the offline loopback test contact is on. null = unknown/unavailable
+  /// (not yet fetched, or the server doesn't support it).
+  bool? _testContactEnabled;
+  bool? get testContactEnabled => _testContactEnabled;
+  static const _testChatGuids = [
+    'iMessage;-;test@micago.cinmou',
+    'iMessage;-;micago-test-group@micago.cinmou',
+  ];
+
+  /// Fetches the current test-contact state from the server. Best-effort.
+  Future<void> refreshTestContact() async {
+    final config = await _api?.getTestContactConfig();
+    if (config != null && config.enabled != _testContactEnabled) {
+      _testContactEnabled = config.enabled;
+      notifyListeners();
+    }
+  }
+
+  /// Turns the offline test contact on or off on the server, then nudges the
+  /// chat list to reload so the synthetic chat appears/disappears. Returns true
+  /// on success.
+  Future<bool> setTestContactEnabled(bool value) async {
+    final api = _api;
+    if (api == null) return false;
+    final result = await api.setTestContact(enabled: value);
+    if (result == null) return false;
+    if (!result.enabled) {
+      await cache.removeChats(_testChatGuids);
+    }
+    _testContactEnabled = result.enabled;
+    notifyListeners();
+    if (!_chatReloadController.isClosed) _chatReloadController.add(null);
+    return true;
+  }
+
+  // C42: hidden-state management for the Settings "release" buttons.
+
+  Future<int> hiddenChatCount() => cache.hiddenChatCount();
+  Future<int> hiddenMessageCount() => cache.hiddenMessageCount();
+
+  /// Un-hides every hidden chat and nudges the list to reload. Returns the count.
+  Future<int> releaseHiddenChats() async {
+    final n = await cache.releaseAllHiddenChats();
+    if (!_chatReloadController.isClosed) _chatReloadController.add(null);
+    return n;
+  }
+
+  /// Restores every client-hidden message. Returns the count.
+  Future<int> releaseHiddenMessages() => cache.releaseAllHiddenMessages();
 
   /// C19/C21u: register this client so the Companion shows a connected device.
   /// Best-effort and idempotent — sends a **stable, client-generated** device id
@@ -1358,6 +1433,7 @@ class AppController extends ChangeNotifier {
     unawaited(_connSub?.cancel());
     _refresh.dispose();
     unawaited(_deltaController.close());
+    unawaited(_chatReloadController.close());
     ws.removeListener(_onWebSocketStatusChanged);
     ws.dispose();
     _api?.close();

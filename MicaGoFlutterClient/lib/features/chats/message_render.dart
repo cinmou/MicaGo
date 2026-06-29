@@ -272,10 +272,12 @@ class ReplyPreview {
   final String sender; // resolved sender label of the quoted message
   final String? text; // sanitized quoted text (null if media/unknown)
   final bool targetLoaded;
+  final String? targetGuid;
   const ReplyPreview({
     required this.sender,
     this.text,
     required this.targetLoaded,
+    this.targetGuid,
   });
 }
 
@@ -337,13 +339,11 @@ MessageDeliveryState deliveryStateFor(MessageModel m) {
 }
 
 String attachmentPreviewLabel(AttachmentModel attachment) {
-  if (attachment.isStickerLike) return '（贴纸）';
-  if (attachment.isVoiceMessage) return '（语音）';
-  if (attachment.isImage) return '（图片）';
-  if (attachment.isVideo) return '（视频）';
-  if (attachment.isAudio) return '（音频）';
-  if (attachment.isLinkPreview) return '（链接）';
-  return '（文件）';
+  if (attachment.isVoiceMessage || attachment.isAudio) return '[语音]';
+  if (attachment.isStickerLike || attachment.isImage) return '[图片]';
+  if (attachment.isVideo) return '[视频]';
+  if (attachment.isLinkPreview) return '[链接]';
+  return '[文件]';
 }
 
 String messagePreviewText(MessageModel message) {
@@ -353,7 +353,39 @@ String messagePreviewText(MessageModel message) {
     return attachmentPreviewLabel(message.attachments.first);
   }
   if (message.isRetracted) return 'Message unsent';
-  return 'Message';
+  return '[文件]';
+}
+
+String chatListPreviewText(String? raw, {bool hasMessage = false}) {
+  final clean = sanitizeMessageText(raw);
+  if (clean == null || isControlLikeText(clean)) {
+    return hasMessage ? '[文件]' : '';
+  }
+  final normalized = clean.toLowerCase();
+  switch (normalized) {
+    case 'message':
+    case 'attachment':
+    case 'file':
+    case 'obj':
+    case 'object':
+    case 'null':
+      return '[文件]';
+  }
+  switch (clean) {
+    case '（贴纸）':
+    case '（图片）':
+      return '[图片]';
+    case '（语音）':
+    case '（音频）':
+      return '[语音]';
+    case '（视频）':
+      return '[视频]';
+    case '（链接）':
+      return '[链接]';
+    case '（文件）':
+      return '[文件]';
+  }
+  return clean;
 }
 
 /// A sender label that is never blank/"null"/raw placeholder.

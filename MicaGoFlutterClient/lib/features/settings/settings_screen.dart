@@ -37,112 +37,150 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final profile = app.profile;
     final theme = context.watch<ThemeController>();
     final strings = MicaLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final headerBg = _settingsAccent1_100(scheme);
+    final pageBg = _settingsAccent1_50(scheme);
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Text(
-          strings.t('settings.appearance'),
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 8),
-        _AppearanceCard(theme: theme),
-        const SizedBox(height: 20),
-        Text(
-          strings.t('settings.messaging'),
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 8),
-        _SmsSendingCard(app: app),
-        const SizedBox(height: 20),
-        Text(
-          strings.t('settings.notifications'),
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 8),
-        _NotificationsCard(app: app),
-        const SizedBox(height: 20),
-        Text(
-          strings.t('settings.more'),
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: [
-              ListTile(
-                leading: _leadingIcon(Icons.contacts_outlined),
-                title: Text(strings.t('settings.contacts')),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _push(
-                  context,
-                  strings.t('settings.contacts'),
-                  const PeopleScreen(),
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(strings.t('nav.settings')),
+        backgroundColor: headerBg,
+        surfaceTintColor: Colors.transparent,
+      ),
+      body: DecoratedBox(
+        decoration: BoxDecoration(color: headerBg),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: DecoratedBox(
+            decoration: BoxDecoration(color: pageBg),
+            child: SafeArea(
+              top: false,
+              bottom: false,
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  16,
+                  16,
+                  16 + MediaQuery.paddingOf(context).bottom,
                 ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: _leadingIcon(Icons.chat_bubble_outline),
-                title: Text(strings.t('settings.messageDisplay')),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _push(
-                  context,
-                  strings.t('settings.messageDisplay'),
-                  const MessageDisplayPage(),
-                ),
-              ),
-              if (kDebugMode) ...[
-                const Divider(height: 1),
-                ListTile(
-                  leading: _leadingIcon(Icons.bug_report_outlined),
-                  title: Text(strings.t('settings.debugTools')),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _push(
-                    context,
-                    strings.t('settings.debugTools'),
-                    const _DebugToolsBody(),
+                children: [
+                  Text(
+                    strings.t('settings.appearance'),
+                    style: Theme.of(context).textTheme.titleSmall,
                   ),
-                ),
-              ],
-              const Divider(height: 1),
-              ListTile(
-                leading: _leadingIcon(Icons.info_outline),
-                title: Text(strings.t('settings.about')),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _push(
-                  context,
-                  strings.t('settings.about'),
-                  const _AboutBody(),
-                ),
+                  const SizedBox(height: 8),
+                  _AppearanceCard(theme: theme),
+                  const SizedBox(height: 20),
+                  Text(
+                    strings.t('settings.messaging'),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  _SmsSendingCard(app: app),
+                  const SizedBox(height: 20),
+                  Text(
+                    strings.t('settings.testing'),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  _TestContactCard(app: app),
+                  const SizedBox(height: 12),
+                  _HiddenItemsCard(app: app),
+                  const SizedBox(height: 20),
+                  Text(
+                    strings.t('settings.notifications'),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  _NotificationsCard(app: app),
+                  const SizedBox(height: 20),
+                  Text(
+                    strings.t('settings.more'),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Card(
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: _leadingIcon(Icons.contacts_outlined),
+                          title: Text(strings.t('settings.contacts')),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => _push(
+                            context,
+                            strings.t('settings.contacts'),
+                            const PeopleScreen(),
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: _leadingIcon(Icons.chat_bubble_outline),
+                          title: Text(strings.t('settings.messageDisplay')),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => _push(
+                            context,
+                            strings.t('settings.messageDisplay'),
+                            const MessageDisplayPage(),
+                          ),
+                        ),
+                        if (kDebugMode) ...[
+                          const Divider(height: 1),
+                          ListTile(
+                            leading: _leadingIcon(Icons.bug_report_outlined),
+                            title: Text(strings.t('settings.debugTools')),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => _push(
+                              context,
+                              strings.t('settings.debugTools'),
+                              const _DebugToolsBody(),
+                            ),
+                          ),
+                        ],
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: _leadingIcon(Icons.info_outline),
+                          title: Text(strings.t('settings.about')),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => _push(
+                            context,
+                            strings.t('settings.about'),
+                            const _AboutBody(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  if (profile != null)
+                    _RouteSwitcher(app: app, profile: profile),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: () => context.go(Routes.connection),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: Text(strings.t('settings.editConnection')),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                    ),
+                    onPressed: () => _confirmDisconnect(context, app),
+                    icon: const Icon(Icons.logout),
+                    label: Text(strings.t('settings.disconnect')),
+                  ),
+                  const SizedBox(height: 24),
+                  Center(
+                    child: Text(
+                      'micaGO · C1 foundation',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
-        const SizedBox(height: 20),
-        if (profile != null) _RouteSwitcher(app: app, profile: profile),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-          onPressed: () => context.go(Routes.connection),
-          icon: const Icon(Icons.edit_outlined),
-          label: Text(strings.t('settings.editConnection')),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Theme.of(context).colorScheme.error,
-          ),
-          onPressed: () => _confirmDisconnect(context, app),
-          icon: const Icon(Icons.logout),
-          label: Text(strings.t('settings.disconnect')),
-        ),
-        const SizedBox(height: 24),
-        Center(
-          child: Text(
-            'micaGO · C1 foundation',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -150,10 +188,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _push(BuildContext context, String title, Widget body) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: Text(title)),
-          body: SafeArea(child: body),
-        ),
+        builder: (_) => _SettingsSubPage(title: title, child: body),
       ),
     );
   }
@@ -685,6 +720,215 @@ class _SmsSendingCardState extends State<_SmsSendingCard> {
   }
 }
 
+class _TestContactCard extends StatefulWidget {
+  final AppController app;
+  const _TestContactCard({required this.app});
+
+  @override
+  State<_TestContactCard> createState() => _TestContactCardState();
+}
+
+class _TestContactCardState extends State<_TestContactCard> {
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pull the current server value when the screen opens. Best-effort.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.app.testContactEnabled == null) {
+        widget.app.refreshTestContact();
+      }
+    });
+  }
+
+  Future<void> _toggle(bool value) async {
+    setState(() => _busy = true);
+    final ok = await widget.app.setTestContactEnabled(value);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!ok) {
+      TopBanner.show(
+        context,
+        'Could not update the test contact',
+        kind: TopBannerKind.error,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppController>();
+    final strings = MicaLocalizations.of(context);
+    final unreachable = app.api == null;
+    final enabled = app.testContactEnabled ?? false;
+    return Card(
+      child: SwitchListTile(
+        secondary: _leadingIcon(Icons.science_outlined),
+        title: Text(strings.t('settings.testContactTitle')),
+        subtitle: Text(
+          unreachable
+              ? strings.t('settings.testContactUnreachable')
+              : strings.t('settings.testContactDesc'),
+        ),
+        value: enabled,
+        onChanged: (_busy || unreachable) ? null : _toggle,
+      ),
+    );
+  }
+}
+
+class _SettingsSubPage extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  const _SettingsSubPage({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final headerBg = _settingsAccent1_100(scheme);
+    final pageBg = _settingsAccent1_50(scheme);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        backgroundColor: headerBg,
+        surfaceTintColor: Colors.transparent,
+      ),
+      body: DecoratedBox(
+        decoration: BoxDecoration(color: headerBg),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: DecoratedBox(
+            decoration: BoxDecoration(color: pageBg),
+            child: SafeArea(
+              top: false,
+              bottom: false,
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.paddingOf(context).bottom,
+                ),
+                child: child,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Color _settingsAccent1_50(ColorScheme scheme) =>
+    Color.alphaBlend(scheme.primary.withValues(alpha: 0.10), scheme.surface);
+
+Color _settingsAccent1_100(ColorScheme scheme) => Color.alphaBlend(
+  scheme.primary.withValues(alpha: 0.18),
+  scheme.surfaceContainerLowest,
+);
+
+/// Restores client-hidden messages and contacts (the "delete" on this device is
+/// reversible). Two buttons, per the two hide granularities.
+class _HiddenItemsCard extends StatefulWidget {
+  final AppController app;
+  const _HiddenItemsCard({required this.app});
+
+  @override
+  State<_HiddenItemsCard> createState() => _HiddenItemsCardState();
+}
+
+class _HiddenItemsCardState extends State<_HiddenItemsCard> {
+  int _hiddenMessages = 0;
+  int _hiddenContacts = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    final m = await widget.app.hiddenMessageCount();
+    final c = await widget.app.hiddenChatCount();
+    if (!mounted) return;
+    setState(() {
+      _hiddenMessages = m;
+      _hiddenContacts = c;
+    });
+  }
+
+  Future<void> _releaseMessages() async {
+    final n = await widget.app.releaseHiddenMessages();
+    await _refresh();
+    if (!mounted) return;
+    _toast(n, 'settings.releasedMessages');
+  }
+
+  Future<void> _releaseContacts() async {
+    final n = await widget.app.releaseHiddenChats();
+    await _refresh();
+    if (!mounted) return;
+    _toast(n, 'settings.releasedContacts');
+  }
+
+  void _toast(int n, String key) {
+    final strings = MicaLocalizations.of(context);
+    final msg = n == 0
+        ? strings.t('settings.nothingHidden')
+        : strings.t(key).replaceAll('{n}', '$n');
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                _leadingIcon(Icons.visibility_off_outlined),
+                const SizedBox(width: 12),
+                Text(
+                  strings.t('settings.hiddenItems'),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _releaseMessages,
+                  icon: const Icon(Icons.chat_bubble_outline),
+                  label: Text(
+                    '${strings.t('settings.releaseHiddenMessages')}'
+                    '${_hiddenMessages > 0 ? ' ($_hiddenMessages)' : ''}',
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _releaseContacts,
+                  icon: const Icon(Icons.contacts_outlined),
+                  label: Text(
+                    '${strings.t('settings.releaseHiddenContacts')}'
+                    '${_hiddenContacts > 0 ? ' ($_hiddenContacts)' : ''}',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ChatBackgroundPicker extends StatelessWidget {
   final ThemeController theme;
   const _ChatBackgroundPicker({required this.theme});
@@ -923,14 +1167,32 @@ class _AppearanceCard extends StatelessWidget {
       case ThemeColorChoice.system:
       case ThemeColorChoice.micago:
         return MicaGoThemeSeed.value;
-      case ThemeColorChoice.blue:
-        return const Color(0xFF1565C0);
-      case ThemeColorChoice.green:
+      case ThemeColorChoice.bicao:
         return const Color(0xFF2E7D32);
-      case ThemeColorChoice.purple:
-        return const Color(0xFF6A1B9A);
-      case ThemeColorChoice.orange:
+      case ThemeColorChoice.wisteria:
+        return const Color(0xFF7E6BAE);
+      case ThemeColorChoice.citrus:
         return const Color(0xFFE65100);
+      case ThemeColorChoice.blackWhite:
+        return const Color(0xFF2E2E2E);
+      case ThemeColorChoice.paleGold:
+        return const Color(0xFFB89B5E);
+      case ThemeColorChoice.wineRed:
+        return const Color(0xFF6E2639);
+      case ThemeColorChoice.blueGreen:
+        return const Color(0xFF1F6F6A);
+      case ThemeColorChoice.indigo:
+        return const Color(0xFF2F3A73);
+      case ThemeColorChoice.enshuNezu:
+        return const Color(0xFF6E7F80);
+      case ThemeColorChoice.suoh:
+        return const Color(0xFF7E2639);
+      case ThemeColorChoice.dianthus:
+        return const Color(0xFFC07A8B);
+      case ThemeColorChoice.witheredGrass:
+        return const Color(0xFF9C8A4F);
+      case ThemeColorChoice.amber:
+        return const Color(0xFFB8792B);
     }
   }
 
@@ -940,14 +1202,32 @@ class _AppearanceCard extends StatelessWidget {
         return 'System';
       case ThemeColorChoice.micago:
         return 'micaGO';
-      case ThemeColorChoice.blue:
-        return 'Blue';
-      case ThemeColorChoice.green:
-        return 'Green';
-      case ThemeColorChoice.purple:
-        return 'Purple';
-      case ThemeColorChoice.orange:
-        return 'Orange';
+      case ThemeColorChoice.bicao:
+        return '碧草';
+      case ThemeColorChoice.wisteria:
+        return '紫藤';
+      case ThemeColorChoice.citrus:
+        return '柑橘';
+      case ThemeColorChoice.blackWhite:
+        return 'blackWhite';
+      case ThemeColorChoice.paleGold:
+        return 'paleGold';
+      case ThemeColorChoice.wineRed:
+        return 'wineRed';
+      case ThemeColorChoice.blueGreen:
+        return 'blueGreen';
+      case ThemeColorChoice.indigo:
+        return 'indigo';
+      case ThemeColorChoice.enshuNezu:
+        return 'enshuNezu';
+      case ThemeColorChoice.suoh:
+        return 'suoh';
+      case ThemeColorChoice.dianthus:
+        return 'dianthus';
+      case ThemeColorChoice.witheredGrass:
+        return 'witheredGrass';
+      case ThemeColorChoice.amber:
+        return 'amber';
     }
   }
 }

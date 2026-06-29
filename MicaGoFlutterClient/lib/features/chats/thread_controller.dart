@@ -92,7 +92,12 @@ class ThreadController extends ChangeNotifier {
         offset: 0,
       );
       await app.cache.replaceServerPage(chatGuid, fetched);
-      _col.replaceServerPage(fetched);
+      // Store everything (so unhide can restore it) but never display a
+      // client-hidden message.
+      final hidden = await app.cache.hiddenMessageGuids();
+      _col.replaceServerPage(
+        fetched.where((m) => !hidden.contains(m.guid)).toList(),
+      );
       _offset = fetched.length;
       hasMore = fetched.length >= _pageSize;
       state = _col.isEmpty ? ThreadState.empty : ThreadState.loaded;
@@ -111,6 +116,16 @@ class ThreadController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Hides a single message on the client only (the server copy is untouched).
+  /// Re-reads the visible page from the cache so it disappears immediately.
+  Future<void> hideMessage(String guid) async {
+    if (guid.isEmpty) return;
+    await app.cache.setMessageHidden(guid, true);
+    final cached = await app.cache.listMessages(chatGuid, limit: _pageSize);
+    _col.replaceServerPage(cached);
+    notifyListeners();
+  }
+
   Future<void> loadOlder() async {
     if (loadingOlder || !hasMore) return;
     final api = app.api;
@@ -126,7 +141,8 @@ class ThreadController extends ChangeNotifier {
       for (final m in fetched) {
         await app.cache.upsertMessage(chatGuid, m);
       }
-      _col.mergeOlder(fetched);
+      final hidden = await app.cache.hiddenMessageGuids();
+      _col.mergeOlder(fetched.where((m) => !hidden.contains(m.guid)).toList());
       _offset += fetched.length;
       hasMore = fetched.length >= _pageSize;
     } on ApiException {

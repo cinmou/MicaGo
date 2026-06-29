@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -49,11 +50,15 @@ class MessageThreadScreen extends StatefulWidget {
   /// When true, render as a detail pane (slim header, no Scaffold/back button)
   /// for the two-pane tablet layout.
   final bool embedded;
+  final bool flatSplitView;
+  final double? embeddedHeaderHeight;
 
   const MessageThreadScreen({
     super.key,
     required this.merged,
     this.embedded = false,
+    this.flatSplitView = false,
+    this.embeddedHeaderHeight,
   });
 
   @override
@@ -64,6 +69,9 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   late ThreadController _controller;
   final _scroll = ScrollController();
   final _composer = TextEditingController();
+  final Map<String, GlobalKey> _messageKeys = {};
+  bool _showJumpToBottom = false;
+  String? _flashGuid;
 
   /// The real server chat currently being viewed/sent on. Defaults to the
   /// merged conversation's preferred route (iMessage first); switchable when the
@@ -74,10 +82,13 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   void initState() {
     super.initState();
     _active = widget.merged.primary;
-    _controller = ThreadController(
-      app: context.read<AppController>(),
-      chatGuid: _active.guid,
-    )..start();
+    final app = context.read<AppController>();
+    app.setActiveChatGuid(_active.guid);
+    // C43: opening a thread is the authoritative read event — advance the read
+    // watermark for every route so the unread dot clears. setActiveChatGuid keeps
+    // it current as new messages arrive while the thread is on screen.
+    unawaited(app.cache.markChatsSeen(widget.merged.routes.map((r) => r.guid)));
+    _controller = ThreadController(app: app, chatGuid: _active.guid)..start();
     _composer.addListener(() => setState(() {}));
     _scroll.addListener(_onScroll);
     _controller.addListener(_publishDiagnostics);
@@ -90,12 +101,12 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     if (route.guid == _active.guid) return;
     _controller.removeListener(_publishDiagnostics);
     _controller.dispose();
+    final app = context.read<AppController>();
+    app.setActiveChatGuid(route.guid);
+    unawaited(app.cache.markChatsSeen([route.guid]));
     setState(() {
       _active = route;
-      _controller = ThreadController(
-        app: context.read<AppController>(),
-        chatGuid: route.guid,
-      )..start();
+      _controller = ThreadController(app: app, chatGuid: route.guid)..start();
       _controller.addListener(_publishDiagnostics);
     });
   }
@@ -108,6 +119,10 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     _scroll.dispose();
     _composer.dispose();
     _recorder.dispose();
+    final app = context.read<AppController>();
+    if (app.isChatActive(_active.guid)) {
+      app.setActiveChatGuid(null);
+    }
     super.dispose();
   }
 
@@ -125,9 +140,46 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   // near maxScrollExtent. Load older pages as the user approaches it.
   void _onScroll() {
     if (!_scroll.hasClients) return;
+    final showJump = _scroll.position.pixels > 420;
+    if (showJump != _showJumpToBottom && mounted) {
+      setState(() => _showJumpToBottom = showJump);
+    }
     if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 320) {
       _controller.loadOlder();
     }
+  }
+
+  GlobalKey _messageKey(String guid) =>
+      _messageKeys.putIfAbsent(guid, GlobalKey.new);
+
+  Future<void> _scrollToBottom() async {
+    if (!_scroll.hasClients) return;
+    await _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Future<void> _jumpToMessage(String? guid) async {
+    if (guid == null || guid.isEmpty) return;
+    final key = _messageKeys[guid];
+    final targetContext = key?.currentContext;
+    if (targetContext == null) {
+      TopBanner.show(context, 'Quoted message is not loaded yet.');
+      return;
+    }
+    await Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      alignment: 0.42,
+    );
+    if (!mounted) return;
+    setState(() => _flashGuid = guid);
+    Future<void>.delayed(const Duration(milliseconds: 900), () {
+      if (mounted && _flashGuid == guid) setState(() => _flashGuid = null);
+    });
   }
 
   // C21c: staged attachments selected via the BlueBubbles-style panel, sent on
@@ -479,6 +531,19 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
             builder: (context, _) => _buildBody(context, api, contacts, prefs),
           ),
         ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 94,
+          child: Center(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: _showJumpToBottom
+                  ? _JumpToBottomButton(onTap: _scrollToBottom)
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ),
         Positioned(left: 0, right: 0, bottom: 0, child: bottomOverlay),
       ],
     );
@@ -486,7 +551,9 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     final themedContent = DecoratedBox(
       decoration: BoxDecoration(color: headerBg),
       child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: widget.flatSplitView
+            ? const BorderRadius.vertical(top: Radius.circular(24))
+            : const BorderRadius.vertical(top: Radius.circular(24)),
         child: _ChatBackground(child: content),
       ),
     );
@@ -528,10 +595,11 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
           children: [
             DecoratedBox(
               decoration: BoxDecoration(color: headerBg),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+              child: SizedBox(
+                height: widget.embeddedHeaderHeight ?? 72,
                 child: Row(
                   children: [
+                    const SizedBox(width: 12),
                     Expanded(child: titleRow),
                     ?_routeSelector(context),
                     IconButton(
@@ -539,6 +607,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
                       icon: const Icon(Icons.info_outline),
                       onPressed: _openDetailsSearch,
                     ),
+                    const SizedBox(width: 8),
                   ],
                 ),
               ),
@@ -620,6 +689,12 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
           onRefresh: () => _controller.load(),
           onLoadOlder: () => _controller.loadOlder(),
           onSwitchRoute: _switchRoute,
+          onJumpToMessage: (guid) {
+            Navigator.of(context).pop();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) unawaited(_jumpToMessage(guid));
+            });
+          },
         ),
       ),
     );
@@ -781,6 +856,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
       reactions: m.reactions,
       stickers: m.stickers,
       reply: m.reply,
+      highlighted: m.message.guid == _flashGuid,
       effectHint: m.effectHint,
       showStatus: m.showStatus,
       showTimestamp: m.showTimestamp,
@@ -789,6 +865,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
         final t = m.message.tempId;
         if (t != null) _controller.retry(t);
       },
+      onReplyTap: (guid) => _jumpToMessage(guid),
       onActions: (position) => showMessageActionMenu(
         context,
         m.message,
@@ -797,9 +874,55 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
         api: api,
         onRetracted: (guid) => _controller.markRetractedLocally(guid),
         onChanged: () => _controller.load(showSpinner: false),
+        onHide: () => _controller.hideMessage(m.message.guid),
       ),
     );
-    return m.message.hasAttachments ? RepaintBoundary(child: bubble) : bubble;
+    final keyed = m.message.guid.isEmpty
+        ? bubble
+        : KeyedSubtree(key: _messageKey(m.message.guid), child: bubble);
+    return m.message.hasAttachments ? RepaintBoundary(child: keyed) : keyed;
+  }
+}
+
+class _JumpToBottomButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _JumpToBottomButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface.withValues(alpha: 0.92),
+      borderRadius: BorderRadius.circular(18),
+      elevation: 4,
+      shadowColor: Colors.black.withValues(alpha: 0.20),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: scheme.primary,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Bottom',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -858,20 +981,20 @@ Color _accent1_500(ColorScheme scheme) => scheme.primary;
 
 Color _accent1_600(ColorScheme scheme) => scheme.primary;
 
-Color _accent1_700(ColorScheme scheme) => Color.alphaBlend(
-  scheme.primary.withValues(alpha: 0.86),
-  scheme.surfaceContainerHighest,
-);
-
 Color _accent1_800(ColorScheme scheme) => scheme.primary;
 
 Color _accent2_600(ColorScheme scheme) => scheme.secondary;
+
+Color _accent2_800(ColorScheme scheme) => Color.alphaBlend(
+  scheme.secondary.withValues(alpha: 0.94),
+  scheme.surfaceContainerHighest,
+);
 
 Color _accent3_500(ColorScheme scheme) => scheme.tertiary;
 
 Color _accent3_600(ColorScheme scheme) => scheme.tertiary;
 
-enum MessageAction { copy, edit, retract, delete }
+enum MessageAction { copy, hide, edit, retract, delete }
 
 Future<void> showMessageActionMenu(
   BuildContext context,
@@ -881,6 +1004,7 @@ Future<void> showMessageActionMenu(
   ApiClient? api,
   void Function(String guid)? onRetracted,
   Future<void> Function()? onChanged,
+  Future<void> Function()? onHide,
 }) async {
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
   final text = displayText(message);
@@ -909,6 +1033,15 @@ Future<void> showMessageActionMenu(
           dense: true,
           leading: Icon(Icons.copy),
           title: Text('Copy'),
+        ),
+      ),
+    if (onHide != null && message.guid.isNotEmpty)
+      PopupMenuItem<MessageAction>(
+        value: MessageAction.hide,
+        child: ListTile(
+          dense: true,
+          leading: const Icon(Icons.visibility_off_outlined),
+          title: Text(MicaLocalizations.of(context).t('chat.hideMessage')),
         ),
       ),
     if (canMutate && caps.edit && message.isFromMe && text != null)
@@ -961,6 +1094,15 @@ Future<void> showMessageActionMenu(
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Message copied')));
+      break;
+    case MessageAction.hide:
+      await onHide?.call();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(MicaLocalizations.of(context).t('chat.messageHidden')),
+        ),
+      );
       break;
     case MessageAction.edit:
       if (api == null || chatGuid == null || text == null) return;
@@ -1144,8 +1286,10 @@ class _MessageBubble extends StatefulWidget {
   final List<MessageModel> reactions;
   final List<MessageModel> stickers;
   final ReplyPreview? reply;
+  final bool highlighted;
   final String? effectHint;
   final VoidCallback onRetry;
+  final ValueChanged<String?> onReplyTap;
   final void Function(Offset globalPosition) onActions;
 
   const _MessageBubble({
@@ -1161,8 +1305,10 @@ class _MessageBubble extends StatefulWidget {
     this.reactions = const [],
     this.stickers = const [],
     this.reply,
+    required this.highlighted,
     this.effectHint,
     required this.onRetry,
+    required this.onReplyTap,
     required this.onActions,
   });
 
@@ -1357,7 +1503,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
           UrlPreviewCard(url: previewUrl),
           const SizedBox(height: 4),
         ],
-        if (reply != null) _ReplyPreviewBlock(reply: reply, fromMe: fromMe),
+        if (reply != null)
+          _ReplyPreviewBlock(
+            reply: reply,
+            fromMe: fromMe,
+            onTap: () => widget.onReplyTap(reply.targetGuid),
+          ),
         bubbleWithOverlays,
         _Footer(
           message: message,
@@ -1398,7 +1549,18 @@ class _MessageBubbleState extends State<_MessageBubble> {
           onTap: () => setState(() => _revealed = !_revealed),
           onLongPressStart: (details) =>
               widget.onActions(details.globalPosition),
-          child: row,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: widget.highlighted
+                  ? scheme.tertiary.withValues(alpha: 0.24)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: row,
+          ),
         ),
       ),
     );
@@ -1554,7 +1716,13 @@ class _AssociatedStickerStrip extends StatelessWidget {
 class _ReplyPreviewBlock extends StatelessWidget {
   final ReplyPreview reply;
   final bool fromMe;
-  const _ReplyPreviewBlock({required this.reply, required this.fromMe});
+  final VoidCallback onTap;
+
+  const _ReplyPreviewBlock({
+    required this.reply,
+    required this.fromMe,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1571,46 +1739,51 @@ class _ReplyPreviewBlock extends StatelessWidget {
         child: Transform.scale(
           scale: 0.92,
           alignment: fromMe ? Alignment.centerRight : Alignment.centerLeft,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: bubbleColor,
+          child: Material(
+            color: bubbleColor,
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              onTap: onTap,
               borderRadius: BorderRadius.circular(18),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.reply, size: 14, color: textColor),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (reply.targetLoaded && reply.sender.isNotEmpty)
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.reply, size: 14, color: textColor),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (reply.targetLoaded && reply.sender.isNotEmpty)
+                            Text(
+                              reply.sender,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: textColor,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
                           Text(
-                            reply.sender,
+                            label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelSmall
-                                ?.copyWith(
-                                  color: textColor,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodySmall?.copyWith(color: textColor),
                           ),
-                        Text(
-                          label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(
-                            context,
-                          ).textTheme.bodySmall?.copyWith(color: textColor),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -1902,7 +2075,7 @@ class _VoiceRecordingBarState extends State<_VoiceRecordingBar> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final outerColor = dark ? _accent1_700(scheme) : _accent1_500(scheme);
+    final outerColor = dark ? _accent2_800(scheme) : _accent1_500(scheme);
     final inputColor = _accent1_10(scheme);
     final inputIconColor = _accent1_800(scheme);
     final bar = Container(
@@ -2030,7 +2203,7 @@ class _VoiceReviewBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final outerColor = dark ? _accent1_700(scheme) : _accent1_500(scheme);
+    final outerColor = dark ? _accent2_800(scheme) : _accent1_500(scheme);
     final inputColor = _accent1_10(scheme);
     final inputIconColor = _accent1_800(scheme);
     final bar = Container(
@@ -2305,7 +2478,7 @@ class _ComposerState extends State<_Composer> {
     }
 
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final outerColor = dark ? _accent1_700(scheme) : _accent1_500(scheme);
+    final outerColor = dark ? _accent2_800(scheme) : _accent1_500(scheme);
     final attachIconColor = dark ? _accent1_50(scheme) : scheme.onPrimary;
     final inputColor = _accent1_10(scheme);
     final inputIconColor = _accent1_800(scheme);
@@ -2919,6 +3092,7 @@ class _ThreadDetailsSheet extends StatefulWidget {
   final VoidCallback onRefresh;
   final VoidCallback onLoadOlder;
   final ValueChanged<ChatSummary> onSwitchRoute;
+  final ValueChanged<String> onJumpToMessage;
 
   const _ThreadDetailsSheet({
     required this.title,
@@ -2930,6 +3104,7 @@ class _ThreadDetailsSheet extends StatefulWidget {
     required this.onRefresh,
     required this.onLoadOlder,
     required this.onSwitchRoute,
+    required this.onJumpToMessage,
   });
 
   @override
@@ -2937,22 +3112,12 @@ class _ThreadDetailsSheet extends StatefulWidget {
 }
 
 class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
-  final _search = TextEditingController();
-  String _query = '';
   late String _activeGuid = widget.active.guid;
-  bool _searchOpen = false;
-
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final app = context.watch<AppController>();
-    final q = _query.trim().toLowerCase();
     final api = widget.api;
     final routeGuids = widget.merged.routes.map((r) => r.guid).toList();
     final muted = app.areChatsMuted(routeGuids);
@@ -2982,18 +3147,18 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
       if (a.isLinkPreview) linkSet.add(a.displayName);
     }
     final linkUrls = linkSet.take(4).toList(growable: false);
-    // Newest-first matches whose text contains the query.
-    final results = q.isEmpty
-        ? const <MessageModel>[]
-        : (widget.messages
-              .where((m) => (m.text ?? '').toLowerCase().contains(q))
-              .toList(growable: false)
-            ..sort(
-              (a, b) => (b.dateCreated ?? 0).compareTo(a.dateCreated ?? 0),
-            ));
     final insets = MediaQuery.of(context).viewInsets.bottom;
     final headerBg = _accent1_100(scheme);
     final pageBg = _accent1_50(scheme);
+    final isGroup = widget.active.isGroup;
+    final detailSubtitle = isGroup
+        ? 'iMessage 群聊'
+        : widget.active.chatIdentifier;
+    final participants = widget.active.participants
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
 
     return Scaffold(
       appBar: AppBar(
@@ -3002,17 +3167,9 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
         surfaceTintColor: Colors.transparent,
         actions: [
           IconButton(
-            tooltip: _searchOpen ? 'Hide search' : 'Search',
-            icon: Icon(_searchOpen ? Icons.search_off : Icons.search),
-            onPressed: () {
-              setState(() {
-                _searchOpen = !_searchOpen;
-                if (!_searchOpen) {
-                  _search.clear();
-                  _query = '';
-                }
-              });
-            },
+            tooltip: 'Search',
+            icon: const Icon(Icons.search),
+            onPressed: _showDetailsSearchSheet,
           ),
         ],
       ),
@@ -3049,9 +3206,10 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            if (widget.active.chatIdentifier != null)
+                            if (detailSubtitle != null &&
+                                detailSubtitle.isNotEmpty)
                               Text(
-                                widget.active.chatIdentifier!,
+                                detailSubtitle,
                                 style: Theme.of(context).textTheme.bodySmall
                                     ?.copyWith(color: scheme.onSurfaceVariant),
                               ),
@@ -3108,34 +3266,61 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                     ],
                   ),
                   const Divider(height: 24),
-                  // Routes for this contact (server-authoritative service per route).
-                  Text('Routes', style: Theme.of(context).textTheme.labelLarge),
+                  Text(
+                    isGroup ? 'Accounts' : 'Routes',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
                   const SizedBox(height: 4),
-                  for (final r in widget.merged.routes)
-                    ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        r.guid == _activeGuid
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_unchecked,
-                        size: 18,
-                        color: scheme.primary,
+                  if (isGroup) ...[
+                    for (final handle in participants)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: HandleAvatar(
+                          title: widget.resolveName(handle) ?? handle,
+                          handle: handle,
+                          radius: 16,
+                        ),
+                        title: Text(widget.resolveName(handle) ?? handle),
+                        subtitle: widget.resolveName(handle) != null
+                            ? Text(handle)
+                            : null,
                       ),
-                      title: Text(r.service.label),
-                      subtitle: r.chatIdentifier != null
-                          ? Text(r.chatIdentifier!)
-                          : null,
-                      selected: r.guid == _activeGuid,
-                      selectedTileColor: scheme.primary.withValues(alpha: 0.08),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                    if (participants.isEmpty)
+                      Text(
+                        'No accounts found',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
-                      onTap: () {
-                        setState(() => _activeGuid = r.guid);
-                        widget.onSwitchRoute(r);
-                      },
-                    ),
+                  ] else
+                    for (final r in widget.merged.routes)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          r.guid == _activeGuid
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                          size: 18,
+                          color: scheme.primary,
+                        ),
+                        title: Text(r.service.label),
+                        subtitle: r.chatIdentifier != null
+                            ? Text(r.chatIdentifier!)
+                            : null,
+                        selected: r.guid == _activeGuid,
+                        selectedTileColor: scheme.primary.withValues(
+                          alpha: 0.08,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        onTap: () {
+                          setState(() => _activeGuid = r.guid);
+                          widget.onSwitchRoute(r);
+                        },
+                      ),
                   const Divider(height: 24),
                   if (api != null && media.isNotEmpty) ...[
                     Text(
@@ -3151,21 +3336,23 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                       'Links',
                       style: Theme.of(context).textTheme.labelLarge,
                     ),
-                    const SizedBox(height: 8),
-                    GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: linkUrls.length,
-                      gridDelegate:
-                          const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 280,
-                            mainAxisSpacing: 8,
-                            crossAxisSpacing: 8,
-                            childAspectRatio: 0.86,
-                          ),
-                      itemBuilder: (context, i) =>
-                          UrlPreviewCard(url: linkUrls[i], compact: true),
-                    ),
+                    const SizedBox(height: 4),
+                    for (final url in linkUrls)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.link),
+                        title: Text(
+                          url,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Uri.tryParse(url)?.host.isNotEmpty == true
+                            ? Text(Uri.parse(url).host)
+                            : null,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
                     const Divider(height: 24),
                   ],
                   if (api != null && files.isNotEmpty) ...[
@@ -3198,10 +3385,116 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                       ),
                     const Divider(height: 24),
                   ],
-                  if (_searchOpen) ...[
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDetailsSearchSheet() {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: false,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _ThreadSearchSheet(
+        messages: widget.messages,
+        resolveName: widget.resolveName,
+        onSelect: (guid) {
+          Navigator.of(context).pop();
+          widget.onJumpToMessage(guid);
+        },
+      ),
+    );
+  }
+}
+
+class _ThreadSearchSheet extends StatefulWidget {
+  final List<MessageModel> messages;
+  final String? Function(String? handle) resolveName;
+  final ValueChanged<String> onSelect;
+
+  const _ThreadSearchSheet({
+    required this.messages,
+    required this.resolveName,
+    required this.onSelect,
+  });
+
+  @override
+  State<_ThreadSearchSheet> createState() => _ThreadSearchSheetState();
+}
+
+class _ThreadSearchSheetState extends State<_ThreadSearchSheet> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final q = _query.trim().toLowerCase();
+    final results = q.isEmpty
+        ? const <MessageModel>[]
+        : (widget.messages
+              .where(
+                (m) =>
+                    (displayText(m) ?? m.text ?? '').toLowerCase().contains(q),
+              )
+              .toList(growable: false)
+            ..sort(
+              (a, b) => (b.dateCreated ?? 0).compareTo(a.dateCreated ?? 0),
+            ));
+    final insets = MediaQuery.of(context).viewInsets.bottom;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: insets),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: FractionallySizedBox(
+          heightFactor: 0.72,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: _accent1_50(scheme),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 24,
+                  offset: const Offset(0, -8),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 5,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
                     TextField(
                       controller: _search,
-                      autofocus: false,
+                      autofocus: true,
                       decoration: InputDecoration(
                         hintText: 'Search this conversation',
                         prefixIcon: const Icon(Icons.search),
@@ -3217,7 +3510,7 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                           borderSide: BorderSide(color: scheme.primary),
                         ),
                         filled: true,
-                        fillColor: scheme.surface.withValues(alpha: 0.82),
+                        fillColor: scheme.surface.withValues(alpha: 0.86),
                         isDense: true,
                         suffixIcon: _query.isEmpty
                             ? null
@@ -3232,30 +3525,43 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                       onChanged: (v) => setState(() => _query = v),
                     ),
                     const SizedBox(height: 12),
-                    if (q.isNotEmpty)
-                      Text(
-                        results.isEmpty
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        q.isEmpty
+                            ? 'Type to search messages'
+                            : results.isEmpty
                             ? 'No matches'
                             : '${results.length} match${results.length == 1 ? '' : 'es'}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: scheme.onSurfaceVariant,
                         ),
                       ),
-                    for (final m in results)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          m.text ?? '',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          _sheetSubtitle(m),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: results.length,
+                        itemBuilder: (context, i) {
+                          final m = results[i];
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(
+                              displayText(m) ?? m.text ?? '',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              _subtitle(m),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            onTap: () => widget.onSelect(m.guid),
+                          );
+                        },
                       ),
+                    ),
                   ],
-                ],
+                ),
               ),
             ),
           ),
@@ -3264,7 +3570,7 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     );
   }
 
-  String _sheetSubtitle(MessageModel m) {
+  String _subtitle(MessageModel m) {
     final who = m.isFromMe
         ? 'You'
         : (widget.resolveName(m.handleId) ?? m.handleId ?? 'Them');

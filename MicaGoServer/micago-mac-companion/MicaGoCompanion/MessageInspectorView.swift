@@ -12,6 +12,8 @@ struct MessageInspectorPage: View {
 
     var body: some View {
         Group {
+            TestContactDebugCard()
+
             FiltersCard(vm: vm)
 
             if let err = vm.error {
@@ -536,4 +538,183 @@ func relativeTime(_ unixMs: Int64) -> String {
     let fmt = DateFormatter()
     fmt.dateFormat = "MMM d"
     return fmt.string(from: date)
+}
+
+// MARK: - Test contact (offline loopback) debug card
+
+/// A two-way scratchpad for the offline test contact, pinned at the top of the
+/// Debug page. Type here → the message pushes to the phone like a received
+/// iMessage; the phone's replies (looped back, never sent) show up here. The
+/// conversation resets to empty on each server start.
+struct TestContactDebugCard: View {
+    @EnvironmentObject var model: AppModel
+    @StateObject private var vm = TestContactDebugModel()
+    @State private var draft = ""
+    @State private var sending = false
+
+    var body: some View {
+        SectionCard(title: "Test Contact") {
+            if !vm.available {
+                Text(vm.statusText.isEmpty
+                     ? "The offline test contact loops messages between this Mac and the phone — nothing is ever delivered."
+                     : vm.statusText)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(vm.busy ? "Enabling…" : "Enable test contact") {
+                    Task { await vm.setEnabled(true, model) }
+                }
+                .disabled(vm.busy)
+            } else {
+                if let err = vm.error {
+                    Label(err, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                conversation
+                composer
+                HStack {
+                    Text("Pushes to the phone; phone replies appear here. Resets on server restart.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Disable") { Task { await vm.setEnabled(false, model) } }
+                        .buttonStyle(.borderless).font(.caption2)
+                }
+            }
+        }
+        .task { await vm.autoRefresh(model) }
+    }
+
+    private var conversation: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                if vm.messages.isEmpty {
+                    Text("No messages yet. Say hello 👋")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                // Oldest first (the API returns newest-first).
+                ForEach(vm.messages.reversed()) { msg in
+                    TestContactBubble(message: msg)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 2)
+        }
+        .frame(height: 200)
+    }
+
+    private var composer: some View {
+        HStack(spacing: 8) {
+            TextField("Message as the test contact…", text: $draft, onCommit: submit)
+                .textFieldStyle(.roundedBorder)
+                .disabled(vm.busy || sending)
+            Button(sending ? "Sending…" : "Send", action: submit)
+                .disabled(!canSend)
+        }
+    }
+
+    private var canSend: Bool {
+        !vm.busy && !sending && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func submit() {
+        guard canSend else { return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        sending = true
+        Task {
+            let ok = await vm.send(text, model)
+            await MainActor.run {
+                if ok {
+                    draft = ""
+                }
+                sending = false
+            }
+        }
+    }
+}
+
+private struct TestContactBubble: View {
+    let message: RecentMessage
+
+    // Relay perspective: isFromMe == the phone user sent it. In this card the Mac
+    // operator plays the test contact, so the test contact's messages (!isFromMe)
+    // sit on the right and the phone's on the left.
+    private var fromCard: Bool { !message.isFromMe }
+
+    var body: some View {
+        HStack {
+            if fromCard { Spacer(minLength: 40) }
+            Text(message.text?.isEmpty == false ? message.text! : "[attachment]")
+                .font(.callout)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(fromCard ? Color.accentColor.opacity(0.85) : Color.secondary.opacity(0.18))
+                .foregroundStyle(fromCard ? Color.white : Color.primary)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            if !fromCard { Spacer(minLength: 40) }
+        }
+    }
+}
+
+@MainActor
+final class TestContactDebugModel: ObservableObject {
+    @Published private(set) var available = false
+    @Published private(set) var messages: [RecentMessage] = []
+    @Published private(set) var busy = false
+    @Published private(set) var error: String?
+    @Published private(set) var statusText = ""
+
+    private var chatGuid = ""
+    private weak var model: AppModel?
+
+    func autoRefresh(_ model: AppModel) async {
+        self.model = model
+        while !Task.isCancelled {
+            await reload()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    }
+
+    private func client() -> APIClient? {
+        guard let base = model?.baseURL else { return nil }
+        return APIClient(baseURL: base, token: model?.token ?? "")
+    }
+
+    func reload() async {
+        guard let client = client() else { statusText = "Start the server first."; return }
+        do {
+            let info = try await client.testContactInfo()
+            available = info.enabled
+            chatGuid = info.chatGuid ?? ""
+            if available, !chatGuid.isEmpty {
+                messages = try await client.chatMessages(guid: chatGuid)
+                error = nil
+            }
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        }
+    }
+
+    func send(_ text: String, _ model: AppModel) async -> Bool {
+        guard let client = client() else { return false }
+        busy = true; defer { busy = false }
+        do {
+            try await client.sendTestInbound(text)
+            await reload()
+            return true
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            return false
+        }
+    }
+
+    func setEnabled(_ enabled: Bool, _ model: AppModel) async {
+        guard let client = client() else { return }
+        busy = true; defer { busy = false }
+        do {
+            let info = try await client.setTestContact(enabled: enabled)
+            available = info.enabled
+            chatGuid = info.chatGuid ?? ""
+            await reload()
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        }
+    }
 }

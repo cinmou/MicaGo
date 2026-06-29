@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
+import '../../core/l10n/app_localizations.dart';
 import '../contacts/contacts_service.dart';
 import '../settings/message_display_controller.dart';
 import 'avatar.dart';
 import 'chat_list_controller.dart';
 import 'chat_service.dart';
+import 'message_render.dart' show chatListPreviewText;
 import 'models/chat_summary.dart';
 import 'models/merged_chat.dart';
 
@@ -17,8 +21,18 @@ import 'models/merged_chat.dart';
 class ChatListScreen extends StatefulWidget {
   final void Function(MergedChat merged) onOpen;
   final String? selectedGuid;
+  final ValueListenable<int>? searchRequests;
+  final bool compact;
+  final bool sidebar;
 
-  const ChatListScreen({super.key, required this.onOpen, this.selectedGuid});
+  const ChatListScreen({
+    super.key,
+    required this.onOpen,
+    this.selectedGuid,
+    this.searchRequests,
+    this.compact = false,
+    this.sidebar = false,
+  });
 
   @override
   State<ChatListScreen> createState() => _ChatListScreenState();
@@ -27,7 +41,9 @@ class ChatListScreen extends StatefulWidget {
 class _ChatListScreenState extends State<ChatListScreen> {
   late final ChatListController _controller;
   final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
   String _query = '';
+  bool _searchOpen = false;
 
   @override
   void initState() {
@@ -38,14 +54,50 @@ class _ChatListScreenState extends State<ChatListScreen> {
         .prefs
         .showDebugChats;
     _controller.startRealtime();
+    widget.searchRequests?.addListener(_openSearch);
     WidgetsBinding.instance.addPostFrameCallback((_) => _controller.load());
   }
 
   @override
+  void didUpdateWidget(covariant ChatListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.searchRequests != widget.searchRequests) {
+      oldWidget.searchRequests?.removeListener(_openSearch);
+      widget.searchRequests?.addListener(_openSearch);
+    }
+    if (!oldWidget.compact && widget.compact) {
+      _searchCtrl.clear();
+      _searchFocus.unfocus();
+      _query = '';
+      _searchOpen = false;
+    }
+  }
+
+  @override
   void dispose() {
+    widget.searchRequests?.removeListener(_openSearch);
     _searchCtrl.dispose();
+    _searchFocus.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _openSearch() {
+    if (!mounted) return;
+    if (widget.compact) return;
+    setState(() => _searchOpen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    _searchCtrl.clear();
+    _searchFocus.unfocus();
+    setState(() {
+      _query = '';
+      _searchOpen = false;
+    });
   }
 
   // C22: if a notification tap requested a chat GUID, open the matching merged
@@ -66,8 +118,81 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final target = match;
     app.clearPendingOpenChat();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.onOpen(target);
+      if (mounted) _openMerged(target);
     });
+  }
+
+  void _openMerged(MergedChat merged) {
+    _controller.markRoutesRead(merged.routes.map((r) => r.guid));
+    widget.onOpen(merged);
+  }
+
+  // Swipe right (startToEnd) = clear the unread dot; swipe left (endToStart) =
+  // hide the contact (client-only "delete"). Returns whether to dismiss the row.
+  Future<bool> _onSwipe(
+    BuildContext context,
+    MergedChat m,
+    DismissDirection dir,
+  ) async {
+    if (dir == DismissDirection.startToEnd) {
+      // Swipe right → clear the unread dot; keep the row in place.
+      HapticFeedback.selectionClick();
+      await _controller.markRoutesRead(m.routes.map((r) => r.guid));
+      return false;
+    }
+    return true; // swipe left → hide; data removal happens in onDismissed
+  }
+
+  // The actual hide runs after the dismiss animation, so the list mutation never
+  // races the Dismissible still being on screen.
+  void _onHideDismissed(BuildContext context, MergedChat m) {
+    HapticFeedback.lightImpact();
+    _controller.hideChats(m.routes.map((r) => r.guid));
+    _showHiddenBanner(context);
+  }
+
+  void _showChatMenu(BuildContext context, MergedChat m) async {
+    HapticFeedback.selectionClick();
+    final strings = MicaLocalizations.of(context);
+    final pinned = m.primary.isPinned;
+    final guids = m.routes.map((r) => r.guid).toList();
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(pinned ? Icons.push_pin_outlined : Icons.push_pin),
+              title: Text(strings.t(pinned ? 'chat.unpin' : 'chat.pin')),
+              onTap: () => Navigator.pop(ctx, 'pin'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.visibility_off_outlined),
+              title: Text(strings.t('chat.hide')),
+              onTap: () => Navigator.pop(ctx, 'hide'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted) return;
+    switch (action) {
+      case 'pin':
+        await _controller.setPinned(guids, !pinned);
+        break;
+      case 'hide':
+        await _controller.hideChats(guids);
+        if (context.mounted) _showHiddenBanner(context);
+        break;
+    }
+  }
+
+  void _showHiddenBanner(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(strings.t('chat.hiddenContact'))));
   }
 
   List<ChatSummary> _filtered(
@@ -127,9 +252,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
             _maybeOpenPendingChat(merged);
             return Column(
               children: [
-                _SearchField(
-                  controller: _searchCtrl,
-                  onChanged: (v) => setState(() => _query = v),
+                _AnimatedSearchSlot(
+                  visible: _searchOpen && !widget.compact,
+                  child: _SearchField(
+                    controller: _searchCtrl,
+                    focusNode: _searchFocus,
+                    onChanged: (v) => setState(() => _query = v),
+                    onClose: _closeSearch,
+                  ),
                 ),
                 Expanded(
                   child: RefreshIndicator(
@@ -137,17 +267,59 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     child: merged.isEmpty
                         ? _NoMatches(query: _query)
                         : ListView.separated(
+                            padding: EdgeInsets.only(
+                              bottom: MediaQuery.paddingOf(context).bottom + 8,
+                            ),
                             itemCount: merged.length,
-                            separatorBuilder: (_, _) =>
-                                const Divider(height: 1, indent: 72),
+                            separatorBuilder: (_, _) => widget.compact
+                                ? const SizedBox(height: 4)
+                                : const SizedBox(height: 2),
                             itemBuilder: (context, i) {
                               final m = merged[i];
-                              return _ChatRow(
-                                merged: m,
-                                selected: m.routes.any(
-                                  (r) => r.guid == widget.selectedGuid,
+                              final selected = m.routes.any(
+                                (r) => r.guid == widget.selectedGuid,
+                              );
+                              if (widget.compact) {
+                                return _ChatRailRow(
+                                  merged: m,
+                                  selected: selected,
+                                  onTap: () => _openMerged(m),
+                                  onLongPress: () => _showChatMenu(context, m),
+                                );
+                              }
+                              return Dismissible(
+                                key: ValueKey('chat-${m.primary.guid}'),
+                                dismissThresholds: const {
+                                  DismissDirection.startToEnd: 0.48,
+                                  DismissDirection.endToStart: 0.58,
+                                },
+                                background: _SwipeBg(
+                                  alignment: Alignment.centerLeft,
+                                  color: Theme.of(context).colorScheme.primary,
+                                  icon: Icons.mark_chat_read_outlined,
+                                  label: 'Mark read',
                                 ),
-                                onTap: () => widget.onOpen(m),
+                                secondaryBackground: _SwipeBg(
+                                  alignment: Alignment.centerRight,
+                                  color: Theme.of(context).colorScheme.error,
+                                  icon: Icons.visibility_off_outlined,
+                                  label: 'Hide',
+                                ),
+                                confirmDismiss: (dir) =>
+                                    _onSwipe(context, m, dir),
+                                onDismissed: (_) =>
+                                    _onHideDismissed(context, m),
+                                child: _ChatRow(
+                                  merged: m,
+                                  sidebar: widget.sidebar,
+                                  selected: selected,
+                                  onTap: () => _openMerged(m),
+                                  onLongPress: () => _showChatMenu(context, m),
+                                  onDismissUnread: () =>
+                                      _controller.markRoutesRead(
+                                        m.routes.map((r) => r.guid),
+                                      ),
+                                ),
                               );
                             },
                           ),
@@ -161,33 +333,148 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 }
 
+class _AnimatedSearchSlot extends StatelessWidget {
+  final bool visible;
+  final Widget child;
+
+  const _AnimatedSearchSlot({required this.visible, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        reverseDuration: const Duration(milliseconds: 160),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) {
+          return SizeTransition(
+            sizeFactor: animation,
+            alignment: AlignmentDirectional.topStart,
+            child: FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, -0.18),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            ),
+          );
+        },
+        child: visible
+            ? KeyedSubtree(key: const ValueKey('search-open'), child: child)
+            : const SizedBox(key: ValueKey('search-closed'), height: 0),
+      ),
+    );
+  }
+}
+
 class _SearchField extends StatelessWidget {
   final TextEditingController controller;
+  final FocusNode focusNode;
   final ValueChanged<String> onChanged;
-  const _SearchField({required this.controller, required this.onChanged});
+  final VoidCallback onClose;
+  const _SearchField({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.onClose,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
       child: SearchBar(
         controller: controller,
+        focusNode: focusNode,
         onChanged: onChanged,
         hintText: 'Search chats',
         leading: const Icon(Icons.search),
         trailing: [
-          if (controller.text.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () {
-                controller.clear();
-                onChanged('');
-              },
-            ),
+          IconButton(icon: const Icon(Icons.close), onPressed: onClose),
         ],
         elevation: const WidgetStatePropertyAll(0),
         padding: const WidgetStatePropertyAll(
           EdgeInsets.symmetric(horizontal: 12),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatRailRow extends StatelessWidget {
+  final MergedChat merged;
+  final bool selected;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  const _ChatRailRow({
+    required this.merged,
+    required this.selected,
+    required this.onTap,
+    this.onLongPress,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final chat = merged.primary;
+    final contacts = context.watch<ContactsService>();
+    final resolvedName = (!chat.isGroup)
+        ? contacts.displayNameFor(chat.chatIdentifier)
+        : null;
+    final title = (resolvedName != null && resolvedName.isNotEmpty)
+        ? resolvedName
+        : chat.title;
+    final unreadCount = merged.unreadCount;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Material(
+        color: selected
+            ? scheme.primaryContainer.withValues(alpha: 0.65)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(24),
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: BorderRadius.circular(24),
+          child: SizedBox(
+            height: 60,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                HandleAvatar(
+                  title: title,
+                  handle: chat.isGroup ? null : chat.chatIdentifier,
+                  participantHandles: chat.participants,
+                  isGroup: chat.isGroup,
+                  radius: 22,
+                ),
+                if (unreadCount > 0)
+                  Positioned(
+                    top: 9,
+                    right: 11,
+                    child: unreadCount > 9
+                        ? _UnreadCountPill(count: unreadCount)
+                        : Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              color: scheme.primary,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: scheme.surface,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -214,11 +501,17 @@ class _NoMatches extends StatelessWidget {
 class _ChatRow extends StatelessWidget {
   final MergedChat merged;
   final bool selected;
+  final bool sidebar;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onDismissUnread;
 
   const _ChatRow({
     required this.merged,
     required this.onTap,
+    this.sidebar = false,
+    this.onLongPress,
+    this.onDismissUnread,
     this.selected = false,
   });
 
@@ -226,6 +519,10 @@ class _ChatRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final chat = merged.primary;
+    final unreadCount = merged.unreadCount;
+    // C43: the dot is the watermark-derived state; the count is just the number.
+    final hasUnread = merged.hasUnread;
+    final hasBadgeNumber = hasUnread && unreadCount > 0;
     // Prefer a local contact name (1:1) when contacts matching is enabled.
     final contacts = context.watch<ContactsService>();
     final resolvedName = (!chat.isGroup)
@@ -234,50 +531,123 @@ class _ChatRow extends StatelessWidget {
     final title = (resolvedName != null && resolvedName.isNotEmpty)
         ? resolvedName
         : chat.title;
-    return ListTile(
-      onTap: onTap,
-      selected: selected,
-      selectedTileColor: scheme.secondaryContainer.withValues(alpha: 0.4),
-      leading: HandleAvatar(
-        title: title,
-        handle: chat.isGroup ? null : chat.chatIdentifier,
-        participantHandles: chat.participants,
-        isGroup: chat.isGroup,
+    // Tinted rounded card only when there is a numeric badge (a notified unread).
+    // A bare dot (notifications off, learned via refresh) stays a plain row.
+    final rowColor = selected
+        ? scheme.primaryContainer.withValues(alpha: 0.52)
+        : hasBadgeNumber
+        ? scheme.primaryContainer.withValues(alpha: 0.20)
+        : Colors.transparent;
+    final horizontalMargin = sidebar ? 12.0 : 8.0;
+    final verticalMargin = sidebar ? 5.0 : 2.0;
+    final horizontalPadding = sidebar ? 16.0 : 14.0;
+    final verticalPadding = sidebar ? 12.0 : 10.0;
+    final minHeight = sidebar ? 84.0 : 72.0;
+    final avatarRadius = sidebar ? 24.0 : 25.0;
+    // C44: a custom row (not ListTile) — ListTile rejects a trailing wider than
+    // the tile, which the draggable badge could trip and white-screen the page.
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: horizontalMargin,
+        vertical: verticalMargin,
       ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: chat.hasUnread ? FontWeight.w700 : FontWeight.w500,
+      child: Material(
+        color: rowColor,
+        borderRadius: BorderRadius.circular(24),
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: BorderRadius.circular(24),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: minHeight),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: horizontalPadding,
+                vertical: verticalPadding,
+              ),
+              child: Row(
+                children: [
+                  HandleAvatar(
+                    title: title,
+                    handle: chat.isGroup ? null : chat.chatIdentifier,
+                    participantHandles: chat.participants,
+                    isGroup: chat.isGroup,
+                    radius: avatarRadius,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontWeight: hasUnread
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            // C21: route count (iMessage + SMS, etc.).
+                            if (merged.isMerged) ...[
+                              const SizedBox(width: 6),
+                              Icon(
+                                Icons.merge_type,
+                                size: 13,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ],
+                            if (chat.isArchived) ...[
+                              const SizedBox(width: 6),
+                              Icon(
+                                Icons.archive_outlined,
+                                size: 14,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ],
+                            if (chat.isPinned) ...[
+                              const SizedBox(width: 6),
+                              Icon(
+                                Icons.push_pin,
+                                size: 13,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          _subtitle(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  _trailing(context, hasUnread, unreadCount),
+                ],
               ),
             ),
           ),
-          // C21: show how many routes this contact has (iMessage + SMS, etc.).
-          if (merged.isMerged) ...[
-            const SizedBox(width: 6),
-            Icon(Icons.merge_type, size: 13, color: scheme.onSurfaceVariant),
-          ],
-          if (chat.isArchived) ...[
-            const SizedBox(width: 6),
-            Icon(
-              Icons.archive_outlined,
-              size: 14,
-              color: scheme.onSurfaceVariant,
-            ),
-          ],
-        ],
+        ),
       ),
-      subtitle: Text(_subtitle(), maxLines: 1, overflow: TextOverflow.ellipsis),
-      trailing: _trailing(context, chat),
     );
   }
 
   String _subtitle() {
-    final preview = merged.lastMessagePreview?.trim() ?? '';
+    final preview = chatListPreviewText(
+      merged.lastMessagePreview,
+      hasMessage: merged.lastMessageAt != null,
+    );
     if (preview.isNotEmpty) return preview;
     final chat = merged.primary;
     // For a merged contact, label the available routes (e.g. "iMessage · SMS");
@@ -299,20 +669,35 @@ class _ChatRow extends StatelessWidget {
     return parts.join(' · ');
   }
 
-  Widget? _trailing(BuildContext context, ChatSummary chat) {
+  Widget _trailing(BuildContext context, bool hasUnread, int unreadCount) {
     final scheme = Theme.of(context).colorScheme;
-    if (chat.hasUnread) {
-      return Badge(label: Text('${chat.unreadCount}'));
-    }
-    if (chat.lastMessageAt != null) {
-      return Text(
-        _relativeTime(chat.lastMessageAt!),
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-      );
-    }
-    return null;
+    final time = merged.lastMessageAt;
+    if (time == null && !hasUnread) return const SizedBox.shrink();
+    final textTheme = Theme.of(context).textTheme;
+    // Badge is draggable: flick it away to mark the chat read (C43).
+    final badge = hasUnread
+        ? _DraggableUnreadBadge(
+            onDismiss: onDismissUnread ?? () {},
+            child: unreadCount > 0
+                ? _UnreadCountPill(count: unreadCount)
+                : const _UnreadDot(),
+          )
+        : null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (time != null)
+          Text(
+            _relativeTime(time),
+            style: textTheme.bodySmall?.copyWith(
+              color: hasUnread ? scheme.primary : scheme.onSurfaceVariant,
+              fontWeight: hasUnread ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        if (badge != null) ...[const SizedBox(height: 6), badge],
+      ],
+    );
   }
 
   String _relativeTime(int unixMs) {
@@ -323,6 +708,231 @@ class _ChatRow extends StatelessWidget {
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     return '${diff.inDays}d';
+  }
+}
+
+class _SwipeBg extends StatelessWidget {
+  final Alignment alignment;
+  final Color color;
+  final IconData icon;
+  final String label;
+  const _SwipeBg({
+    required this.alignment,
+    required this.color,
+    required this.icon,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final left = alignment == Alignment.centerLeft;
+    return Container(
+      color: color.withValues(alpha: 0.85),
+      alignment: alignment,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (left) Icon(icon, color: Colors.white),
+          if (left) const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (!left) const SizedBox(width: 8),
+          if (!left) Icon(icon, color: Colors.white),
+        ],
+      ),
+    );
+  }
+}
+
+/// Red number pill (white digits). Shown when hasUnread && unreadCount > 0.
+class _UnreadCountPill extends StatelessWidget {
+  final int count;
+
+  const _UnreadCountPill({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count > 9999 ? '9999+' : '$count';
+    return Container(
+      constraints: const BoxConstraints(minWidth: 24, minHeight: 22),
+      padding: const EdgeInsets.symmetric(horizontal: 9),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF3B30), // iOS-style red badge
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+          height: 1.1,
+        ),
+      ),
+    );
+  }
+}
+
+/// Plain unread dot (no number) in the theme's accent color. Shown when
+/// hasUnread is true but there is no tracked count (notifications were off).
+class _UnreadDot extends StatelessWidget {
+  const _UnreadDot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary,
+        shape: BoxShape.circle,
+      ),
+    );
+  }
+}
+
+/// Makes its [child] badge draggable, iOS-/Telegram-style: long-press to grab,
+/// pull it away (it stretches/scales with the pull), and on release past the
+/// threshold it plays a pop-and-fade dismiss (marks the chat read); under the
+/// threshold it springs back. Dragging never opens the chat.
+class _DraggableUnreadBadge extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onDismiss;
+  const _DraggableUnreadBadge({required this.child, required this.onDismiss});
+
+  @override
+  State<_DraggableUnreadBadge> createState() => _DraggableUnreadBadgeState();
+}
+
+class _DraggableUnreadBadgeState extends State<_DraggableUnreadBadge>
+    with TickerProviderStateMixin {
+  // Release past this distance to dismiss; under it, spring back.
+  static const double _threshold = 44;
+  // Transparent padding around the visible badge that enlarges the grab area.
+  static const double _hitPadding = 9;
+
+  Offset _drag = Offset.zero;
+  bool _dragging = false;
+  bool _dismissing = false;
+  bool _pastThreshold = false;
+
+  // Eager (not lazy `late = …`): a lazy field first built inside dispose()
+  // touches an inherited widget on a deactivated element and crashes (C44).
+  late final AnimationController _spring;
+  late final AnimationController _pop;
+
+  @override
+  void initState() {
+    super.initState();
+    _spring = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    );
+    _pop = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+  }
+
+  @override
+  void dispose() {
+    _spring.dispose();
+    _pop.dispose();
+    super.dispose();
+  }
+
+  /// Grows the badge as it is pulled — ~1.0 at rest up to ~1.35 at the threshold.
+  double get _dragScale {
+    final t = (_drag.distance / _threshold).clamp(0.0, 1.0);
+    return 1.0 + 0.35 * Curves.easeOut.transform(t);
+  }
+
+  void _springBack() {
+    final from = _drag;
+    final anim = Tween<Offset>(begin: from, end: Offset.zero).animate(
+      CurvedAnimation(parent: _spring, curve: Curves.elasticOut),
+    );
+    void tick() => setState(() => _drag = anim.value);
+    anim.addListener(tick);
+    _spring.forward(from: 0).whenComplete(() => anim.removeListener(tick));
+  }
+
+  void _beginDismiss() {
+    HapticFeedback.mediumImpact();
+    setState(() => _dismissing = true);
+    _pop.forward(from: 0).whenComplete(() {
+      if (mounted) widget.onDismiss(); // parent rebuild then drops the badge
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = Padding(
+      padding: const EdgeInsets.all(_hitPadding),
+      child: widget.child,
+    );
+
+    // Pop-and-fade: keep flinging in the drag direction, scale up, fade out.
+    if (_dismissing) {
+      return AnimatedBuilder(
+        animation: _pop,
+        builder: (context, _) {
+          final t = Curves.easeOut.transform(_pop.value);
+          final dir = _drag.distance == 0
+              ? Offset.zero
+              : _drag / _drag.distance;
+          final offset = _drag + dir * (30 * t);
+          final scale = (_dragScale + 0.25) - 0.1 * t;
+          return Opacity(
+            opacity: 1 - t,
+            child: Transform.translate(
+              offset: offset,
+              child: Transform.scale(scale: scale, child: badge),
+            ),
+          );
+        },
+      );
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPressStart: (_) {
+        _spring.stop();
+        HapticFeedback.selectionClick();
+        setState(() => _dragging = true);
+      },
+      onLongPressMoveUpdate: (d) {
+        final past = d.localOffsetFromOrigin.distance > _threshold;
+        if (past != _pastThreshold) {
+          _pastThreshold = past;
+          HapticFeedback.lightImpact(); // tick when crossing the dismiss line
+        }
+        setState(() => _drag = d.localOffsetFromOrigin);
+      },
+      onLongPressEnd: (_) {
+        setState(() => _dragging = false);
+        if (_drag.distance > _threshold) {
+          _beginDismiss();
+        } else {
+          _springBack();
+        }
+        _pastThreshold = false;
+      },
+      child: Transform.translate(
+        offset: _drag,
+        child: Transform.scale(
+          scale: _dragging ? _dragScale : 1.0,
+          child: badge,
+        ),
+      ),
+    );
   }
 }
 

@@ -26,6 +26,13 @@ class MergedChat {
   /// Display title comes from the primary route's title (contact name/handle).
   String get title => primary.title;
 
+  int get unreadCount =>
+      routes.fold<int>(0, (sum, route) => sum + (route.unreadCount ?? 0));
+
+  /// C43: the dot is derived (watermark-based) — any route reading as unread
+  /// makes the merged contact unread, independent of the auxiliary count.
+  bool get hasUnread => routes.any((r) => r.hasUnread);
+
   /// Newest last-message timestamp across all routes (for list ordering).
   int? get lastMessageAt {
     int? best;

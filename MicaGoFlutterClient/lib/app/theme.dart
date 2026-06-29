@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 class MicaGoTheme {
   MicaGoTheme._();
 
-  /// Brand seed color (Mica indigo).
-  static const Color seed = Color(0xFF5B6CFF);
+  /// Brand seed color. Also the fallback when system dynamic color is unavailable.
+  static const Color seed = Color(0xFF007AFF);
 
   static ThemeData light() => fromSeed(seed, Brightness.light);
   static ThemeData dark() => fromSeed(seed, Brightness.dark);

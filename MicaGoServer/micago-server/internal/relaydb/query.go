@@ -57,6 +57,7 @@ SELECT c.guid, c.chat_identifier, c.service_name, c.display_name, c.is_archived,
   (SELECT m.guid FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_guid,
   (SELECT m.text FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_text,
   (SELECT m.service FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_service,
+  (SELECT m.is_from_me FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_from_me,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid AND m.service IN ('iMessage','iMessageLite')) AS imessage_count
 FROM chats c
 WHERE (? = 1 OR c.is_archived = 0)
@@ -83,6 +84,7 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		var latestGUID *string
 		var latestText *string
 		var latestService *string
+		var latestFromMe sql.NullInt64
 		var imessageCount int64
 		if err := rows.Scan(
 			&chat.GUID,
@@ -96,11 +98,17 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 			&latestGUID,
 			&latestText,
 			&latestService,
+			&latestFromMe,
 			&imessageCount,
 		); err != nil {
 			return nil, err
 		}
 		chat.HasRenderableMessages = renderable > 0
+		// Drives the client's watermark-derived unread dot (a chat is unread when
+		// its latest renderable message is newer than the client last saw AND not
+		// from me). NULL (no renderable message) → treat as "from me" so an empty
+		// chat never shows unread.
+		chat.LatestRenderableFromMe = latestFromMe.Valid && latestFromMe.Int64 != 0
 		chat.ServiceCategory = ServiceCategory(chat.ServiceName)
 		// C21: the single server-authoritative service (message-aware, prefers
 		// iMessage when the chat is iMessage-capable) — drives the client badge,

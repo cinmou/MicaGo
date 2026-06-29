@@ -55,8 +55,41 @@ struct RecentMessage: Codable, Identifiable {
     var dateCreated: Int64?
     var isFromMe: Bool
     var handle: HandleRef?
+    var attachments: [RecentAttachment]?
 
     var id: String { guid }
+
+    /// One-line preview that never leaves a blank row: real text when present,
+    /// else a simple bracketed placeholder for the attachment kind.
+    var previewLabel: String {
+        let t = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty { return t }
+        if let first = attachments?.first { return first.placeholder }
+        return "[空消息]"
+    }
+}
+
+struct RecentAttachment: Codable, Hashable {
+    var displayKind: String?
+    var attachmentKind: String?
+    var mimeType: String?
+
+    /// A bracketed placeholder ([图片]/[视频]/[语音]/[贴图]/[位置]/[文件]).
+    var placeholder: String {
+        switch (displayKind ?? attachmentKind ?? "").lowercased() {
+        case "image", "photo": return "[图片]"
+        case "video": return "[视频]"
+        case "audio", "voice": return "[语音]"
+        case "sticker": return "[贴图]"
+        case "location": return "[位置]"
+        case "contact", "vcard": return "[联系人]"
+        default:
+            if (mimeType ?? "").hasPrefix("image/") { return "[图片]" }
+            if (mimeType ?? "").hasPrefix("video/") { return "[视频]" }
+            if (mimeType ?? "").hasPrefix("audio/") { return "[语音]" }
+            return "[文件]"
+        }
+    }
 }
 
 struct HandleRef: Codable, Hashable {

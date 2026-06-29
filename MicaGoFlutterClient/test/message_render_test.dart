@@ -121,21 +121,24 @@ void main() {
         MessageRenderableKind.unknown,
       );
     });
-    test('empty edited residue renders as an unsent system row, not a bubble', () {
-      final m = _msg(
-        isEdited: true,
-        semanticKind: 'empty_edited_residue',
-        renderRecommendation: 'system',
-        unsupportedReason: 'empty_edited_residue',
-      );
-      // C26: unrecoverable placeholders present as an unsent/retracted row
-      // (no longer a hidden "unknown"), while the diagnostic reason is retained
-      // for Message Info / Debug.
-      expect(renderableKindFor(m), MessageRenderableKind.retracted);
-      final cls = classifyMessage(m);
-      expect(cls.isUnsupported, isFalse);
-      expect(cls.reason, UnsupportedReason.emptyEditedResidue);
-    });
+    test(
+      'empty edited residue renders as an unsent system row, not a bubble',
+      () {
+        final m = _msg(
+          isEdited: true,
+          semanticKind: 'empty_edited_residue',
+          renderRecommendation: 'system',
+          unsupportedReason: 'empty_edited_residue',
+        );
+        // C26: unrecoverable placeholders present as an unsent/retracted row
+        // (no longer a hidden "unknown"), while the diagnostic reason is retained
+        // for Message Info / Debug.
+        expect(renderableKindFor(m), MessageRenderableKind.retracted);
+        final cls = classifyMessage(m);
+        expect(cls.isUnsupported, isFalse);
+        expect(cls.reason, UnsupportedReason.emptyEditedResidue);
+      },
+    );
     test('normal edited text stays a normal message', () {
       expect(
         renderableKindFor(_msg(text: 'fixed typo', isEdited: true)),
@@ -148,6 +151,49 @@ void main() {
     test('shows marker for edited non-retracted messages', () {
       expect(editedMarker(_msg(text: 'hi', isEdited: true)), 'Edited');
       expect(editedMarker(_msg(text: 'hi')), isNull);
+    });
+  });
+
+  group('chat list previews', () {
+    test('uses compact attachment placeholders', () {
+      expect(
+        messagePreviewText(
+          _msg(
+            attachments: const [
+              AttachmentModel(
+                guid: 'img',
+                downloadUrl: '/img',
+                attachmentKind: 'image',
+              ),
+            ],
+          ),
+        ),
+        '[图片]',
+      );
+      expect(
+        messagePreviewText(
+          _msg(
+            attachments: const [
+              AttachmentModel(
+                guid: 'voice',
+                downloadUrl: '/voice',
+                attachmentKind: 'audio',
+                isVoiceMessage: true,
+              ),
+            ],
+          ),
+        ),
+        '[语音]',
+      );
+      expect(messagePreviewText(_msg()), '[文件]');
+    });
+
+    test('sanitizes stale server/cache previews', () {
+      expect(chatListPreviewText('￼', hasMessage: true), '[文件]');
+      expect(chatListPreviewText('obj', hasMessage: true), '[文件]');
+      expect(chatListPreviewText('Message', hasMessage: true), '[文件]');
+      expect(chatListPreviewText('（图片）', hasMessage: true), '[图片]');
+      expect(chatListPreviewText('', hasMessage: false), '');
     });
   });
 

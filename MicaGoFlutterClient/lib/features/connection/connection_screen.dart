@@ -126,11 +126,17 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(strings.t('pair.connectToMicaGo'))),
       body: SafeArea(
+        bottom: false,
         child: ListenableBuilder(
           listenable: _controller,
           builder: (context, _) {
             return SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                16 + MediaQuery.paddingOf(context).bottom,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [

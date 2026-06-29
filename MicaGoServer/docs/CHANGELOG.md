@@ -9,6 +9,28 @@ that runs/manages the server), **Client** (Flutter Android app).
 
 ---
 
+## C42 — Pin/hide + a two-way test-contact Debug card (backend v0.34)
+
+- **Server.** `POST /api/test-contact/inbound` injects a message *from* the offline
+  test contact and broadcasts it, so it pushes to the phone like a received
+  iMessage. The test conversation **resets to just the greeting on each server
+  start**. (Builds on C40's offline loopback test contact.)
+- **Companion.** The Debug page gained a **Test Contact** card (pinned at the top):
+  a two-way scratchpad that sends as the test contact and shows the phone's loopback
+  replies. **Sync Control → Recent Messages** now shows the full raw set (matching
+  the Debug inspector) with `[图片]`/`[文件]`-style placeholders instead of blank
+  rows.
+- **Client.** Pin a contact to the top or hide it (client-only "delete") — via
+  **long-press** (Pin/Hide) or **swipe** (right clears the unread dot, left hides).
+  Hide a single message from the thread (long-press → Hide). Settings → **Hidden
+  items** restores hidden messages or hidden contacts. Cache schema **v4**
+  (`chats.pinned` + a `hidden_messages` tombstone table). Fixed a latent bug where a
+  server chat refresh reset the local hide/pin flags.
+
+> Cycles C30–C41 (Companion UI/state, notifications, stickers/location/handwriting,
+> voice send, docs restyle, the offline test contact, and unread badges) are tracked
+> in `CLAUDE.md`.
+
 ## C29 — Keep-alive, Paired Devices, and registration reliability
 
 - **C29 — Optional Android keep-alive.** Opt-in native foreground service

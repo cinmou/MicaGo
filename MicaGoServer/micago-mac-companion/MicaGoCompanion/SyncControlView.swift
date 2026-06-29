@@ -357,10 +357,7 @@ private struct RecentMessageRow: View {
         if let name = contacts.displayName(forHandle: id) { return "\(name) · \(id)" }
         return "Handle \(id)"
     }
-    private var snippet: String {
-        let t = (message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? "(no text)" : t
-    }
+    private var snippet: String { message.previewLabel }
 }
 
 // MARK: - Chats (rule targets)
