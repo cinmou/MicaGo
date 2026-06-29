@@ -18,7 +18,6 @@ import '../../core/ui/top_banner.dart';
 import '../contacts/people_screen.dart';
 import '../debug/debug_log_panel.dart';
 import '../home/connection_status_view.dart';
-import 'message_display_controller.dart';
 import 'message_display_page.dart';
 
 /// Settings tab: shows the current connection (token masked), and lets the user
@@ -1035,8 +1034,6 @@ class _AppearanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = MicaLocalizations.of(context);
-    final display = context.watch<MessageDisplayController>();
-    final prefs = display.prefs;
 
     return Card(
       child: Padding(
@@ -1087,7 +1084,7 @@ class _AppearanceCard extends StatelessWidget {
                     avatar: c == ThemeColorChoice.system
                         ? const Icon(Icons.auto_awesome, size: 16)
                         : CircleAvatar(radius: 8, backgroundColor: _seedFor(c)),
-                    label: Text(_colorLabel(c)),
+                    label: Text(_colorLabel(c, strings)),
                   ),
               ],
             ),
@@ -1099,30 +1096,6 @@ class _AppearanceCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             _ChatBackgroundPicker(theme: theme),
-            const Divider(height: 28),
-
-            Text(
-              strings.t('settings.collection'),
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              strings.t('settings.recentPerChat'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final n in const [50, 100, 200])
-                  ChoiceChip(
-                    selected: prefs.messagesPerChat == n,
-                    onSelected: (_) =>
-                        display.update(prefs.copyWith(messagesPerChat: n)),
-                    label: Text('$n'),
-                  ),
-              ],
-            ),
             const Divider(height: 28),
 
             // --- Language ---
@@ -1196,38 +1169,38 @@ class _AppearanceCard extends StatelessWidget {
     }
   }
 
-  String _colorLabel(ThemeColorChoice c) {
+  String _colorLabel(ThemeColorChoice c, MicaLocalizations strings) {
     switch (c) {
       case ThemeColorChoice.system:
-        return 'System';
+        return strings.t('themeColor.system');
       case ThemeColorChoice.micago:
-        return 'micaGO';
+        return strings.t('themeColor.micago');
       case ThemeColorChoice.bicao:
-        return '碧草';
+        return strings.t('themeColor.bicao');
       case ThemeColorChoice.wisteria:
-        return '紫藤';
+        return strings.t('themeColor.wisteria');
       case ThemeColorChoice.citrus:
-        return '柑橘';
+        return strings.t('themeColor.citrus');
       case ThemeColorChoice.blackWhite:
-        return 'blackWhite';
+        return strings.t('themeColor.blackWhite');
       case ThemeColorChoice.paleGold:
-        return 'paleGold';
+        return strings.t('themeColor.paleGold');
       case ThemeColorChoice.wineRed:
-        return 'wineRed';
+        return strings.t('themeColor.wineRed');
       case ThemeColorChoice.blueGreen:
-        return 'blueGreen';
+        return strings.t('themeColor.blueGreen');
       case ThemeColorChoice.indigo:
-        return 'indigo';
+        return strings.t('themeColor.indigo');
       case ThemeColorChoice.enshuNezu:
-        return 'enshuNezu';
+        return strings.t('themeColor.enshuNezu');
       case ThemeColorChoice.suoh:
-        return 'suoh';
+        return strings.t('themeColor.suoh');
       case ThemeColorChoice.dianthus:
-        return 'dianthus';
+        return strings.t('themeColor.dianthus');
       case ThemeColorChoice.witheredGrass:
-        return 'witheredGrass';
+        return strings.t('themeColor.witheredGrass');
       case ThemeColorChoice.amber:
-        return 'amber';
+        return strings.t('themeColor.amber');
     }
   }
 }

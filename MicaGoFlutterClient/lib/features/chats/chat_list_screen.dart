@@ -128,7 +128,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   // Swipe right (startToEnd) = clear the unread dot; swipe left (endToStart) =
-  // hide the contact (client-only "delete"). Returns whether to dismiss the row.
+  // pin/unpin the contact. Both are client-only and keep the row in place.
   Future<bool> _onSwipe(
     BuildContext context,
     MergedChat m,
@@ -140,15 +140,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
       await _controller.markRoutesRead(m.routes.map((r) => r.guid));
       return false;
     }
-    return true; // swipe left → hide; data removal happens in onDismissed
-  }
-
-  // The actual hide runs after the dismiss animation, so the list mutation never
-  // races the Dismissible still being on screen.
-  void _onHideDismissed(BuildContext context, MergedChat m) {
-    HapticFeedback.lightImpact();
-    _controller.hideChats(m.routes.map((r) => r.guid));
-    _showHiddenBanner(context);
+    HapticFeedback.selectionClick();
+    await _controller.setPinned(
+      m.routes.map((r) => r.guid),
+      !m.primary.isPinned,
+    );
+    return false;
   }
 
   void _showChatMenu(BuildContext context, MergedChat m) async {
@@ -301,14 +298,16 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                 ),
                                 secondaryBackground: _SwipeBg(
                                   alignment: Alignment.centerRight,
-                                  color: Theme.of(context).colorScheme.error,
-                                  icon: Icons.visibility_off_outlined,
-                                  label: 'Hide',
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.secondary,
+                                  icon: m.primary.isPinned
+                                      ? Icons.push_pin_outlined
+                                      : Icons.push_pin,
+                                  label: m.primary.isPinned ? 'Unpin' : 'Pin',
                                 ),
                                 confirmDismiss: (dir) =>
                                     _onSwipe(context, m, dir),
-                                onDismissed: (_) =>
-                                    _onHideDismissed(context, m),
                                 child: _ChatRow(
                                   merged: m,
                                   sidebar: widget.sidebar,
@@ -856,9 +855,10 @@ class _DraggableUnreadBadgeState extends State<_DraggableUnreadBadge>
 
   void _springBack() {
     final from = _drag;
-    final anim = Tween<Offset>(begin: from, end: Offset.zero).animate(
-      CurvedAnimation(parent: _spring, curve: Curves.elasticOut),
-    );
+    final anim = Tween<Offset>(
+      begin: from,
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _spring, curve: Curves.elasticOut));
     void tick() => setState(() => _drag = anim.value);
     anim.addListener(tick);
     _spring.forward(from: 0).whenComplete(() => anim.removeListener(tick));

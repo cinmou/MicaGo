@@ -36,7 +36,6 @@ struct SyncControlPage: View {
             DefaultPolicyCard()
             BackfillSettingsCard()
             ContactSearchCard(editorTarget: $editorTarget)
-            RecentMessagesCard(editorTarget: $editorTarget)
             ChatsCard(editorTarget: $editorTarget)
             RulesOverviewCard()
         }
@@ -102,7 +101,7 @@ private struct BackfillSettingsCard: View {
             .pickerStyle(.segmented)
 
             HStack {
-                Text("Recent messages per chat").foregroundStyle(.secondary)
+                Text("Backfill depth per chat").foregroundStyle(.secondary)
                 Picker("", selection: binding(\.recentMessagesPerChat)) {
                     ForEach(limits, id: \.self) { Text("\($0)").tag($0) }
                 }
@@ -177,12 +176,18 @@ private struct ContactsCard: View {
                     Text("· \(contacts.contactCount) contacts").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !contacts.isAuthorized {
+                if contacts.status == .notDetermined {
+                    Button(L10n.tr("sync.requestContacts")) { contacts.requestAccess() }
+                } else if !contacts.isAuthorized {
                     Button(L10n.tr("sync.openSystemSettings")) { contacts.openSystemSettings() }
                 }
             }
-            if !contacts.isAuthorized {
-                Text("Contacts permission is managed by macOS and can't be granted from this window. Open System Settings → Privacy & Security → Contacts and enable MicaGo Companion. Without it, contact names and photos may be unavailable — the app still works using the raw phone/email handles where supported.")
+            if contacts.status == .notDetermined {
+                Text("Contacts are optional and local-only. Grant access to show names for handles and create handle rules more easily; contacts are never uploaded.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !contacts.isAuthorized {
+                Text("Contacts permission is managed by macOS. Open System Settings → Privacy & Security → Contacts and enable MicaGo Companion. Without it, contact names and photos may be unavailable — the app still works using the raw phone/email handles where supported.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -257,107 +262,11 @@ private struct DefaultPolicyCard: View {
             }
             .pickerStyle(.menu)
 
-            Picker("Default push", selection: Binding(
-                get: { model.syncRules?.defaultPushPolicy ?? "enabled" },
-                set: { newValue in
-                    Task { await model.saveDefaultPolicy(sync: model.syncRules?.defaultSyncPolicy ?? "allow_all", push: newValue) }
-                }
-            )) {
-                Text("Enabled").tag("enabled")
-                Text("Muted").tag("muted")
-            }
-            .pickerStyle(.menu)
-
-            Text("Rules below override the default for a specific chat or handle. Chat rules win over handle rules; both win over the default.")
+            Text("Rules below override the default sync policy for a specific chat or handle. Chat rules win over handle rules; both win over the default.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
-}
-
-// MARK: - Recent messages (management view)
-
-private struct RecentMessagesCard: View {
-    @EnvironmentObject var model: AppModel
-    @Binding var editorTarget: RuleTarget?
-
-    private let counts = [20, 50, 100, 500]
-
-    var body: some View {
-        SectionCard(title: L10n.tr("sync.recentMessages")) {
-            HStack {
-                Text("Show").foregroundStyle(.secondary)
-                Picker("", selection: Binding(
-                    get: { model.recentCount },
-                    set: { newValue in Task { await model.setRecentCount(newValue) } }
-                )) {
-                    ForEach(counts, id: \.self) { Text("\($0)").tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 240)
-                Spacer()
-                Button { Task { await model.loadSyncControl() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-            }
-
-            if model.recentMessages.isEmpty {
-                Text("No recent messages (or none synced yet).").font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(model.recentMessages) { message in
-                    RecentMessageRow(message: message, editorTarget: $editorTarget)
-                    Divider()
-                }
-            }
-            Text("Read-only management view — no composing, threads, or media.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct RecentMessageRow: View {
-    @EnvironmentObject var contacts: ContactsStore
-    let message: RecentMessage
-    @Binding var editorTarget: RuleTarget?
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: message.isFromMe ? "arrow.up.right" : "arrow.down.left")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(sender).font(.callout).fontWeight(.medium).lineLimit(1)
-                if let sub = subtitle {
-                    Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            }
-            Spacer()
-            if let handle = message.handle, !handle.id.isEmpty {
-                Button("Rule…") {
-                    editorTarget = RuleTarget(kind: "handle", value: handle.id, label: ruleLabel(handle.id))
-                }
-                .buttonStyle(.borderless)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var sender: String {
-        if message.isFromMe { return "You" }
-        guard let id = message.handle?.id, !id.isEmpty else { return "Unknown" }
-        return contacts.displayName(forHandle: id) ?? id
-    }
-    // Show the raw address as a secondary line when a contact name was resolved.
-    private var subtitle: String? {
-        guard !message.isFromMe, let id = message.handle?.id, !id.isEmpty else { return nil }
-        return contacts.displayName(forHandle: id) != nil ? id : nil
-    }
-    private func ruleLabel(_ id: String) -> String {
-        if let name = contacts.displayName(forHandle: id) { return "\(name) · \(id)" }
-        return "Handle \(id)"
-    }
-    private var snippet: String { message.previewLabel }
 }
 
 // MARK: - Chats (rule targets)
@@ -404,7 +313,7 @@ private struct ChatsCard: View {
 
     private func ruleStatus(forChat guid: String) -> String {
         guard let rule = model.storedRule(kind: "chat", value: guid) else { return "default policy" }
-        return "sync: \(rule.syncMode) · push: \(rule.pushMode)"
+        return "sync: \(rule.syncMode)"
     }
 }
 
@@ -430,7 +339,7 @@ private struct RulesOverviewCard: View {
                             Text("\(rule.targetKind): \(rule.targetValue)")
                                 .font(.system(.caption, design: .monospaced))
                                 .lineLimit(1).truncationMode(.middle)
-                            Text("sync: \(rule.syncMode) · push: \(rule.pushMode)")
+                            Text("sync: \(rule.syncMode)")
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -456,7 +365,6 @@ struct RuleEditorSheet: View {
     let target: RuleTarget
 
     @State private var syncMode = "inherit"
-    @State private var pushMode = "inherit"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -476,14 +384,7 @@ struct RuleEditorSheet: View {
             }
             .pickerStyle(.segmented)
 
-            Picker("Push", selection: $pushMode) {
-                Text("Inherit default").tag("inherit")
-                Text("Enabled").tag("enabled")
-                Text("Muted").tag("muted")
-            }
-            .pickerStyle(.segmented)
-
-            Text("Blocking sync stops future messages for this target from being saved or pushed. Muting keeps sync but stops push.")
+            Text("Blocking sync stops future messages for this target from being saved to the relay. Messages already synced are kept.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -499,7 +400,7 @@ struct RuleEditorSheet: View {
                 Button("Save") {
                     Task {
                         await model.saveSyncRule(targetKind: target.kind, targetValue: target.value,
-                                                 syncMode: syncMode, pushMode: pushMode)
+                                                 syncMode: syncMode, pushMode: existingPushMode)
                         dismiss()
                     }
                 }
@@ -512,8 +413,11 @@ struct RuleEditorSheet: View {
         .onAppear {
             if let existing = model.storedRule(kind: target.kind, value: target.value) {
                 syncMode = existing.syncMode
-                pushMode = existing.pushMode
             }
         }
+    }
+
+    private var existingPushMode: String {
+        model.storedRule(kind: target.kind, value: target.value)?.pushMode ?? "inherit"
     }
 }

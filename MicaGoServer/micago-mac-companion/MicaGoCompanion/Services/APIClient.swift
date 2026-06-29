@@ -191,19 +191,6 @@ struct APIClient {
         return try JSONDecoder().decode(SyncRulesResponse.self, from: data)
     }
 
-    /// Recent messages for the management view (not a chat client).
-    func recentMessages(limit: Int) async throws -> [RecentMessage] {
-        // debug=true bypasses the renderable filter so the list matches the
-        // Debug inspector's full set (no silently dropped rows / blank gaps).
-        let (data, response) = try await Self.session().data(for: request(
-            "api/messages/recent",
-            query: [URLQueryItem(name: "limit", value: "\(limit)"),
-                    URLQueryItem(name: "service", value: "all"),
-                    URLQueryItem(name: "debug", value: "true")]))
-        try Self.validate(response, body: data)
-        return try JSONDecoder().decode(RecentMessagesResponse.self, from: data).data
-    }
-
     /// Message Inspector (debug). Structural filters run server-side in SQL;
     /// query/type/attachment refinement and grouping are applied on the page.
     func debugRecentMessages(

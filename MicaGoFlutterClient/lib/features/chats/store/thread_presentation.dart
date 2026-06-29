@@ -8,6 +8,7 @@
 library;
 
 import '../message_display.dart';
+import '../emoji_text.dart';
 import '../message_render.dart';
 import '../models/message_model.dart';
 
@@ -186,9 +187,15 @@ class ThreadPresentationBuilder {
       final next = i + 1 < rows.length ? rows[i + 1] : null;
       final prev = i > 0 ? rows[i - 1] : null;
       final nextIsSystem = next == null || _isSystemKind(next.kind);
+      final separatedFromNext =
+          next != null && _hasRenderedSeparatorBetween(m, next.message);
+      final nextIsSmallEmoji =
+          next != null && !nextIsSystem && _isSmallEmojiMessage(next.message);
       final showBubbleTail =
           !isSystem &&
           (next == null || nextIsSystem || next.message.isFromMe != m.isFromMe);
+      final showTailWithBreaks =
+          showBubbleTail || separatedFromNext || nextIsSmallEmoji;
       final inIncomingGroupRun = isGroup && !isSystem && !m.isFromMe;
       final sameAsPrev =
           inIncomingGroupRun && prev != null && _sameSenderRun(prev, row);
@@ -224,7 +231,7 @@ class ThreadPresentationBuilder {
           deliveryState: deliveryStateFor(m),
           showStatus: !isSystem && showStatusFor(m),
           showTimestamp: !isSystem && m.dedupeKey == lastRowKey,
-          showBubbleTail: showBubbleTail,
+          showBubbleTail: showTailWithBreaks,
         ),
       );
     }
@@ -257,6 +264,30 @@ class ThreadPresentationBuilder {
         if (m.semanticKind == 'unavailable') return 'Message unavailable';
         return 'Unsupported message';
     }
+  }
+
+  static bool _hasRenderedSeparatorBetween(
+    MessageModel current,
+    MessageModel next,
+  ) {
+    final currentTs = current.dateCreated;
+    final nextTs = next.dateCreated;
+    if (currentTs == null || nextTs == null) return false;
+    final currentDate = DateTime.fromMillisecondsSinceEpoch(currentTs);
+    final nextDate = DateTime.fromMillisecondsSinceEpoch(nextTs);
+    final currentDay = DateTime(
+      currentDate.year,
+      currentDate.month,
+      currentDate.day,
+    );
+    final nextDay = DateTime(nextDate.year, nextDate.month, nextDate.day);
+    return currentDay != nextDay || shouldShowTimeSeparator(currentTs, nextTs);
+  }
+
+  static bool _isSmallEmojiMessage(MessageModel message) {
+    if (message.hasAttachments) return false;
+    final text = displayText(message);
+    return text != null && isBigEmoji(text);
   }
 
   static bool _isSystemKind(MessageRenderableKind kind) =>

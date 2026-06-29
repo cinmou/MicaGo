@@ -1319,14 +1319,12 @@ class AppController extends ChangeNotifier {
     return int.tryParse(cursor.substring(2));
   }
 
-  /// Per-chat initial backfill (C10 Part F). Fetches the visible chat list, then
-  /// the latest [perChat] renderable messages for each chat, writing everything
-  /// to the local DB. Uses a client built from [profile] (which may not be the
-  /// active profile yet, e.g. during onboarding). Reports human progress via
-  /// [onProgress] and returns counts. Never throws — partial results are kept.
+  /// Local cache warm-up after pairing. Fetches the visible chat list, then the
+  /// latest renderable messages for each chat, using the server's authoritative
+  /// `recentMessagesPerChat` setting when available. This does not control the
+  /// server backfill strategy; Sync Control is the source of truth for that.
   Future<BackfillDiagnostics> backfill(
     ConnectionProfile profile, {
-    int perChat = 100,
     void Function(String message)? onProgress,
   }) async {
     final client = buildProbeClient(profile);
@@ -1338,6 +1336,13 @@ class AppController extends ChangeNotifier {
         await client.syncNow();
       } catch (_) {
         /* opportunistic */
+      }
+
+      var perChat = 100;
+      final settings = await client.getSyncSettings();
+      final configuredDepth = settings?['recentMessagesPerChat'];
+      if (configuredDepth is int && configuredDepth > 0) {
+        perChat = configuredDepth;
       }
 
       onProgress?.call('Fetching chats…');

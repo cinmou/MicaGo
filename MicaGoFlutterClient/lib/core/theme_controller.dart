@@ -42,6 +42,7 @@ class ThemeController extends ChangeNotifier {
   String? chatBackgroundPath;
 
   bool get useSystemColors => colorChoice == ThemeColorChoice.system;
+  bool get useBlackWhite => colorChoice == ThemeColorChoice.blackWhite;
 
   /// Seed color used when dynamic color is off/unavailable.
   Color get seedColor {

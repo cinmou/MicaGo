@@ -7,7 +7,6 @@ import 'package:provider/provider.dart';
 import '../../app/router.dart';
 import '../../core/app_controller.dart';
 import '../../core/l10n/app_localizations.dart';
-import '../settings/message_display_controller.dart';
 import 'pairing_controller.dart';
 import 'pairing_payload.dart';
 
@@ -61,11 +60,7 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
   }
 
   Future<void> _useScanned() async {
-    final perChat = context
-        .read<MessageDisplayController>()
-        .prefs
-        .messagesPerChat;
-    final ok = await _pairing.useScanned(messagesPerChat: perChat);
+    final ok = await _pairing.useScanned();
     if (ok && mounted) {
       context.go(Routes.home);
     }

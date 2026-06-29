@@ -46,8 +46,8 @@ class PairingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Tests endpoints, activates the connection, and runs the initial backfill.
-  Future<bool> useScanned({int messagesPerChat = 100}) async {
+  /// Tests endpoints, activates the connection, and warms the local cache.
+  Future<bool> useScanned() async {
     final p = payload;
     if (p == null) return false;
 
@@ -70,11 +70,8 @@ class PairingController extends ChangeNotifier {
           probe.close();
         }
       },
-      runInitialSync: (profile, onProgress) => app.backfill(
-        profile,
-        perChat: messagesPerChat,
-        onProgress: onProgress,
-      ),
+      runInitialSync: (profile, onProgress) =>
+          app.backfill(profile, onProgress: onProgress),
     );
 
     onboarding.addListener(() {

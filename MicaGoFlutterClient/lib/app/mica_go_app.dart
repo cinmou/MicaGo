@@ -51,10 +51,15 @@ class _MicaGoAppState extends State<MicaGoApp> {
           return DynamicColorBuilder(
             builder: (lightDynamic, darkDynamic) {
               final useDynamic = theme.useSystemColors && lightDynamic != null;
-              final lightScheme = useDynamic
+              final useBlackWhite = theme.useBlackWhite;
+              final lightScheme = useBlackWhite
+                  ? MicaGoTheme.blackWhiteScheme(Brightness.light)
+                  : useDynamic
                   ? lightDynamic.harmonized()
                   : ColorScheme.fromSeed(seedColor: theme.seedColor);
-              final darkScheme = (useDynamic && darkDynamic != null)
+              final darkScheme = useBlackWhite
+                  ? MicaGoTheme.blackWhiteScheme(Brightness.dark)
+                  : (useDynamic && darkDynamic != null)
                   ? darkDynamic.harmonized()
                   : ColorScheme.fromSeed(
                       seedColor: theme.seedColor,

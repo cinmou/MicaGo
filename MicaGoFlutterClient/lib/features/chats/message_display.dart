@@ -21,7 +21,6 @@ class MessageDisplayPrefs {
   final DeliveryLabelMode deliveryLabels;
   final UnsupportedDetailMode unsupportedDetails;
   final bool showDebugChats; // include debug-only/noise-only chats in the list
-  final int messagesPerChat; // initial per-chat backfill depth (50/100/200)
 
   const MessageDisplayPrefs({
     this.hideUnsupportedRows = false,
@@ -31,7 +30,6 @@ class MessageDisplayPrefs {
     this.deliveryLabels = DeliveryLabelMode.compact,
     this.unsupportedDetails = UnsupportedDetailMode.debugOnly,
     this.showDebugChats = false,
-    this.messagesPerChat = 100,
   });
 
   static const defaults = MessageDisplayPrefs();
@@ -44,7 +42,6 @@ class MessageDisplayPrefs {
     DeliveryLabelMode? deliveryLabels,
     UnsupportedDetailMode? unsupportedDetails,
     bool? showDebugChats,
-    int? messagesPerChat,
   }) {
     return MessageDisplayPrefs(
       hideUnsupportedRows: hideUnsupportedRows ?? this.hideUnsupportedRows,
@@ -55,7 +52,6 @@ class MessageDisplayPrefs {
       deliveryLabels: deliveryLabels ?? this.deliveryLabels,
       unsupportedDetails: unsupportedDetails ?? this.unsupportedDetails,
       showDebugChats: showDebugChats ?? this.showDebugChats,
-      messagesPerChat: messagesPerChat ?? this.messagesPerChat,
     );
   }
 
@@ -67,7 +63,6 @@ class MessageDisplayPrefs {
     'deliveryLabels': deliveryLabels.name,
     'unsupportedDetails': unsupportedDetails.name,
     'showDebugChats': showDebugChats ? '1' : '0',
-    'messagesPerChat': '$messagesPerChat',
   };
 
   factory MessageDisplayPrefs.fromMap(Map<String, String?> m) {
@@ -88,7 +83,6 @@ class MessageDisplayPrefs {
       deliveryLabels: dl,
       unsupportedDetails: ud,
       showDebugChats: b('showDebugChats', false),
-      messagesPerChat: int.tryParse(m['messagesPerChat'] ?? '') ?? 100,
     );
   }
 }

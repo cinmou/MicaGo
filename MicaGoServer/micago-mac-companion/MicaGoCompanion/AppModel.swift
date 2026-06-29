@@ -74,9 +74,7 @@ final class AppModel: ObservableObject {
 
     // Sync control (v0.11.3)
     @Published var syncRules: SyncRulesResponse?
-    @Published var recentMessages: [RecentMessage] = []
     @Published var chatsList: [ChatSummary] = []
-    @Published var recentCount: Int = 50
     @Published var syncBusy = false
     @Published var syncSettings: SyncSettings = .defaults
     /// Non-nil when `loadSyncControl` failed; drives the Sync Control error card
@@ -471,9 +469,6 @@ final class AppModel: ObservableObject {
         catch { failures.append("sync settings — \(error.localizedDescription)") }
         do { chatsList = try await client.chats() }
         catch { failures.append("chats — \(error.localizedDescription)") }
-        do { recentMessages = try await client.recentMessages(limit: recentCount) }
-        catch { failures.append("recent messages — \(error.localizedDescription)") }
-
         // Clear any stale top-of-page error either way: on success there's nothing
         // to show, and on failure the dedicated error card explains exactly which
         // request failed — so a leftover "Server returned HTTP 500" header line
@@ -493,20 +488,12 @@ final class AppModel: ObservableObject {
         var lines = ["MicaGo Sync Control diagnostics"]
         lines.append("server: \(baseURL?.absoluteString ?? "—")")
         lines.append("reachable: \(reachable)  authValid: \(authValid)")
-        lines.append("loaded: chats \(chatsList.count) · recent \(recentMessages.count) · rules \(syncRules?.rules.count ?? 0)")
+        lines.append("loaded: chats \(chatsList.count) · rules \(syncRules?.rules.count ?? 0)")
         lines.append("error: \(syncControlError ?? "none")")
         // Background-poll diagnostic failure (status/connections/devices/urls).
         // Captured here so it isn't swallowed, but never shown as a banner.
         lines.append("pollDiagnostic: \(lastPollError ?? "none")")
         return lines.joined(separator: "\n")
-    }
-
-    func setRecentCount(_ count: Int) async {
-        recentCount = count
-        guard let baseURL else { return }
-        let client = APIClient(baseURL: baseURL, token: token)
-        do { recentMessages = try await client.recentMessages(limit: count) }
-        catch { lastError = "Recent messages: \(error.localizedDescription)" }
     }
 
     func saveSyncRule(targetKind: String, targetValue: String, syncMode: String, pushMode: String) async {

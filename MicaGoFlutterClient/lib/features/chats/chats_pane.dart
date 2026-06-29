@@ -263,7 +263,7 @@ class _SplitHandleState extends State<_SplitHandle> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final active = _hovering || widget.dragging;
-    final idleColor = _chatsAccent1_200(scheme);
+    final idleColor = _chatsAccent1_100(scheme);
     final activeColor = Color.alphaBlend(
       scheme.primary.withValues(alpha: 0.18),
       idleColor,
@@ -303,11 +303,6 @@ Color _chatsAccent1_50(ColorScheme scheme) =>
 
 Color _chatsAccent1_100(ColorScheme scheme) => Color.alphaBlend(
   scheme.primary.withValues(alpha: 0.18),
-  scheme.surfaceContainerLowest,
-);
-
-Color _chatsAccent1_200(ColorScheme scheme) => Color.alphaBlend(
-  scheme.primary.withValues(alpha: 0.26),
   scheme.surfaceContainerLowest,
 );
 
