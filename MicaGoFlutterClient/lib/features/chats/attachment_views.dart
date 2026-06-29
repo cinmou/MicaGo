@@ -793,7 +793,7 @@ class _FileAttachment extends StatelessWidget {
       child: ConstrainedBox(
         constraints: BoxConstraints(
           minWidth: 260,
-          maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+          maxWidth: _fileCardMaxWidth(context),
           minHeight: 84,
         ),
         child: DecoratedBox(
@@ -863,6 +863,13 @@ class _FileAttachment extends StatelessWidget {
     if (mime == 'application/pdf') return Icons.picture_as_pdf_outlined;
     if (mime.startsWith('text/')) return Icons.description_outlined;
     return Icons.insert_drive_file_outlined;
+  }
+
+  double _fileCardMaxWidth(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final proportionalWidth = width * 0.78;
+    final maxWidth = width >= 840 ? 560.0 : proportionalWidth;
+    return maxWidth < 260 ? 260 : maxWidth;
   }
 
   String _humanSize(int bytes) => _formatSize(bytes);

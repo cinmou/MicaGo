@@ -49,6 +49,74 @@ Three components:
   guides (android-client-connection / remote-access-cloudflare / notifications-setup /
   manual-test-flow) are still English-only — the localized index marks them "(英文)".
 
+## Unread dot: ingestion never clears it; thread owns "seen" (C47)
+
+- **Root cause of "a new message makes an existing red dot disappear" + merged-chat
+  flakiness.** `seen` was computed at *ingestion* time as
+  `isFromMe || (isForeground && isChatActive(guid))` (WS `_patchMessage` + delta
+  `runDeltaSync`). `isChatActive` reads a single mutable `_activeChatGuid`, which
+  goes stale across phone push/pop, two-pane, deep-links, and resume — so an
+  arriving message could be wrongly treated as *seen*, advancing the read
+  watermark and **clearing a dot that should stay lit**. For merged contacts the
+  active guid is only ever one route, so it was inconsistent too.
+- **Fix: ingestion only ever lights (or leaves) the dot — it never advances
+  another party's watermark.** Both ingestion paths now use `seen = msg.isFromMe`.
+  Marking a chat read is owned **exclusively by the open thread**
+  (`AppController.markChatsViewed` → `cache.markChatsSeen` + a new `chatSeen`
+  broadcast the chat list listens to → re-derives the dot from cache immediately,
+  important for the tablet two-pane where the list stays visible).
+- **`MessageThreadScreen` is the single "user is looking at this" authority.** It
+  marks every route viewed on open, on each arriving message (subscribes to
+  `deltaMessages` + `ws.events` filtered to its route guids — covers non-active
+  routes of a merged contact), on route switch, and on app **resume** (via a
+  `WidgetsBindingObserver`) — all gated on `app.isForeground` so a backgrounded
+  arrival with the thread mounted still lights the dot.
+- **Race-proofing.** `markChatsSeen(guids, {upTo})`: the thread passes the
+  observed message timestamp, so the watermark advances past it even if the list
+  ingestion hasn't bumped `latest_renderable_at` yet (either write can win). It
+  also never regresses the watermark (`max(latestAt, lastSeenAt, upTo)`).
+- `setActiveChatGuid`/`isChatActive` survive only for the dispose cleanup; they no
+  longer gate the dot. Tests: `local_cache_store_test.dart` (`upTo` race + no
+  regress). Client-only change — no backend rebuild.
+
+## Chat-list timestamp format (C46)
+
+- The trailing time is no longer a forever-growing countdown. `chatTimestampLabel`
+  (pure, top-level in `lib/features/chats/message_render.dart`) buckets it:
+  `<1min`→"now", `<1h`→relative "5m", **same day >1h**→clock time (e.g. `06:06`),
+  **within 7 days**→weekday name ("Monday"), **older**→numeric date ("5/20/2026").
+- Locale-aware via `intl` `DateFormat` (`.Hm`/`.jm`/`.EEEE`/`.yMd`); 12h vs 24h
+  comes from `MediaQuery.alwaysUse24HourFormat`, locale from
+  `Localizations.localeOf(context).languageCode`. `intl` is now a **direct** dep
+  (was transitive via flutter_localizations) so it can be imported.
+- `_formatTime` in `chat_list_screen.dart` is just a thin wrapper that reads
+  `use24h`/`locale` from context and delegates. The function has a
+  locale-independent fallback (clock / English weekday / `M/D/YYYY`) if date
+  symbols aren't loaded, so it never throws. The 60s heartbeat (C45) re-renders
+  these as time passes.
+- Unit tests: `test/chat_timestamp_test.dart` (`setUpAll` calls
+  `initializeDateFormatting`; flutter_localizations does this on-device). intl
+  uses a narrow no-break space before AM/PM — tests normalize it.
+
+## Unread dot: background fix + row polish (C45)
+
+- **Root cause of "message refreshes on resume but no red dot" (phone).** A message
+  arriving while the app was **backgrounded** was still treated as *seen* if a chat
+  thread was open underneath — `seen = isFromMe || isChatActive`. That advanced the
+  read watermark (`bumpChatWithMessage(seen:true)`), so the preview updated but the
+  derived dot (`latestRenderableAt > lastSeenAt`) stayed off. Fixed in **both**
+  ingestion paths (WS `_patchMessage`, delta `runDeltaSync`):
+  `seen = isFromMe || (isForeground && isChatActive(guid))`. A backgrounded arrival
+  is never "seen" → it lights the dot even with a thread left open. (Foreground on
+  the list already worked, which matched the symptom.)
+- **Alignment.** The trailing column is now centre-aligned so the unread badge sits
+  on one vertical line directly under the timestamp (the badge's transparent
+  hit-padding had nudged a right-aligned badge off the time's right edge).
+- **Auto-refreshing time + safety net.** `_ChatListScreen` runs a 60s heartbeat:
+  re-renders the relative timestamps ("now"→"1m"→"2h") and, when foreground +
+  connected, silently `load()`s the chat list so the dot self-heals within a minute
+  even if a realtime event was dropped (mobile WS drops).
+
 ## Chat-row crash fix + cleanup (C44, backend v0.36)
 
 - **White-screen fix.** The chat row used a `ListTile` whose `trailing` (time +

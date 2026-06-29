@@ -11,6 +11,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_controller.dart';
 import '../../core/l10n/app_localizations.dart';
 import '../../core/network/api_client.dart';
+import '../../core/network/websocket_client.dart';
+import 'realtime_event_helpers.dart' as rt;
 import '../../core/theme_controller.dart';
 import '../../core/ui/top_banner.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -65,13 +67,22 @@ class MessageThreadScreen extends StatefulWidget {
   State<MessageThreadScreen> createState() => _MessageThreadScreenState();
 }
 
-class _MessageThreadScreenState extends State<MessageThreadScreen> {
+class _MessageThreadScreenState extends State<MessageThreadScreen>
+    with WidgetsBindingObserver {
   late ThreadController _controller;
   final _scroll = ScrollController();
   final _composer = TextEditingController();
   final Map<String, GlobalKey> _messageKeys = {};
   bool _showJumpToBottom = false;
   String? _flashGuid;
+
+  // C47: the open thread is the single authority on "the user has seen this
+  // conversation". It advances the read watermark for every route on open, on
+  // each arriving message (any route), and on resume — while the app is
+  // foreground. Ingestion never clears a dot, so this is what makes it clear.
+  late Set<String> _routeGuids;
+  StreamSubscription<WsEvent>? _seenWsSub;
+  StreamSubscription<MessageModel>? _seenDeltaSub;
 
   /// The real server chat currently being viewed/sent on. Defaults to the
   /// merged conversation's preferred route (iMessage first); switchable when the
@@ -82,16 +93,50 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
   void initState() {
     super.initState();
     _active = widget.merged.primary;
+    _routeGuids = widget.merged.routes.map((r) => r.guid).toSet();
     final app = context.read<AppController>();
     app.setActiveChatGuid(_active.guid);
-    // C43: opening a thread is the authoritative read event — advance the read
-    // watermark for every route so the unread dot clears. setActiveChatGuid keeps
-    // it current as new messages arrive while the thread is on screen.
-    unawaited(app.cache.markChatsSeen(widget.merged.routes.map((r) => r.guid)));
+    WidgetsBinding.instance.addObserver(this);
+    // C43/C47: opening a thread is the authoritative read event — advance the
+    // read watermark for every route so the unread dot clears, and keep it
+    // caught up as messages arrive on any route while the thread is foreground.
+    unawaited(app.markChatsViewed(_routeGuids));
+    _seenDeltaSub = app.deltaMessages.listen((m) {
+      if (m.chatGuid != null && _routeGuids.contains(m.chatGuid)) {
+        _markViewedIfForeground(upTo: m.dateCreated);
+      }
+    });
+    _seenWsSub = app.ws.events.listen((e) {
+      final guid = rt.chatGuidFromWsEvent(e);
+      if (guid != null && _routeGuids.contains(guid)) {
+        _markViewedIfForeground(upTo: rt.messageFromWsEvent(e)?.dateCreated);
+      }
+    });
     _controller = ThreadController(app: app, chatGuid: _active.guid)..start();
     _composer.addListener(() => setState(() {}));
     _scroll.addListener(_onScroll);
     _controller.addListener(_publishDiagnostics);
+  }
+
+  /// Advance the read watermark for this contact's routes, but only while the
+  /// app is actually in the foreground — a message landing while backgrounded
+  /// (even with this thread mounted) must still light the dot (C45/C47).
+  void _markViewedIfForeground({int? upTo}) {
+    if (!mounted) return;
+    final app = context.read<AppController>();
+    if (!app.isForeground) return;
+    unawaited(app.markChatsViewed(_routeGuids, upTo: upTo));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Resuming with this thread on screen means the user is now looking at it —
+    // catch the watermark up so anything that arrived while backgrounded clears.
+    if (state == AppLifecycleState.resumed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _markViewedIfForeground();
+      });
+    }
   }
 
   // C21: switch the active send/view route. The thread is bound to a single
@@ -103,7 +148,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
     _controller.dispose();
     final app = context.read<AppController>();
     app.setActiveChatGuid(route.guid);
-    unawaited(app.cache.markChatsSeen([route.guid]));
+    unawaited(app.markChatsViewed([route.guid]));
     setState(() {
       _active = route;
       _controller = ThreadController(app: app, chatGuid: route.guid)..start();
@@ -113,6 +158,9 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _seenWsSub?.cancel();
+    _seenDeltaSub?.cancel();
     _scroll.removeListener(_onScroll);
     _controller.removeListener(_publishDiagnostics);
     _controller.dispose();
@@ -861,6 +909,8 @@ class _MessageThreadScreenState extends State<MessageThreadScreen> {
       showStatus: m.showStatus,
       showTimestamp: m.showTimestamp,
       showBubbleTail: m.showBubbleTail,
+      compactWithPrevious: m.compactWithPrevious,
+      compactWithNext: m.compactWithNext,
       onRetry: () {
         final t = m.message.tempId;
         if (t != null) _controller.retry(t);
@@ -1280,6 +1330,8 @@ class _MessageBubble extends StatefulWidget {
   /// Other bubbles reveal their time on tap.
   final bool showTimestamp;
   final bool showBubbleTail;
+  final bool compactWithPrevious;
+  final bool compactWithNext;
 
   /// Tapbacks merged onto this message (chips), the quoted reply (if any), and
   /// the send-effect hint label (if any).
@@ -1302,6 +1354,8 @@ class _MessageBubble extends StatefulWidget {
     required this.showStatus,
     required this.showTimestamp,
     required this.showBubbleTail,
+    required this.compactWithPrevious,
+    required this.compactWithNext,
     this.reactions = const [],
     this.stickers = const [],
     this.reply,
@@ -1375,6 +1429,13 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final effect = effectHint;
     final previewUrl = bodyText == null ? null : firstUrlInText(bodyText);
     final hasLinkAttachment = message.attachments.any((a) => a.isLinkPreview);
+    final tightTop = widget.compactWithPrevious && !widget.showSenderName;
+    final tightBottom =
+        widget.compactWithNext && !widget.showStatus && !widget.showTimestamp;
+    final bubbleTopPadding = tightTop ? 0.5 : 2.0;
+    final bubbleBottomPadding = tightBottom ? 0.5 : 2.0;
+    final rowTopPadding = tightTop ? 0.5 : 3.0;
+    final rowBottomPadding = tightBottom ? 0.5 : 3.0;
 
     final bubbleChild = Column(
       crossAxisAlignment: fromMe
@@ -1426,7 +1487,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
     );
 
     final bubble = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: EdgeInsets.only(
+        top: bubbleTopPadding,
+        bottom: bubbleBottomPadding,
+      ),
       child: stripBubble
           ? bubbleChild
           : CustomPaint(
@@ -1552,7 +1616,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
-            padding: const EdgeInsets.all(3),
+            padding: EdgeInsets.fromLTRB(3, rowTopPadding, 3, rowBottomPadding),
             decoration: BoxDecoration(
               color: widget.highlighted
                   ? scheme.tertiary.withValues(alpha: 0.24)

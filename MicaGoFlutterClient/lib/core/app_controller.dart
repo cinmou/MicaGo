@@ -554,6 +554,26 @@ class AppController extends ChangeNotifier {
   /// was toggled) and the chat-list controller should reload from the server.
   Stream<void> get chatListReloads => _chatReloadController.stream;
 
+  final StreamController<void> _chatSeenController =
+      StreamController<void>.broadcast();
+
+  /// Fires when the open thread advances a chat's read watermark, so the chat
+  /// list re-derives the unread dot from the cache immediately.
+  Stream<void> get chatSeen => _chatSeenController.stream;
+
+  /// The authoritative "the user is looking at this conversation" signal: marks
+  /// every [guids] route seen in the cache (advancing the read watermark) and
+  /// notifies the chat list to re-derive the dot. Only the open thread should
+  /// call this — message ingestion (WS/delta) never clears another party's dot
+  /// (C47), which is what made the dot flicker/disappear when a new message
+  /// arrived while a stale "active chat" was still recorded.
+  Future<void> markChatsViewed(Iterable<String> guids, {int? upTo}) async {
+    final ids = guids.where((g) => g.trim().isNotEmpty).toList(growable: false);
+    if (ids.isEmpty) return;
+    await cache.markChatsSeen(ids, upTo: upTo);
+    if (!_chatSeenController.isClosed) _chatSeenController.add(null);
+  }
+
   /// Fetches everything newer than the persisted cursor and applies it to the
   /// cache + open views, paging until caught up. Idempotent and safe to call on
   /// reconnect, resume, startup, and the fallback poll.
@@ -574,7 +594,13 @@ class AppController extends ChangeNotifier {
             final isNew =
                 msg.guid.isEmpty || !await cache.hasMessageGuid(msg.guid);
             await cache.upsertMessage(chatGuid, msg);
-            final seen = msg.isFromMe || isChatActive(chatGuid);
+            // C47: ingestion only ever lights (or leaves) the unread dot — it
+            // never advances another party's read watermark. Marking a chat read
+            // is owned exclusively by the open thread (markChatsViewed), so a
+            // stale "active chat" or a background→resume race can no longer make
+            // an arriving message wrongly clear an existing dot. My own messages
+            // are inherently seen.
+            final seen = msg.isFromMe;
             final knownChat = await cache.bumpChatWithMessage(
               msg,
               markUnread: isNew && !seen,
@@ -1439,6 +1465,7 @@ class AppController extends ChangeNotifier {
     _refresh.dispose();
     unawaited(_deltaController.close());
     unawaited(_chatReloadController.close());
+    unawaited(_chatSeenController.close());
     ws.removeListener(_onWebSocketStatusChanged);
     ws.dispose();
     _api?.close();

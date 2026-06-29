@@ -23,6 +23,7 @@ class ChatListController extends ChangeNotifier {
   StreamSubscription<WsEvent>? _wsSub;
   StreamSubscription<MessageModel>? _deltaSub;
   StreamSubscription<void>? _reloadSub;
+  StreamSubscription<void>? _seenSub;
   Timer? _reloadDebounce;
 
   /// When true, also request debug-only/noise-only chats from the server.
@@ -40,6 +41,10 @@ class ChatListController extends ChangeNotifier {
     );
     // The test contact toggling on/off adds/removes a chat off-band.
     _reloadSub ??= app.chatListReloads.listen((_) => _scheduleServerReload());
+    // The open thread advanced a read watermark (C47) — re-derive the dot from
+    // the cache so it clears immediately, even on the tablet two-pane layout
+    // where the list stays visible beside the thread.
+    _seenSub ??= app.chatSeen.listen((_) => unawaited(_reloadFromCache()));
     unawaited(app.catchUp(reason: 'chat-list'));
   }
 
@@ -190,9 +195,11 @@ class ChatListController extends ChangeNotifier {
       final isNew =
           msg.guid.isEmpty || !await app.cache.hasMessageGuid(msg.guid);
       await app.cache.upsertMessage(chatGuid, msg);
-      // seen = my own message, or the chat is already open → keep the watermark
-      // caught up so it never shows unread for what the user is looking at.
-      final seen = msg.isFromMe || app.isChatActive(chatGuid);
+      // C47: ingestion only lights (or leaves) the dot; it never advances the
+      // read watermark for someone else's message. The open thread owns marking
+      // a chat read (markChatsViewed), so an arriving message can no longer
+      // wrongly clear a dot via a stale "active chat". My own messages are seen.
+      final seen = msg.isFromMe;
       final known = await app.cache.bumpChatWithMessage(
         msg,
         markUnread: isNew && !seen,
@@ -271,6 +278,7 @@ class ChatListController extends ChangeNotifier {
     _wsSub?.cancel();
     _deltaSub?.cancel();
     _reloadSub?.cancel();
+    _seenSub?.cancel();
     super.dispose();
   }
 }

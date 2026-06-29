@@ -378,7 +378,15 @@ ON CONFLICT(guid) DO UPDATE SET
   /// Marks chats as read: the watermark catches up to the latest message, which
   /// clears the derived unread dot, and the auxiliary count is zeroed. Called on
   /// chat open, mark-as-read, and the drag-to-dismiss badge gesture (C43).
-  Future<void> markChatsSeen(Iterable<String> guids) async {
+  ///
+  /// [upTo] (C47) advances the watermark to at least that timestamp even if the
+  /// chat row's `latest_renderable_at` has not yet been bumped for the message
+  /// the caller just observed. This makes "the open thread marks itself read"
+  /// independent of whether the chat-list ingestion (which writes
+  /// `latest_renderable_at`) or this call wins the race for the same WS/delta
+  /// event — otherwise the watermark could settle behind the new message and
+  /// leave a stale dot lit while the user is looking at the conversation.
+  Future<void> markChatsSeen(Iterable<String> guids, {int? upTo}) async {
     final db = await _ready();
     final batch = db.batch();
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -391,12 +399,15 @@ ON CONFLICT(guid) DO UPDATE SET
       );
       if (rows.isEmpty) continue;
       final latestAt = (rows.first['latest_renderable_at'] as int?) ?? 0;
+      final lastSeenAt = (rows.first['last_seen_at'] as int?) ?? 0;
+      // Never regress the watermark; cover a not-yet-bumped arrival via [upTo].
+      final seenAt = [latestAt, lastSeenAt, upTo ?? 0].reduce((a, b) => a > b ? a : b);
       final chat = _chatFromRow(rows.first).copyWith(unreadCount: 0);
       batch.update(
         'chats',
         {
           'json': jsonEncode(chat.toJson()),
-          'last_seen_at': latestAt,
+          'last_seen_at': seenAt,
           'updated_at': now,
         },
         where: 'guid = ?',

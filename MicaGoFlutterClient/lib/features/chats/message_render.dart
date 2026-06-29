@@ -12,7 +12,61 @@ library;
 
 import 'dart:convert';
 
+import 'package:intl/intl.dart';
+
 import 'models/message_model.dart';
+
+/// The chat-list timestamp label, phone-style (C46). [now] is injected so this
+/// stays pure/testable; [use24h] follows the system clock setting; [locale] is
+/// the app's language code (en/zh).
+///   • < 1 min      → "now"
+///   • < 1 hour     → "5m"
+///   • same day     → clock time (06:06 or 6:06 AM per use24h)
+///   • within 7 days → weekday (Monday / 星期一)
+///   • older        → numeric date in the locale's order (12/06/2026)
+String chatTimestampLabel(
+  DateTime dt, {
+  required DateTime now,
+  required bool use24h,
+  required String locale,
+}) {
+  final diff = now.difference(dt);
+  if (diff.inMinutes < 1) return 'now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+
+  final startOfToday = DateTime(now.year, now.month, now.day);
+  final startOfThatDay = DateTime(dt.year, dt.month, dt.day);
+  final daysApart = startOfToday.difference(startOfThatDay).inDays;
+
+  try {
+    if (daysApart <= 0) {
+      return (use24h ? DateFormat.Hm(locale) : DateFormat.jm(locale)).format(dt);
+    }
+    if (daysApart < 7) return DateFormat.EEEE(locale).format(dt);
+    return DateFormat.yMd(locale).format(dt);
+  } catch (_) {
+    // Locale date symbols not loaded — locale-independent fallback.
+    if (daysApart <= 0) {
+      final m = dt.minute.toString().padLeft(2, '0');
+      if (use24h) return '${dt.hour.toString().padLeft(2, '0')}:$m';
+      final h12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      return '$h12:$m ${dt.hour < 12 ? 'AM' : 'PM'}';
+    }
+    if (daysApart < 7) {
+      const weekdays = [
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
+      ];
+      return weekdays[(dt.weekday - 1) % 7];
+    }
+    return '${dt.month}/${dt.day}/${dt.year}';
+  }
+}
 
 /// What kind of row a message should render as.
 enum MessageRenderableKind {

@@ -63,6 +63,8 @@ class MessageViewItem extends ThreadViewItem {
   final bool showStatus; // whether to render a delivery label
   final bool showTimestamp; // whether the footer shows the time by default
   final bool showBubbleTail; // only the last bubble in a same-side run gets one
+  final bool compactWithPrevious; // tight vertical gap inside same-sender run
+  final bool compactWithNext; // tight vertical gap inside same-sender run
 
   MessageViewItem({
     required this.message,
@@ -82,6 +84,8 @@ class MessageViewItem extends ThreadViewItem {
     required this.showStatus,
     required this.showTimestamp,
     required this.showBubbleTail,
+    required this.compactWithPrevious,
+    required this.compactWithNext,
   });
 
   @override
@@ -112,15 +116,23 @@ class ThreadPresentationBuilder {
     String? lastOutgoingKey;
     String? lastReadOutgoingKey;
     String? lastDeliveredOutgoingKey;
-    for (final m in messages) {
+    var lastReadOutgoingIndex = -1;
+    var lastDeliveredOutgoingIndex = -1;
+    for (var i = 0; i < messages.length; i++) {
+      final m = messages[i];
       if (!m.isFromMe) continue;
       lastOutgoingKey = m.dedupeKey;
       final state = deliveryStateFor(m);
       if (state == MessageDeliveryState.read) {
         lastReadOutgoingKey = m.dedupeKey;
+        lastReadOutgoingIndex = i;
       } else if (state == MessageDeliveryState.delivered) {
         lastDeliveredOutgoingKey = m.dedupeKey;
+        lastDeliveredOutgoingIndex = i;
       }
+    }
+    if (lastReadOutgoingIndex > lastDeliveredOutgoingIndex) {
+      lastDeliveredOutgoingKey = null;
     }
     bool showStatusFor(MessageModel m) {
       switch (prefs.deliveryLabels) {
@@ -191,6 +203,16 @@ class ThreadPresentationBuilder {
           next != null && _hasRenderedSeparatorBetween(m, next.message);
       final nextIsSmallEmoji =
           next != null && !nextIsSystem && _isSmallEmojiMessage(next.message);
+      final compactWithPrevious =
+          !isSystem &&
+          prev != null &&
+          !_hasRenderedSeparatorBetween(prev.message, m) &&
+          _sameBubbleRun(prev, row);
+      final compactWithNext =
+          !isSystem &&
+          next != null &&
+          !separatedFromNext &&
+          _sameBubbleRun(row, next);
       final showBubbleTail =
           !isSystem &&
           (next == null || nextIsSystem || next.message.isFromMe != m.isFromMe);
@@ -232,6 +254,8 @@ class ThreadPresentationBuilder {
           showStatus: !isSystem && showStatusFor(m),
           showTimestamp: !isSystem && m.dedupeKey == lastRowKey,
           showBubbleTail: showTailWithBreaks,
+          compactWithPrevious: compactWithPrevious,
+          compactWithNext: compactWithNext,
         ),
       );
     }
@@ -305,6 +329,26 @@ class ThreadPresentationBuilder {
     final bh = bm.handleId?.trim();
     if (ah == null || ah.isEmpty || bh == null || bh.isEmpty || ah != bh) {
       return false;
+    }
+    final at = am.dateCreated;
+    final bt = bm.dateCreated;
+    if (at != null &&
+        bt != null &&
+        (bt - at).abs() > kSenderRunGap.inMilliseconds) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool _sameBubbleRun(DisplayRow a, DisplayRow b) {
+    if (_isSystemKind(a.kind) || _isSystemKind(b.kind)) return false;
+    final am = a.message;
+    final bm = b.message;
+    if (am.isFromMe != bm.isFromMe) return false;
+    if (!am.isFromMe) {
+      final ah = am.handleId?.trim();
+      final bh = bm.handleId?.trim();
+      if (ah != bh) return false;
     }
     final at = am.dateCreated;
     final bt = bm.dateCreated;

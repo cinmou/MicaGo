@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -10,7 +12,7 @@ import '../settings/message_display_controller.dart';
 import 'avatar.dart';
 import 'chat_list_controller.dart';
 import 'chat_service.dart';
-import 'message_render.dart' show chatListPreviewText;
+import 'message_render.dart' show chatListPreviewText, chatTimestampLabel;
 import 'models/chat_summary.dart';
 import 'models/merged_chat.dart';
 
@@ -44,6 +46,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   final _searchFocus = FocusNode();
   String _query = '';
   bool _searchOpen = false;
+  Timer? _autoRefresh;
 
   @override
   void initState() {
@@ -56,6 +59,24 @@ class _ChatListScreenState extends State<ChatListScreen> {
     _controller.startRealtime();
     widget.searchRequests?.addListener(_openSearch);
     WidgetsBinding.instance.addPostFrameCallback((_) => _controller.load());
+    // C45: a once-a-minute heartbeat — keeps the relative timestamps ("now" →
+    // "1m" → "2h") current as time passes, and silently re-pulls the chat list
+    // so the unread dot stays correct even if a realtime/WS event was missed
+    // (the dot is derived from server data + the read watermark). This is the
+    // phone safety net: WS can drop on mobile, but a refresh restores the dot.
+    _autoRefresh = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _heartbeat(),
+    );
+  }
+
+  void _heartbeat() {
+    if (!mounted) return;
+    setState(() {}); // re-render relative timestamps even when offline
+    final app = context.read<AppController>();
+    if (app.isForeground && app.api != null) {
+      unawaited(_controller.load(showSpinner: false));
+    }
   }
 
   @override
@@ -75,6 +96,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   @override
   void dispose() {
+    _autoRefresh?.cancel();
     widget.searchRequests?.removeListener(_openSearch);
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -682,31 +704,41 @@ class _ChatRow extends StatelessWidget {
                 : const _UnreadDot(),
           )
         : null;
+    // C45: time on top, badge below, centered on a single vertical line so the
+    // dot sits directly under the timestamp (the badge's transparent hit-padding
+    // would otherwise nudge a right-aligned badge off the time's right edge).
     return Column(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         if (time != null)
           Text(
-            _relativeTime(time),
+            _formatTime(context, time),
             style: textTheme.bodySmall?.copyWith(
               color: hasUnread ? scheme.primary : scheme.onSurfaceVariant,
               fontWeight: hasUnread ? FontWeight.w700 : FontWeight.w500,
             ),
           ),
-        if (badge != null) ...[const SizedBox(height: 6), badge],
+        if (badge != null) ...[const SizedBox(height: 4), badge],
       ],
     );
   }
 
-  String _relativeTime(int unixMs) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(unixMs);
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    if (diff.inHours < 24) return '${diff.inHours}h';
-    return '${diff.inDays}d';
+  // C46: the last-message timestamp, the way phones show it:
+  //   • under 1 min     → "now"
+  //   • under 1 hour    → "5m" (relative)
+  //   • same day        → clock time, 12h/24h per the system setting (e.g. 06:06)
+  //   • within 7 days   → weekday in the app's language (e.g. Monday / 星期一)
+  //   • older           → numeric date in the app's locale (e.g. 12/06/2026)
+  String _formatTime(BuildContext context, int unixMs) {
+    // Use only the languageCode (en/zh): flutter_localizations loads date symbols
+    // for the active locale, and zh weekday/date glyphs match Hans/Hant.
+    return chatTimestampLabel(
+      DateTime.fromMillisecondsSinceEpoch(unixMs),
+      now: DateTime.now(),
+      use24h: MediaQuery.maybeOf(context)?.alwaysUse24HourFormat ?? false,
+      locale: Localizations.localeOf(context).languageCode,
+    );
   }
 }
 

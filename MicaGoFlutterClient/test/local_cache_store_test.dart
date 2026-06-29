@@ -215,6 +215,81 @@ void main() {
     expect(chat.unreadCount, 0);
   });
 
+  test('a backgrounded message (seen:false) re-lights the dot after open', () async {
+    // Open the chat (watermark catches up to its latest), then a new message
+    // arrives while backgrounded — bumped with seen:false — must light the dot
+    // again even though the chat was "seen" moments ago (C45).
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 20, lastMessagePreview: 'x'),
+    ]);
+    await store.markChatsSeen(['c1']);
+    expect((await store.listChats()).single.hasUnread, isFalse);
+
+    await store.bumpChatWithMessage(
+      MessageModel.fromJson({
+        'guid': 'bg',
+        'chatGuid': 'c1',
+        'text': 'while backgrounded',
+        'isFromMe': false,
+        'dateCreated': 99,
+      }),
+      markUnread: true,
+      seen: false,
+    );
+    expect((await store.listChats()).single.hasUnread, isTrue);
+  });
+
+  test('markChatsSeen(upTo:) clears a not-yet-bumped arrival (C47 race)', () async {
+    // The open thread observes a WS/delta message and marks itself read, but the
+    // chat-list ingestion has not yet bumped latest_renderable_at for it. Passing
+    // the message timestamp via upTo must still advance the watermark past it so
+    // no stale dot lingers regardless of which write wins the race.
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 20, lastMessagePreview: 'x'),
+    ]);
+    await store.markChatsSeen(['c1']);
+    expect((await store.listChats()).single.hasUnread, isFalse);
+
+    // Watermark catches up to the arrival's timestamp before the row is bumped.
+    await store.markChatsSeen(['c1'], upTo: 80);
+    // Now the (late) ingestion bumps the row to the same message — still seen.
+    await store.bumpChatWithMessage(
+      MessageModel.fromJson({
+        'guid': 'late',
+        'chatGuid': 'c1',
+        'text': 'arrived while viewing',
+        'isFromMe': false,
+        'dateCreated': 80,
+      }),
+      markUnread: true,
+      seen: false,
+    );
+    expect((await store.listChats()).single.hasUnread, isFalse,
+        reason: 'upTo advanced the watermark to 80, matching the new message');
+  });
+
+  test('markChatsSeen never regresses the watermark', () async {
+    await store.upsertChats([
+      const ChatSummary(guid: 'c1', lastMessageAt: 90, lastMessagePreview: 'x'),
+    ]);
+    await store.markChatsSeen(['c1']); // watermark = 90
+    // A stale upTo from an older event must not pull the watermark back.
+    await store.markChatsSeen(['c1'], upTo: 10);
+    await store.bumpChatWithMessage(
+      MessageModel.fromJson({
+        'guid': 'older',
+        'chatGuid': 'c1',
+        'text': 'older',
+        'isFromMe': false,
+        'dateCreated': 50,
+      }),
+      markUnread: true,
+      seen: false,
+    );
+    expect((await store.listChats()).single.hasUnread, isFalse,
+        reason: 'watermark stayed at 90; a 50ms message is already seen');
+  });
+
   test('a server refresh keeps a chat read until a newer message', () async {
     await store.upsertChats([
       const ChatSummary(guid: 'c1', lastMessageAt: 20, lastMessagePreview: 'x'),

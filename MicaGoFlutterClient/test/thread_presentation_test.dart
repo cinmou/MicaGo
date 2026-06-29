@@ -251,6 +251,65 @@ void main() {
     expect(mine.showSenderAvatar, isFalse);
   });
 
+  test('same-side bubble runs get compact vertical spacing flags', () {
+    final t0 = DateTime(2024, 1, 1, 10).millisecondsSinceEpoch;
+    final items = _build([
+      _m(guid: 'me1', text: 'one', isFromMe: true, dateCreated: t0),
+      _m(guid: 'me2', text: 'two', isFromMe: true, dateCreated: t0 + 30 * 1000),
+      _m(
+        guid: 'them1',
+        text: 'three',
+        handleId: '+a',
+        dateCreated: t0 + 60 * 1000,
+      ),
+      _m(
+        guid: 'them2',
+        text: 'four',
+        handleId: '+a',
+        dateCreated: t0 + 90 * 1000,
+      ),
+      _m(
+        guid: 'them3',
+        text: 'five',
+        handleId: '+b',
+        dateCreated: t0 + 120 * 1000,
+      ),
+    ], isGroup: true);
+
+    final msgs = items.whereType<MessageViewItem>().toList();
+    final me1 = msgs.firstWhere((m) => m.message.guid == 'me1');
+    final me2 = msgs.firstWhere((m) => m.message.guid == 'me2');
+    final them1 = msgs.firstWhere((m) => m.message.guid == 'them1');
+    final them2 = msgs.firstWhere((m) => m.message.guid == 'them2');
+    final them3 = msgs.firstWhere((m) => m.message.guid == 'them3');
+
+    expect(me1.compactWithPrevious, isFalse);
+    expect(me1.compactWithNext, isTrue);
+    expect(me2.compactWithPrevious, isTrue);
+    expect(me2.compactWithNext, isFalse);
+    expect(them1.compactWithNext, isTrue);
+    expect(them2.compactWithPrevious, isTrue);
+    expect(them2.compactWithNext, isFalse);
+    expect(them3.compactWithPrevious, isFalse);
+  });
+
+  test('large time gaps break compact bubble runs', () {
+    final t0 = DateTime(2024, 1, 1, 10).millisecondsSinceEpoch;
+    final items = _build([
+      _m(guid: 'a', text: 'one', isFromMe: true, dateCreated: t0),
+      _m(
+        guid: 'b',
+        text: 'two',
+        isFromMe: true,
+        dateCreated: t0 + 6 * 60 * 1000,
+      ),
+    ]);
+
+    final msgs = items.whereType<MessageViewItem>().toList();
+    expect(msgs[0].compactWithNext, isFalse);
+    expect(msgs[1].compactWithPrevious, isFalse);
+  });
+
   test('reply preview resolved from loaded target', () {
     final items = _build(
       [
@@ -388,6 +447,38 @@ void main() {
       );
     },
   );
+
+  test('compact delivery hides stale delivered marker behind newer read', () {
+    final items = _build(
+      [
+        _m(
+          guid: 'delivered',
+          text: 'one',
+          isFromMe: true,
+          isDelivered: true,
+          dateDelivered: 1500,
+          dateCreated: 1000,
+        ),
+        _m(
+          guid: 'read',
+          text: 'two',
+          isFromMe: true,
+          isRead: true,
+          dateRead: 2500,
+          dateCreated: 2000,
+        ),
+      ],
+      prefs: const MessageDisplayPrefs(
+        deliveryLabels: DeliveryLabelMode.compact,
+      ),
+    );
+    final msgs = items.whereType<MessageViewItem>().toList();
+    expect(
+      msgs.firstWhere((m) => m.message.guid == 'delivered').showStatus,
+      isFalse,
+    );
+    expect(msgs.firstWhere((m) => m.message.guid == 'read').showStatus, isTrue);
+  });
 
   group('C21u timestamp grouping', () {
     test('no time separator for closely-spaced same-day messages', () {
