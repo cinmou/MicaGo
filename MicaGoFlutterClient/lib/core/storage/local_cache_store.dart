@@ -443,6 +443,11 @@ ON CONFLICT(guid) DO UPDATE SET
     );
   }
 
+  Future<void> deletePending(String tempId) async {
+    final db = await _ready();
+    await db.delete('messages', where: 'temp_id = ?', whereArgs: [tempId]);
+  }
+
   Future<void> confirmPending(
     String chatGuid,
     String tempId,

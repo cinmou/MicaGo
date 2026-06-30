@@ -725,48 +725,224 @@ class _AudioAttachmentState extends State<_AudioAttachment> {
 
   @override
   Widget build(BuildContext context) {
-    final label = widget.attachment.isVoiceMessage
-        ? 'Voice message'
-        : widget.attachment.displayName;
+    final scheme = Theme.of(context).colorScheme;
+    final bg = Color.alphaBlend(
+      scheme.primary.withValues(alpha: 0.18),
+      scheme.surface,
+    );
+    final fg = scheme.onSurface;
     return GestureDetector(
       onLongPress: () => showAttachmentActions(
         context,
         api: widget.api,
         attachment: widget.attachment,
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-        child: StreamBuilder<PlayerState>(
-          stream: _player.playerStateStream,
-          builder: (context, snap) {
-            final playing = snap.data?.playing ?? false;
-            return Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: _failed ? null : _toggle,
-                  icon: Icon(
-                    _failed
-                        ? Icons.error_outline
-                        : playing
-                        ? Icons.pause_circle
-                        : Icons.play_circle,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(
-                    _failed ? 'Audio unavailable' : label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            );
-          },
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: 260,
+          maxWidth: _audioCardMaxWidth(context),
+          minHeight: 64,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: StreamBuilder<PlayerState>(
+              stream: _player.playerStateStream,
+              builder: (context, stateSnap) {
+                final playing = stateSnap.data?.playing ?? false;
+                return StreamBuilder<Duration?>(
+                  stream: _player.durationStream,
+                  builder: (context, durationSnap) {
+                    final duration = durationSnap.data ?? _player.duration;
+                    return StreamBuilder<Duration>(
+                      stream: _player.positionStream,
+                      builder: (context, positionSnap) {
+                        final position = positionSnap.data ?? _player.position;
+                        final progress =
+                            duration == null || duration.inMilliseconds <= 0
+                            ? 0.0
+                            : (position.inMilliseconds /
+                                      duration.inMilliseconds)
+                                  .clamp(0.0, 1.0)
+                                  .toDouble();
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Material(
+                              color: scheme.surface.withValues(alpha: 0.80),
+                              shape: const CircleBorder(),
+                              child: IconButton(
+                                tooltip: _failed
+                                    ? 'Audio unavailable'
+                                    : playing
+                                    ? 'Pause'
+                                    : 'Play',
+                                onPressed: _failed ? null : _toggle,
+                                color: scheme.primary,
+                                icon: Icon(
+                                  _failed
+                                      ? Icons.error_outline
+                                      : playing
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _AudioWaveform(
+                                progress: progress,
+                                color: fg,
+                                activeColor: scheme.primary,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              _failed
+                                  ? '--:--'
+                                  : _formatDuration(duration ?? position),
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
+  }
+
+  double _audioCardMaxWidth(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width >= 840) return 420;
+    final maxWidth = width * 0.76;
+    return maxWidth < 260 ? 260 : maxWidth;
+  }
+
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds;
+    final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+}
+
+class _AudioWaveform extends StatelessWidget {
+  final double progress;
+  final Color color;
+  final Color activeColor;
+
+  const _AudioWaveform({
+    required this.progress,
+    required this.color,
+    required this.activeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _AudioWaveformPainter(
+        progress: progress,
+        color: color,
+        activeColor: activeColor,
+      ),
+      child: const SizedBox(height: 30),
+    );
+  }
+}
+
+class _AudioWaveformPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+  final Color activeColor;
+
+  const _AudioWaveformPainter({
+    required this.progress,
+    required this.color,
+    required this.activeColor,
+  });
+
+  static const List<double> _levels = [
+    0.16,
+    0.20,
+    0.18,
+    0.24,
+    0.22,
+    0.28,
+    0.26,
+    0.34,
+    0.48,
+    0.62,
+    0.74,
+    0.68,
+    0.56,
+    0.50,
+    0.44,
+    0.58,
+    0.66,
+    0.52,
+    0.48,
+    0.72,
+    0.80,
+    0.74,
+    0.78,
+    0.76,
+    0.70,
+    0.60,
+    0.52,
+    0.48,
+    0.42,
+    0.36,
+    0.30,
+    0.26,
+    0.22,
+    0.18,
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final inactive = Paint()
+      ..color = color.withValues(alpha: 0.46)
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 3;
+    final active = Paint()
+      ..color = activeColor.withValues(alpha: 0.88)
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 3;
+    final gap = size.width / _levels.length;
+    final center = size.height / 2;
+    final activeCutoff = progress.clamp(0.0, 1.0) * size.width;
+    for (var i = 0; i < _levels.length; i++) {
+      final height = 5 + _levels[i] * (size.height - 8);
+      final x = gap * i + gap / 2;
+      canvas.drawLine(
+        Offset(x, center - height / 2),
+        Offset(x, center + height / 2),
+        x <= activeCutoff ? active : inactive,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _AudioWaveformPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.color != color ||
+        oldDelegate.activeColor != activeColor;
   }
 }
 

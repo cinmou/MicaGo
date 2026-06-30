@@ -65,7 +65,7 @@ class ThemeController extends ChangeNotifier {
       case ThemeColorChoice.indigo:
         return const Color(0xFF2F3A73);
       case ThemeColorChoice.dianthus:
-        return const Color(0xFFC07A8B);
+        return const Color(0xFFE889A8);
       case ThemeColorChoice.witheredGrass:
         return const Color(0xFF9C8A4F);
       case ThemeColorChoice.amber:

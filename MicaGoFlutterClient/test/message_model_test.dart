@@ -162,6 +162,36 @@ void main() {
       expect(a.isAudio, isFalse);
     });
 
+    test(
+      'infers previewable image from filename when server marks it as file',
+      () {
+        final a = AttachmentModel.fromJson({
+          'guid': 'a',
+          'transferName': 'IMG_0001.JPG',
+          'attachmentKind': 'file',
+          'displayKind': 'file',
+          'downloadUrl': '/x',
+        });
+        expect(a.isImage, isTrue);
+        expect(a.canRenderInlineImage, isTrue);
+        expect(a.isOpaquePreviewPayload, isFalse);
+      },
+    );
+
+    test('infers previewable image from Apple image UTI', () {
+      final a = AttachmentModel.fromJson({
+        'guid': 'a',
+        'filename': '/var/mobile/Attachments/photo',
+        'uti': 'public.jpeg',
+        'attachmentKind': 'file',
+        'displayKind': 'file',
+        'downloadUrl': '/x',
+      });
+      expect(a.isImage, isTrue);
+      expect(a.canRenderInlineImage, isTrue);
+      expect(a.isOpaquePreviewPayload, isFalse);
+    });
+
     test('displayName falls back to a generic label', () {
       final a = AttachmentModel.fromJson({'guid': 'a', 'downloadUrl': '/x'});
       expect(a.displayName, 'Attachment');

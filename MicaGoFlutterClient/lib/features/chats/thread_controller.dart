@@ -202,6 +202,14 @@ class ThreadController extends ChangeNotifier {
     await send(text);
   }
 
+  Future<void> deletePending(String tempId) async {
+    final removedText = _col.removePending(tempId);
+    if (removedText == null) return;
+    await app.cache.deletePending(tempId);
+    state = _col.isEmpty ? ThreadState.empty : ThreadState.loaded;
+    notifyListeners();
+  }
+
   void markRetractedLocally(String guid, {int? dateRetracted}) {
     if (guid.isEmpty) return;
     final applied = _col.applyUnsend(

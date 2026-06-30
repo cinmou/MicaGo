@@ -856,6 +856,10 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
           resolveName: contacts.displayNameFor,
           loadingOlder: _controller.loadingOlder,
         );
+        final threadImages = _controller.messages
+            .expand((m) => m.attachments)
+            .where((a) => a.canRenderInlineImage)
+            .toList(growable: false);
         // Reversed list: newest at the bottom; prepending older history (top)
         // does not shift the viewport, so scroll position is preserved.
         return ListView.builder(
@@ -867,7 +871,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
             final item = items[items.length - 1 - i];
             return KeyedSubtree(
               key: ValueKey(item.key),
-              child: _buildRow(context, item, api),
+              child: _buildRow(context, item, api, threadImages),
             );
           },
         );
@@ -886,7 +890,12 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     return inset;
   }
 
-  Widget _buildRow(BuildContext context, ThreadViewItem item, ApiClient? api) {
+  Widget _buildRow(
+    BuildContext context,
+    ThreadViewItem item,
+    ApiClient? api,
+    List<AttachmentModel> threadImages,
+  ) {
     if (item is DateSeparatorItem) {
       return _DateSeparator(label: item.label);
     }
@@ -920,6 +929,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     final bubble = _MessageBubble(
       message: m.message,
       api: api,
+      threadImages: threadImages,
       senderName: m.senderLabel,
       showSenderName: m.showSenderName,
       showSenderAvatar: m.showSenderAvatar,
@@ -948,6 +958,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         onRetracted: (guid) => _controller.markRetractedLocally(guid),
         onChanged: () => _controller.load(showSpinner: false),
         onHide: () => _controller.hideMessage(m.message.guid),
+        onDeletePending: (tempId) => _controller.deletePending(tempId),
       ),
     );
     final keyed = m.message.guid.isEmpty
@@ -1067,7 +1078,7 @@ Color _accent3_500(ColorScheme scheme) => scheme.tertiary;
 
 Color _accent3_600(ColorScheme scheme) => scheme.tertiary;
 
-enum MessageAction { copy, hide, edit, retract, delete }
+enum MessageAction { copy, hide, edit, retract, delete, deletePending }
 
 Future<void> showMessageActionMenu(
   BuildContext context,
@@ -1078,6 +1089,7 @@ Future<void> showMessageActionMenu(
   void Function(String guid)? onRetracted,
   Future<void> Function()? onChanged,
   Future<void> Function()? onHide,
+  Future<void> Function(String tempId)? onDeletePending,
 }) async {
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
   final text = displayText(message);
@@ -1098,6 +1110,8 @@ Future<void> showMessageActionMenu(
       message.guid.isNotEmpty &&
       !message.guid.startsWith('tmp-') &&
       !message.isRetracted;
+  final failedPending =
+      message.localState == LocalSendState.failed && message.tempId != null;
   final items = <PopupMenuEntry<MessageAction>>[
     if (text != null)
       const PopupMenuItem<MessageAction>(
@@ -1138,6 +1152,15 @@ Future<void> showMessageActionMenu(
     if (canMutate && caps.delete)
       const PopupMenuItem<MessageAction>(
         value: MessageAction.delete,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.delete_outline),
+          title: Text('Delete'),
+        ),
+      ),
+    if (failedPending)
+      const PopupMenuItem<MessageAction>(
+        value: MessageAction.deletePending,
         child: ListTile(
           dense: true,
           leading: Icon(Icons.delete_outline),
@@ -1222,6 +1245,11 @@ Future<void> showMessageActionMenu(
         success: 'Delete queued',
         onChanged: onChanged,
       );
+      break;
+    case MessageAction.deletePending:
+      final tempId = message.tempId;
+      if (tempId == null) return;
+      await onDeletePending?.call(tempId);
       break;
   }
 }
@@ -1339,6 +1367,7 @@ class _DateSeparator extends StatelessWidget {
 class _MessageBubble extends StatefulWidget {
   final MessageModel message;
   final ApiClient? api;
+  final List<AttachmentModel> threadImages;
 
   /// Precomputed (ThreadPresentationBuilder): sender label (groups only) + body.
   final String? senderName;
@@ -1370,6 +1399,7 @@ class _MessageBubble extends StatefulWidget {
   const _MessageBubble({
     required this.message,
     required this.api,
+    required this.threadImages,
     required this.senderName,
     required this.showSenderName,
     required this.showSenderAvatar,
@@ -1397,6 +1427,20 @@ class _MessageBubbleState extends State<_MessageBubble> {
   // C21u: tap-to-reveal this bubble's timestamp (BlueBubbles-style). Long-press
   // is reserved for the Message Inspector and is untouched.
   bool _revealed = false;
+
+  int _imageGalleryIndex(
+    AttachmentModel attachment,
+    List<AttachmentModel> galleryImages,
+  ) {
+    final direct = galleryImages.indexOf(attachment);
+    if (direct >= 0) return direct;
+    final guid = attachment.guid;
+    if (guid.isNotEmpty) {
+      final byGuid = galleryImages.indexWhere((a) => a.guid == guid);
+      if (byGuid >= 0) return byGuid;
+    }
+    return 0;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1442,9 +1486,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
         : (fromMe ? _accent1_600(scheme) : _accent2_600(scheme));
     final textColor = fromMe ? scheme.onPrimary : scheme.onSecondary;
 
-    final images = message.attachments
+    final messageImages = message.attachments
         .where((a) => a.canRenderInlineImage)
         .toList(growable: false);
+    final galleryImages = widget.threadImages.isEmpty
+        ? messageImages
+        : widget.threadImages;
     // Local copies so Dart can flow-promote the nullable presentation fields.
     final sender = widget.senderName;
     final senderText = sender ?? '';
@@ -1473,8 +1520,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
             child: AttachmentView(
               api: api,
               attachment: a,
-              imageSiblings: images,
-              imageIndex: a.canRenderInlineImage ? images.indexOf(a) : 0,
+              imageSiblings: galleryImages,
+              imageIndex: a.canRenderInlineImage
+                  ? _imageGalleryIndex(a, galleryImages)
+                  : 0,
             ),
           ),
     ];
@@ -2550,6 +2599,13 @@ class _Composer extends StatefulWidget {
 class _ComposerState extends State<_Composer> {
   final FocusNode _focus = FocusNode();
 
+  String get _hintText => switch (widget.service) {
+    ChatService.imessage => 'iMessage',
+    ChatService.sms => 'SMS through Mac',
+    ChatService.rcs => 'RCS',
+    ChatService.unknown => 'Message',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -2679,7 +2735,7 @@ class _ComposerState extends State<_Composer> {
                               textInputAction: TextInputAction.newline,
                               keyboardType: TextInputType.multiline,
                               decoration: InputDecoration(
-                                hintText: 'Message',
+                                hintText: _hintText,
                                 hintStyle: TextStyle(
                                   color: hintColor,
                                   fontSize: 18,
