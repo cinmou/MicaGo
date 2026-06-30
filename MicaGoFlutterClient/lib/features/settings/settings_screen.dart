@@ -1151,15 +1151,11 @@ class _AppearanceCard extends StatelessWidget {
       case ThemeColorChoice.paleGold:
         return const Color(0xFFB89B5E);
       case ThemeColorChoice.wineRed:
-        return const Color(0xFF6E2639);
+        return const Color(0xFF8B1E3F);
       case ThemeColorChoice.blueGreen:
         return const Color(0xFF1F6F6A);
       case ThemeColorChoice.indigo:
         return const Color(0xFF2F3A73);
-      case ThemeColorChoice.enshuNezu:
-        return const Color(0xFF6E7F80);
-      case ThemeColorChoice.suoh:
-        return const Color(0xFF7E2639);
       case ThemeColorChoice.dianthus:
         return const Color(0xFFC07A8B);
       case ThemeColorChoice.witheredGrass:
@@ -1191,10 +1187,6 @@ class _AppearanceCard extends StatelessWidget {
         return strings.t('themeColor.blueGreen');
       case ThemeColorChoice.indigo:
         return strings.t('themeColor.indigo');
-      case ThemeColorChoice.enshuNezu:
-        return strings.t('themeColor.enshuNezu');
-      case ThemeColorChoice.suoh:
-        return strings.t('themeColor.suoh');
       case ThemeColorChoice.dianthus:
         return strings.t('themeColor.dianthus');
       case ThemeColorChoice.witheredGrass:

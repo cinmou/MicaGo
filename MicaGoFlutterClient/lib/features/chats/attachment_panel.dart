@@ -59,6 +59,11 @@ class AttachmentPanel extends StatefulWidget {
     required this.onError,
   });
 
+  /// The panel's on-screen height, so the thread can reserve matching bottom
+  /// space in the message list (C50). Kept in sync with [build].
+  static double panelHeightFor(BuildContext context) =>
+      (MediaQuery.sizeOf(context).height * 0.50).clamp(300.0, 460.0);
+
   @override
   State<AttachmentPanel> createState() => _AttachmentPanelState();
 }
@@ -156,10 +161,7 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final height = (MediaQuery.sizeOf(context).height * 0.50).clamp(
-      300.0,
-      460.0,
-    );
+    final height = AttachmentPanel.panelHeightFor(context);
     return Container(
       height: height,
       decoration: BoxDecoration(

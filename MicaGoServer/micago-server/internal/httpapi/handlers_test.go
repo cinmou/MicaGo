@@ -512,6 +512,32 @@ func TestGetAttachmentStreamsFile(t *testing.T) {
 	}
 }
 
+func TestAttachmentPreviewConversionScope(t *testing.T) {
+	// HEIC/TIFF can't be decoded by the Flutter client; JPEG is decodable but its
+	// EXIF orientation was rendering sideways — both are rasterized to an
+	// orientation-correct PNG by the server's Quick Look preview (C48). PNG is
+	// web-renderable and carries no EXIF orientation, so it is served directly.
+	convert := []store.AttachmentMeta{
+		{MimeType: ptr("image/heic")},
+		{Uti: ptr("public.heif")},
+		{TransferName: ptr("scan.tiff")},
+		{MimeType: ptr("image/jpeg")},
+		{Uti: ptr("public.jpeg")},
+		{TransferName: ptr("portrait.jpg")},
+		{Filename: ptr("/tmp/portrait.jpeg")},
+	}
+	for _, tc := range convert {
+		if !attachmentNeedsPreviewConversion(&tc) {
+			t.Fatalf("expected metadata to need preview conversion: %+v", tc)
+		}
+	}
+
+	png := &store.AttachmentMeta{MimeType: ptr("image/png"), TransferName: ptr("image.png")}
+	if attachmentNeedsPreviewConversion(png) {
+		t.Fatal("PNG should still be served directly")
+	}
+}
+
 func TestRegisterListAndDeleteDevice(t *testing.T) {
 	devices := &stubDeviceStore{}
 	handlers := NewHandlers(&stubQueries{}, log.New(io.Discard, "", 0), nil, nil, "", devices, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{})

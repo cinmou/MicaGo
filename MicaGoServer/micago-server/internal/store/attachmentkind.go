@@ -244,24 +244,31 @@ func IsTIFFAttachment(mimeType, uti, transferName, filename *string) bool {
 func NeedsPreviewConversion(isSticker bool, mimeType, uti, transferName, filename *string) bool {
 	// C39: stickers are NOT force-converted any more. A sticker is usually a plain
 	// PNG (in ~/Library/Messages/StickerCache) the client can render directly, so
-	// only convert when the format itself isn't web-renderable (HEIC/TIFF, below).
-	// Forcing conversion on every sticker added a needless transcode and a second
-	// failure point. `isSticker` is intentionally unused now.
+	// `isSticker` is intentionally unused now.
+	// C48: HEIC/HEIF/TIFF AND JPEG are routed through the server preview. HEIC/TIFF
+	// because the Flutter/Skia client can't decode them; JPEG because iPhone photos
+	// bake their rotation into EXIF orientation and the client was still showing
+	// some sideways — the Quick Look preview bakes the orientation into the pixels
+	// so every device agrees. PNG stays direct (web-renderable, no EXIF orientation).
 	_ = isSticker
 	if IsTIFFAttachment(mimeType, uti, transferName, filename) {
 		return true
 	}
 	m := strings.ToLower(strings.TrimSpace(deref(mimeType)))
-	if m == "image/heic" || m == "image/heif" || m == "image/heic-sequence" || m == "image/heif-sequence" {
+	if m == "image/jpeg" || m == "image/jpg" ||
+		m == "image/heic" || m == "image/heif" ||
+		m == "image/heic-sequence" || m == "image/heif-sequence" {
 		return true
 	}
 	u := strings.ToLower(strings.TrimSpace(deref(uti)))
-	if u == "public.heic" || u == "public.heif" || u == "public.heic-sequence" || u == "public.heif-sequence" {
+	if u == "public.jpeg" || u == "public.heic" || u == "public.heif" ||
+		u == "public.heic-sequence" || u == "public.heif-sequence" {
 		return true
 	}
 	for _, name := range []string{deref(transferName), deref(filename)} {
 		ext := strings.ToLower(filepath.Ext(name))
-		if ext == ".heic" || ext == ".heif" || ext == ".heics" {
+		if ext == ".jpg" || ext == ".jpeg" ||
+			ext == ".heic" || ext == ".heif" || ext == ".heics" {
 			return true
 		}
 	}

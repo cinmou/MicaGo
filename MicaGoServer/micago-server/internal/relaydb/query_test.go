@@ -167,6 +167,46 @@ func TestListChatMessagesExcludesHiddenAttachments(t *testing.T) {
 	}
 }
 
+func TestListChatMessagesDedupesDuplicateAttachmentFiles(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	stmts := []string{
+		`INSERT INTO chats (guid, chat_identifier, service_name, display_name, is_archived, updated_at) VALUES ('chat-D','cD','iMessage','Dupes',0,100)`,
+		`INSERT INTO messages (guid, chat_guid, source_rowid, text, service, date_created, is_from_me, is_read, is_delivered, cache_has_attachments, created_at) VALUES ('m-d','chat-D',30,NULL,'iMessage',3000,0,1,1,1,100)`,
+		// Two attachment rows (distinct guids) for the SAME file + one genuinely
+		// different file. The same-file pair must collapse to one (C49).
+		`INSERT INTO attachments (guid, message_guid, filename, mime_type, transfer_name, total_bytes, is_outgoing, hide_attachment, created_at) VALUES
+			('a-dup-1','m-d','IMG_1.HEIC','image/heic','IMG_1.HEIC',12345,0,0,100),
+			('a-dup-2','m-d','IMG_1.HEIC','image/heic','IMG_1.HEIC',12345,0,0,101),
+			('a-other','m-d','clip.m4a','audio/x-m4a','clip.m4a',900,0,0,102)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.sqlDB.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgs, err := db.ListChatMessages(ctx, "chat-D", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	got := msgs[0].Attachments
+	if len(got) != 2 {
+		guids := make([]string, len(got))
+		for i, a := range got {
+			guids[i] = a.GUID
+		}
+		t.Fatalf("expected 2 attachments after dedupe, got %d: %v", len(got), guids)
+	}
+	// The first of the duplicate pair (by created_at, then guid) is kept.
+	if got[0].GUID != "a-dup-1" || got[1].GUID != "a-other" {
+		t.Fatalf("unexpected attachments: %s, %s", got[0].GUID, got[1].GUID)
+	}
+}
+
 func seedRelayData(t *testing.T, db *DB) {
 	t.Helper()
 	tx, err := db.sqlDB.Begin()

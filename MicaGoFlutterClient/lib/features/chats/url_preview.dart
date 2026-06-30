@@ -11,9 +11,15 @@ final RegExp urlPreviewRegex = RegExp(
 );
 
 String? firstUrlInText(String text) {
-  final match = urlPreviewRegex.firstMatch(text);
-  if (match == null) return null;
-  return normalizePreviewUrl(text.substring(match.start, match.end));
+  final urls = urlsInText(text);
+  return urls.isEmpty ? null : urls.first;
+}
+
+List<String> urlsInText(String text) {
+  return [
+    for (final match in urlPreviewRegex.allMatches(text))
+      normalizePreviewUrl(text.substring(match.start, match.end)),
+  ];
 }
 
 String normalizePreviewUrl(String raw) {

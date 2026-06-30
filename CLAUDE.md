@@ -49,6 +49,87 @@ Three components:
   guides (android-client-connection / remote-access-cloudflare / notifications-setup /
   manual-test-flow) are still English-only — the localized index marks them "(英文)".
 
+## Duplicated attachments (real root cause) + thread layout + QR (C49/C50)
+
+- **"Every photo / file / sticker / voice clip shows up twice — only *old*
+  messages, not freshly-sent ones."** Root cause is **server-side, in the data**,
+  not the render. A real chat.db carries several `attachment` rows (DISTINCT guids)
+  for one underlying file — duplicate `message_attachment_join` entries, or
+  Messages re-creating the record — and `attachmentBaseSelect`
+  (`store/queries.go`: attachment ⋈ message_attachment_join ⋈ message) surfaced
+  them all. relay.db keeps them (its `attachments.guid` PK only collapses *same*
+  guids), so the client got two attachments for one file. New messages were clean,
+  which is why only history duplicated. A guid-only dedup can't catch this.
+- **Fix: dedup by file identity, not guid.** Server `loadAttachmentsByMessageGUID`
+  (`relaydb/query.go`) now collapses, per message, rows with the same
+  `attachmentIdentityKey` = transfer/file name + total_bytes + mime_type (keeps the
+  first by `created_at, guid`). This serves both the messages page and the delta,
+  so it fixes already-synced history without touching the DB. Client mirrors it:
+  `MessageModel.fromJson` dedups via `_attachmentIdentityKey` (same key shape;
+  falls back to guid when there's no name) as a safety net for already-cached rows.
+  Tests: `query_test.go` `TestListChatMessagesDedupesDuplicateAttachmentFiles`,
+  `message_model_test.dart` "dedupes duplicate attachment records for the same file".
+- **C50 thread layout (re-applied — these were *not* the duplication cause).**
+  - **Mixed photo+caption now splits into two visual siblings** — media as a
+    bubble-less block, the caption in its own chat bubble — instead of one merged
+    bubble (`_MessageBubble`: `mixedMediaText`, the `paint()` helper).
+  - **Dynamic bottom inset.** The composer + staged strip + open emoji/attachment
+    panel live in a `Positioned(bottom:0)` overlay over the list; the list padding
+    was a fixed `104` so panels hid the newest messages. `_bottomInset(context)`
+    now adds the live panel heights (`AttachmentPanel.panelHeightFor` /
+    `EmojiPanel.initialHeightFor`); the jump-to-bottom button rises with it.
+  - **Keyboard inset residual.** Backgrounding with the keyboard up left a blank
+    gap above the composer on resume. `didChangeAppLifecycleState` now unfocuses on
+    inactive/paused/hidden and `setState`s on resume.
+- **QR pairing camera "stays unauthorized even after granting."**
+  `MobileScannerController` (mobile_scanner 7.2) is now `autoStart:false` with a
+  manual lifecycle (`WidgetsBindingObserver`): explicit `start()` in `initState`,
+  restart on resume, stop on background — plus a **Retry button** in the camera
+  error view (`_restartCamera`). New l10n `pair.cameraRetry`.
+- Client changes need an **APK rebuild**; the attachment dedup also needs the
+  **backend rebuilt**. Reminder: the C48 orientation fix is server-side too —
+  qlmanage is verified correct for HEIC *and* JPEG (orientation 6/8 → upright), so
+  a still-rotated HEIC means the backend binary wasn't rebuilt.
+
+## Image orientation: qlmanage, not sips (C48)
+
+- **Root cause of "iPhone HEIC photos render rotated 90° in our app but upright
+  everywhere else".** The server preview converter used
+  `sips -s format png` (`GetAttachmentPreview`, `handlers.go`). **`sips` copies the
+  stored pixels and drops the EXIF orientation tag** — it does *not* bake the
+  rotation in (verified on this Mac: a 100×200 photo with EXIF orientation 6 stays
+  100×200 instead of becoming the displayed 200×100; `--resampleHeightWidthMax`
+  doesn't help either). So every HEIC (which always goes through this converter,
+  since Flutter/Skia can't decode HEIC on Android) came out rotated.
+- **Fix: `renderOrientedPreview` uses Quick Look (`qlmanage -t -s 4000 src -o
+  dir`)**, which bakes EXIF orientation into the PNG (verified orientation 6 and 8
+  → correct 200×100; normal images unchanged; no upscaling). qlmanage exits 0 even
+  when it can't render, so success is judged by whether it actually wrote
+  `<basename>.png`; the file is then moved to the cached `previewPath`.
+- **Conversion scope = HEIC/HEIF/TIFF + JPEG; PNG stays direct.** HEIC/TIFF must
+  convert (Skia can't decode them); JPEG is added because iPhone photos bake their
+  rotation into EXIF orientation and some were still rendering sideways on the
+  client — the Quick Look preview bakes orientation into the pixels so every device
+  agrees. (Trade-off: JPEG→PNG is larger, but previews are cached after first view.)
+  PNG has no EXIF orientation and is web-renderable, so it's served raw.
+  `NeedsPreviewConversion` / `attachmentNeedsPreviewConversion` carry this set;
+  tests: `TestAttachmentPreviewConversionScope`,
+  `TestDecorateAttachmentJSONRoutesJPEGThroughPreview`.
+- **Duplication ("stickers / photos / attachments each render twice").** Came from
+  an uncommitted experiment in `message_thread_screen.dart` (a "split mixed
+  media+text" bubble path + a `threadImages` gallery rework + scroll-padding
+  helpers). The whole experiment was **reverted to the committed baseline**
+  (`git checkout HEAD -- message_thread_screen.dart`, plus its helper edits in
+  `attachment_panel.dart` / `url_preview.dart` and an orphan `url_preview_test.dart`).
+  C47 lives in HEAD, so the revert keeps it. Every inline render site, the row
+  collapsing (`buildDisplayRows`), `MessageCollection` dedup, and the attachment SQL
+  were each verified to render an attachment exactly once — so the duplication was
+  purely the experimental layout.
+- **Requires rebuilding the bundled backend** (preview command change) **and the
+  Flutter app** (the revert). Quick Look is a system binary (`/usr/bin/qlmanage`)
+  present on every Mac. Version bumped to **0.51.0** (Go, Flutter pubspec +
+  `kAppVersion`, Companion `MARKETING_VERSION`).
+
 ## Unread dot: ingestion never clears it; thread owns "seen" (C47)
 
 - **Root cause of "a new message makes an existing red dot disappear" + merged-chat

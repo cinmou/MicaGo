@@ -3,6 +3,46 @@ import 'package:mica_go/features/chats/models/message_model.dart';
 
 void main() {
   group('MessageModel.fromJson', () {
+    test('dedupes duplicate attachment records for the same file (C49)', () {
+      // chat.db can carry several attachment rows (DISTINCT guids) for one file;
+      // dedup by file identity (name+size+type), not just guid, so a photo/file/
+      // sticker/voice clip never renders twice. Genuinely different files stay.
+      final m = MessageModel.fromJson({
+        'guid': 'm1',
+        'isFromMe': false,
+        'attachments': [
+          // Same file, different guids → one of these survives.
+          {
+            'guid': 'att-1',
+            'transferName': 'IMG_001.HEIC',
+            'totalBytes': 12345,
+            'mimeType': 'image/heic',
+            'downloadUrl': '/a',
+          },
+          {
+            'guid': 'att-2',
+            'transferName': 'IMG_001.HEIC',
+            'totalBytes': 12345,
+            'mimeType': 'image/heic',
+            'downloadUrl': '/b',
+          },
+          // A different file → kept.
+          {
+            'guid': 'att-3',
+            'transferName': 'voice.m4a',
+            'totalBytes': 999,
+            'mimeType': 'audio/m4a',
+            'downloadUrl': '/c',
+          },
+        ],
+      });
+      expect(m.attachments.length, 2);
+      expect(m.attachments.map((a) => a.transferName), [
+        'IMG_001.HEIC',
+        'voice.m4a',
+      ]);
+    });
+
     test('parses core fields and handle', () {
       final m = MessageModel.fromJson({
         'guid': 'p:0/ABC',

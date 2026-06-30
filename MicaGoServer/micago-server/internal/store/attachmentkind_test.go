@@ -299,3 +299,29 @@ func TestDecorateAttachmentJSONMarksHEICNeedsPreview(t *testing.T) {
 		t.Fatalf("displayKind = %q, want %q", a.DisplayKind, DisplayKindImageNeedsPreview)
 	}
 }
+
+func TestDecorateAttachmentJSONRoutesJPEGThroughPreview(t *testing.T) {
+	// JPEG is routed through the server Quick Look preview so its EXIF orientation
+	// is baked into the PNG and the client renders it upright (C48).
+	a := AttachmentJSON{MimeType: sp("image/jpeg"), TransferName: sp("portrait.jpg")}
+	DecorateAttachmentJSON(&a)
+	if a.AttachmentKind != AttachmentKindImage {
+		t.Fatalf("kind = %q, want image", a.AttachmentKind)
+	}
+	if !a.NeedsPreviewConversion {
+		t.Fatal("expected JPEG to use the server preview so EXIF orientation is baked in")
+	}
+	if a.IsPreviewableImage {
+		t.Fatal("JPEG should render via previewUrl, not raw bytes")
+	}
+	if a.DisplayKind != DisplayKindImageNeedsPreview {
+		t.Fatalf("displayKind = %q, want %q", a.DisplayKind, DisplayKindImageNeedsPreview)
+	}
+
+	// PNG stays direct.
+	png := AttachmentJSON{MimeType: sp("image/png"), TransferName: sp("shot.png")}
+	DecorateAttachmentJSON(&png)
+	if png.NeedsPreviewConversion {
+		t.Fatal("PNG must be served directly, not converted")
+	}
+}

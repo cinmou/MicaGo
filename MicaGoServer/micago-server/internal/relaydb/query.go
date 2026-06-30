@@ -3,6 +3,7 @@ package relaydb
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"micagoserver/internal/send"
@@ -622,6 +623,14 @@ ORDER BY created_at ASC, guid ASC;
 	defer rows.Close()
 
 	grouped := make(map[string][]store.AttachmentJSON, len(guids))
+	// C49: collapse duplicate attachment records that point at the same underlying
+	// file within a message. A real chat.db routinely carries several attachment
+	// rows (distinct guids) for one file — via duplicate message_attachment_join
+	// entries or Messages re-creating the record — and the join surfaced them all,
+	// so the client rendered the same photo / file / sticker / voice clip twice.
+	// Dedupe by the file's identity (name + size + type), keeping the first (the
+	// query orders by created_at, then guid, so the choice is deterministic).
+	seenByMessage := make(map[string]map[string]struct{}, len(guids))
 	for rows.Next() {
 		var attachment store.AttachmentJSON
 		var messageGUID string
@@ -657,8 +666,41 @@ ORDER BY created_at ASC, guid ASC;
 		if attachment.NeedsPreviewConversion || attachment.IsSticker {
 			attachment.PreviewURL = "/api/attachments/" + attachment.GUID + "/preview"
 		}
+		if key := attachmentIdentityKey(attachment); key != "" {
+			seen := seenByMessage[messageGUID]
+			if seen == nil {
+				seen = make(map[string]struct{})
+				seenByMessage[messageGUID] = seen
+			}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
 		grouped[messageGUID] = append(grouped[messageGUID], attachment)
 	}
 
 	return grouped, rows.Err()
+}
+
+// attachmentIdentityKey identifies the underlying file an attachment row points
+// at, so duplicate records for the same file collapse to one (C49). It uses the
+// transfer/file name plus byte size and MIME type. Returns "" when there's no
+// name to key on — those rows fall back to guid uniqueness and are kept as-is.
+func attachmentIdentityKey(a store.AttachmentJSON) string {
+	name := ""
+	switch {
+	case a.TransferName != nil && *a.TransferName != "":
+		name = *a.TransferName
+	case a.Filename != nil && *a.Filename != "":
+		name = *a.Filename
+	}
+	if name == "" {
+		return ""
+	}
+	mime := ""
+	if a.MimeType != nil {
+		mime = *a.MimeType
+	}
+	return fmt.Sprintf("%s\x00%d\x00%s", name, a.TotalBytes, mime)
 }

@@ -286,8 +286,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     child: merged.isEmpty
                         ? _NoMatches(query: _query)
                         : ListView.separated(
-                            padding: EdgeInsets.only(
-                              bottom: MediaQuery.paddingOf(context).bottom + 8,
+                            padding: EdgeInsets.fromLTRB(
+                              12,
+                              12,
+                              12,
+                              MediaQuery.paddingOf(context).bottom + 8,
                             ),
                             itemCount: merged.length,
                             separatorBuilder: (_, _) => widget.compact
@@ -544,7 +547,6 @@ class _ChatRow extends StatelessWidget {
     final unreadCount = merged.unreadCount;
     // C43: the dot is the watermark-derived state; the count is just the number.
     final hasUnread = merged.hasUnread;
-    final hasBadgeNumber = hasUnread && unreadCount > 0;
     // Prefer a local contact name (1:1) when contacts matching is enabled.
     final contacts = context.watch<ContactsService>();
     final resolvedName = (!chat.isGroup)
@@ -553,14 +555,17 @@ class _ChatRow extends StatelessWidget {
     final title = (resolvedName != null && resolvedName.isNotEmpty)
         ? resolvedName
         : chat.title;
-    // Tinted rounded card only when there is a numeric badge (a notified unread).
-    // A bare dot (notifications off, learned via refresh) stays a plain row.
-    final rowColor = selected
+    final rowColor = hasUnread
+        ? scheme.primary
+        : selected
         ? scheme.primaryContainer.withValues(alpha: 0.52)
-        : hasBadgeNumber
-        ? scheme.primaryContainer.withValues(alpha: 0.20)
         : Colors.transparent;
-    final horizontalMargin = sidebar ? 12.0 : 8.0;
+    final onUnread = scheme.onPrimary;
+    final primaryTextColor = hasUnread ? onUnread : scheme.onSurface;
+    final secondaryTextColor = hasUnread
+        ? onUnread.withValues(alpha: 0.78)
+        : scheme.onSurfaceVariant;
+    final horizontalMargin = 0.0;
     final verticalMargin = sidebar ? 5.0 : 2.0;
     final horizontalPadding = sidebar ? 16.0 : 14.0;
     final verticalPadding = sidebar ? 12.0 : 10.0;
@@ -610,6 +615,7 @@ class _ChatRow extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
+                                  color: primaryTextColor,
                                   fontWeight: hasUnread
                                       ? FontWeight.w700
                                       : FontWeight.w500,
@@ -622,7 +628,7 @@ class _ChatRow extends StatelessWidget {
                               Icon(
                                 Icons.merge_type,
                                 size: 13,
-                                color: scheme.onSurfaceVariant,
+                                color: secondaryTextColor,
                               ),
                             ],
                             if (chat.isArchived) ...[
@@ -630,7 +636,7 @@ class _ChatRow extends StatelessWidget {
                               Icon(
                                 Icons.archive_outlined,
                                 size: 14,
-                                color: scheme.onSurfaceVariant,
+                                color: secondaryTextColor,
                               ),
                             ],
                             if (chat.isPinned) ...[
@@ -638,7 +644,7 @@ class _ChatRow extends StatelessWidget {
                               Icon(
                                 Icons.push_pin,
                                 size: 13,
-                                color: scheme.onSurfaceVariant,
+                                color: secondaryTextColor,
                               ),
                             ],
                           ],
@@ -649,13 +655,18 @@ class _ChatRow extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: scheme.onSurfaceVariant),
+                              ?.copyWith(color: secondaryTextColor),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(width: 10),
-                  _trailing(context, hasUnread, unreadCount),
+                  _trailing(
+                    context,
+                    hasUnread,
+                    unreadCount,
+                    unreadForeground: onUnread,
+                  ),
                 ],
               ),
             ),
@@ -691,7 +702,12 @@ class _ChatRow extends StatelessWidget {
     return parts.join(' · ');
   }
 
-  Widget _trailing(BuildContext context, bool hasUnread, int unreadCount) {
+  Widget _trailing(
+    BuildContext context,
+    bool hasUnread,
+    int unreadCount, {
+    required Color unreadForeground,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     final time = merged.lastMessageAt;
     if (time == null && !hasUnread) return const SizedBox.shrink();
@@ -716,7 +732,7 @@ class _ChatRow extends StatelessWidget {
           Text(
             _formatTime(context, time),
             style: textTheme.bodySmall?.copyWith(
-              color: hasUnread ? scheme.primary : scheme.onSurfaceVariant,
+              color: hasUnread ? unreadForeground : scheme.onSurfaceVariant,
               fontWeight: hasUnread ? FontWeight.w700 : FontWeight.w500,
             ),
           ),

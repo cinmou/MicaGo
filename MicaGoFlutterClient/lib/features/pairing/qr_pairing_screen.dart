@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -18,21 +20,51 @@ class QrPairingScreen extends StatefulWidget {
   State<QrPairingScreen> createState() => _QrPairingScreenState();
 }
 
-class _QrPairingScreenState extends State<QrPairingScreen> {
+class _QrPairingScreenState extends State<QrPairingScreen>
+    with WidgetsBindingObserver {
   late final PairingController _pairing;
+  // C49: drive the camera lifecycle manually (autoStart:false). The default
+  // auto-start could land in a permanent "unauthorized" state when the first
+  // permission prompt was answered after the controller had already tried to
+  // start — and never recover even once the user granted access. We start it
+  // ourselves and restart on resume so returning from the system permission
+  // dialog (or Settings) reliably re-acquires the camera.
   final MobileScannerController _scanner = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
     formats: const [BarcodeFormat.qrCode],
+    autoStart: false,
   );
 
   @override
   void initState() {
     super.initState();
     _pairing = PairingController(context.read<AppController>());
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_scanner.start());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // Returning to the screen (incl. after granting permission) re-acquires
+        // the camera, but only while we're actually showing the scanner.
+        if (_pairing.stage == PairingStage.scanning) {
+          unawaited(_restartCamera());
+        }
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        unawaited(_scanner.stop());
+        break;
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scanner.dispose();
     _pairing.dispose();
     super.dispose();
@@ -69,6 +101,23 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
   void _scanAgain() {
     _pairing.scanAgain();
     _scanner.start();
+  }
+
+  // C49: the camera controller caches its first start result, so if permission
+  // was denied on the initial prompt (or the camera was busy) it keeps reporting
+  // "unauthorized" even after the user grants access in system Settings. Fully
+  // stop + start re-runs the permission check and re-acquires the camera.
+  Future<void> _restartCamera() async {
+    try {
+      await _scanner.stop();
+    } catch (_) {
+      // The controller may not have started; ignore and try to start fresh.
+    }
+    try {
+      await _scanner.start();
+    } catch (_) {
+      // Surfaced by the scanner's own errorBuilder; nothing else to do here.
+    }
   }
 
   @override
@@ -129,7 +178,8 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
         MobileScanner(
           controller: _scanner,
           onDetect: _onDetect,
-          errorBuilder: (context, error) => _CameraError(error: error),
+          errorBuilder: (context, error) =>
+              _CameraError(error: error, onRetry: _restartCamera),
         ),
         // Simple framing + hint overlay.
         IgnorePointer(
@@ -207,10 +257,12 @@ class _QrPairingScreenState extends State<QrPairingScreen> {
 
 class _CameraError extends StatelessWidget {
   final MobileScannerException error;
-  const _CameraError({required this.error});
+  final Future<void> Function() onRetry;
+  const _CameraError({required this.error, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
+    final strings = MicaLocalizations.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -220,14 +272,20 @@ class _CameraError extends StatelessWidget {
             const Icon(Icons.no_photography_outlined, size: 48),
             const SizedBox(height: 12),
             Text(
-              MicaLocalizations.of(context).t('pair.cameraUnavailable'),
+              strings.t('pair.cameraUnavailable'),
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             Text(
-              MicaLocalizations.of(context).t('pair.cameraHelp'),
+              strings.t('pair.cameraHelp'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonalIcon(
+              onPressed: () => onRetry(),
+              icon: const Icon(Icons.refresh),
+              label: Text(strings.t('pair.cameraRetry')),
             ),
           ],
         ),

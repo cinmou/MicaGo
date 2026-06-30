@@ -20,8 +20,6 @@ enum ThemeColorChoice {
   wineRed,
   blueGreen,
   indigo,
-  enshuNezu,
-  suoh,
   dianthus,
   witheredGrass,
   amber,
@@ -61,15 +59,11 @@ class ThemeController extends ChangeNotifier {
       case ThemeColorChoice.paleGold:
         return const Color(0xFFB89B5E);
       case ThemeColorChoice.wineRed:
-        return const Color(0xFF6E2639);
+        return const Color(0xFF8B1E3F);
       case ThemeColorChoice.blueGreen:
         return const Color(0xFF1F6F6A);
       case ThemeColorChoice.indigo:
         return const Color(0xFF2F3A73);
-      case ThemeColorChoice.enshuNezu:
-        return const Color(0xFF6E7F80);
-      case ThemeColorChoice.suoh:
-        return const Color(0xFF7E2639);
       case ThemeColorChoice.dianthus:
         return const Color(0xFFC07A8B);
       case ThemeColorChoice.witheredGrass:
@@ -176,6 +170,8 @@ class ThemeController extends ChangeNotifier {
       'green' => ThemeColorChoice.bicao,
       'purple' => ThemeColorChoice.wisteria,
       'orange' => ThemeColorChoice.citrus,
+      'suoh' => ThemeColorChoice.wineRed,
+      'enshuNezu' => ThemeColorChoice.system,
       _ => ThemeColorChoice.system,
     },
   );

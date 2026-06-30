@@ -1249,7 +1249,7 @@ func (h *Handlers) GetAttachmentPreview(w http.ResponseWriter, r *http.Request) 
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		if err := exec.CommandContext(ctx, "sips", "-s", "format", "png", source, "--out", previewPath).Run(); err != nil {
+		if err := renderOrientedPreview(ctx, source, previewPath); err != nil {
 			h.logInternal("convert attachment preview", err)
 			writeAPIError(w, http.StatusNotImplemented, "preview_unavailable", "preview conversion is not available for this attachment")
 			return
@@ -1257,6 +1257,40 @@ func (h *Handlers) GetAttachmentPreview(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "image/png")
 	http.ServeFile(w, r, previewPath)
+}
+
+// renderOrientedPreview rasterizes an attachment (HEIC/TIFF/…) to an
+// orientation-correct PNG at destPath. It uses Quick Look (`qlmanage -t`) rather
+// than `sips -s format png`: `sips` copies the stored pixels and drops the EXIF
+// orientation tag, so an iPhone photo whose orientation is baked into EXIF (very
+// common for HEIC) renders rotated 90° — even though every other viewer shows it
+// upright. Quick Look bakes the EXIF rotation into the pixels, so the PNG is
+// already oriented correctly (verified for orientation 6 and 8). `-s 4000` caps
+// the long edge so a huge photo doesn't rasterize at full resolution.
+func renderOrientedPreview(ctx context.Context, source, destPath string) error {
+	outDir, err := os.MkdirTemp("", "micago-ql-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(outDir)
+	// qlmanage exits 0 even when it can't render, so success is judged by whether
+	// it actually wrote the thumbnail (named "<basename(source)>.png").
+	if err := exec.CommandContext(ctx, "qlmanage", "-t", "-s", "4000", source, "-o", outDir).Run(); err != nil {
+		return err
+	}
+	generated := filepath.Join(outDir, filepath.Base(source)+".png")
+	if _, err := os.Stat(generated); err != nil {
+		return fmt.Errorf("quick look produced no thumbnail for %s", filepath.Base(source))
+	}
+	if err := os.Rename(generated, destPath); err != nil {
+		// Rename can fail across filesystems; fall back to a copy.
+		data, readErr := os.ReadFile(generated)
+		if readErr != nil {
+			return readErr
+		}
+		return os.WriteFile(destPath, data, 0o600)
+	}
+	return nil
 }
 
 func (h *Handlers) RegisterDevice(w http.ResponseWriter, r *http.Request) {
@@ -1644,12 +1678,19 @@ func attachmentNeedsPreviewConversion(meta *store.AttachmentMeta) bool {
 	mimeType := strings.ToLower(strings.TrimSpace(ptrString(meta.MimeType)))
 	uti := strings.ToLower(strings.TrimSpace(ptrString(meta.Uti)))
 	name := strings.ToLower(strings.TrimSpace(attachmentFilename(meta)))
-	return strings.Contains(mimeType, "image/tif") ||
+	// C48: JPEG joins HEIC/HEIF/TIFF so iPhone photos with EXIF orientation are
+	// baked upright by the Quick Look preview. PNG is served as-is.
+	return mimeType == "image/jpeg" ||
+		mimeType == "image/jpg" ||
+		strings.Contains(mimeType, "image/tif") ||
 		strings.Contains(mimeType, "image/heic") ||
 		strings.Contains(mimeType, "image/heif") ||
+		uti == "public.jpeg" ||
 		uti == "public.tiff" ||
 		uti == "public.heic" ||
 		uti == "public.heif" ||
+		strings.HasSuffix(name, ".jpg") ||
+		strings.HasSuffix(name, ".jpeg") ||
 		strings.HasSuffix(name, ".tif") ||
 		strings.HasSuffix(name, ".tiff") ||
 		strings.HasSuffix(name, ".heic") ||

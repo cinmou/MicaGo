@@ -130,11 +130,21 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      // C50: close the keyboard before backgrounding. Otherwise a retained focus
+      // can leave a stale MediaQuery.viewInsets.bottom on resume — a blank gap
+      // above the composer that never collapses until the field is tapped again.
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
     // Resuming with this thread on screen means the user is now looking at it —
-    // catch the watermark up so anything that arrived while backgrounded clears.
+    // catch the watermark up so anything that arrived while backgrounded clears,
+    // and recompute the layout so any stale bottom inset is dropped.
     if (state == AppLifecycleState.resumed) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _markViewedIfForeground();
+        if (mounted) setState(() {});
       });
     }
   }
@@ -582,7 +592,8 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         Positioned(
           left: 0,
           right: 0,
-          bottom: 94,
+          // Keep the jump button above the composer/panel overlay (C50).
+          bottom: math.max(94, _bottomInset(context) - 32),
           child: Center(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
@@ -850,7 +861,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         return ListView.builder(
           controller: _scroll,
           reverse: true,
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 104),
+          padding: EdgeInsets.fromLTRB(8, 8, 8, _bottomInset(context)),
           itemCount: items.length,
           itemBuilder: (context, i) {
             final item = items[items.length - 1 - i];
@@ -861,6 +872,18 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
           },
         );
     }
+  }
+
+  // C50: the composer + staged strip + any open panel sit in a bottom overlay
+  // stacked over the message list, so the list must reserve matching bottom space
+  // or the newest messages hide behind them (and a scroll-to-bottom lands under
+  // the panel). Reserve the composer baseline plus whatever is currently open.
+  double _bottomInset(BuildContext context) {
+    var inset = 104.0; // composer baseline
+    if (_staged.isNotEmpty) inset += 72;
+    if (_attachOpen) inset += AttachmentPanel.panelHeightFor(context);
+    if (_emojiOpen) inset += EmojiPanel.initialHeightFor(context);
+    return inset;
   }
 
   Widget _buildRow(BuildContext context, ThreadViewItem item, ApiClient? api) {
@@ -1427,7 +1450,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final senderText = sender ?? '';
     final bodyText = widget.body;
     final effect = effectHint;
-    final previewUrl = bodyText == null ? null : firstUrlInText(bodyText);
+    final bodyUrls = bodyText == null ? const <String>[] : urlsInText(bodyText);
+    final previewUrl = bodyUrls.length == 1 ? bodyUrls.first : null;
     final hasLinkAttachment = message.attachments.any((a) => a.isLinkPreview);
     final tightTop = widget.compactWithPrevious && !widget.showSenderName;
     final tightBottom =
@@ -1437,81 +1461,113 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final rowTopPadding = tightTop ? 0.5 : 3.0;
     final rowBottomPadding = tightBottom ? 0.5 : 3.0;
 
-    final bubbleChild = Column(
-      crossAxisAlignment: fromMe
-          ? CrossAxisAlignment.end
-          : CrossAxisAlignment.start,
-      children: [
-        if (hasMedia)
-          for (final a in message.attachments)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: AttachmentView(
-                api: api,
-                attachment: a,
-                imageSiblings: images,
-                imageIndex: a.canRenderInlineImage ? images.indexOf(a) : 0,
-              ),
-            ),
-        if (bodyText != null)
-          _LinkedMessageText(
-            text: bodyText,
-            style: bigEmoji
-                ? TextStyle(fontSize: bigEmojiFontSize(bodyText), height: 1.1)
-                : TextStyle(color: textColor),
-            linkColor: textColor,
-          ),
-        if (effect != null)
+    final crossAxis = fromMe
+        ? CrossAxisAlignment.end
+        : CrossAxisAlignment.start;
+
+    final mediaWidgets = <Widget>[
+      if (hasMedia)
+        for (final a in message.attachments)
           Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.auto_awesome,
-                  size: 11,
-                  color: scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 3),
-                Text(
-                  effect,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
+            padding: const EdgeInsets.only(bottom: 6),
+            child: AttachmentView(
+              api: api,
+              attachment: a,
+              imageSiblings: images,
+              imageIndex: a.canRenderInlineImage ? images.indexOf(a) : 0,
             ),
           ),
-      ],
-    );
+    ];
+    final textWidgets = <Widget>[
+      if (bodyText != null)
+        _LinkedMessageText(
+          text: bodyText,
+          style: bigEmoji
+              ? TextStyle(fontSize: bigEmojiFontSize(bodyText), height: 1.1)
+              : TextStyle(color: textColor),
+          linkColor: textColor,
+        ),
+      if (effect != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.auto_awesome,
+                size: 11,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 3),
+              Text(
+                effect,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
+    ];
+
+    // Wraps [child] in the painted iMessage bubble (or nothing, when stripped).
+    Widget paint(Widget child, {required bool mediaTopPad}) {
+      if (stripBubble) return child;
+      return CustomPaint(
+        painter: _IosBubblePainter(
+          color: bubbleColor,
+          fromMe: fromMe,
+          showTail:
+              widget.showBubbleTail ||
+              reactions.isNotEmpty ||
+              stickers.isNotEmpty,
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, mediaTopPad ? 6 : 8, 16, 8),
+          child: child,
+        ),
+      );
+    }
+
+    // C50: a photo/video sent *with* a caption renders as two visual siblings —
+    // the media as a bubble-less block, the text in its own chat bubble — instead
+    // of being merged into one combined bubble (matches how iMessage stacks them).
+    final mixedMediaText = hasMedia && bodyText != null && !stripBubble;
+    final Widget bubbleInner;
+    if (mixedMediaText) {
+      bubbleInner = Column(
+        crossAxisAlignment: crossAxis,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...mediaWidgets,
+          paint(
+            Column(
+              crossAxisAlignment: crossAxis,
+              mainAxisSize: MainAxisSize.min,
+              children: textWidgets,
+            ),
+            mediaTopPad: false,
+          ),
+        ],
+      );
+    } else {
+      bubbleInner = paint(
+        Column(
+          crossAxisAlignment: crossAxis,
+          mainAxisSize: MainAxisSize.min,
+          children: [...mediaWidgets, ...textWidgets],
+        ),
+        mediaTopPad: hasMedia && bodyText == null,
+      );
+    }
 
     final bubble = Padding(
       padding: EdgeInsets.only(
         top: bubbleTopPadding,
         bottom: bubbleBottomPadding,
       ),
-      child: stripBubble
-          ? bubbleChild
-          : CustomPaint(
-              painter: _IosBubblePainter(
-                color: bubbleColor,
-                fromMe: fromMe,
-                showTail:
-                    widget.showBubbleTail ||
-                    reactions.isNotEmpty ||
-                    stickers.isNotEmpty,
-              ),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  hasMedia && bodyText == null ? 6 : 8,
-                  16,
-                  8,
-                ),
-                child: bubbleChild,
-              ),
-            ),
+      child: bubbleInner,
     );
 
     final bubbleWithOverlays = reactions.isEmpty && stickers.isEmpty
@@ -2712,6 +2768,16 @@ class _ComposerState extends State<_Composer> {
 class EmojiPanel extends StatefulWidget {
   final void Function(String emoji) onPick;
   const EmojiPanel({super.key, required this.onPick});
+
+  /// The panel's initial on-screen height, so the thread can reserve matching
+  /// bottom space in the message list (C50). Mirrors [_EmojiPanelState] bounds.
+  static double initialHeightFor(BuildContext context) {
+    final maxHeight =
+        MediaQuery.sizeOf(context).height * _EmojiPanelState._maxScreenFraction;
+    return _EmojiPanelState._initialHeight
+        .clamp(_EmojiPanelState._minHeight, maxHeight)
+        .toDouble();
+  }
 
   // In-memory most-recently-used list (most recent first), shared across threads
   // for the session. Simple + dependency-free.
