@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'app/mica_go_app.dart';
 import 'core/app_controller.dart';
@@ -9,6 +10,7 @@ import 'features/settings/message_display_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await LiquidGlassWidgets.initialize();
 
   final store = SecureStore();
   final controller = AppController(store: store);

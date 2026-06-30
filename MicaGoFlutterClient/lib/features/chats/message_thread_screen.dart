@@ -5,6 +5,8 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -606,7 +608,10 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         Positioned(left: 0, right: 0, bottom: 0, child: bottomOverlay),
       ],
     );
-    final headerBg = _accent1_100(Theme.of(context).colorScheme);
+    final glass = _isLiquidGlassTheme(context);
+    final headerBg = glass
+        ? Colors.white
+        : _accent1_100(Theme.of(context).colorScheme);
     final themedContent = DecoratedBox(
       decoration: BoxDecoration(color: headerBg),
       child: ClipRRect(
@@ -634,7 +639,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
             children: [
               Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
               Text(
-                _lastActivityLabel(),
+                _lastActivityLabel(context),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
@@ -702,7 +707,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     );
   }
 
-  String _lastActivityLabel() {
+  String _lastActivityLabel(BuildContext context) {
     int? ts = _active.lastMessageAt;
     for (final m in _controller.messages) {
       final candidate = m.dateCreated;
@@ -715,20 +720,18 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     final now = DateTime.now();
     final sameDay =
         dt.year == now.year && dt.month == now.month && dt.day == now.day;
-    if (sameDay) return _timeOfDay(dt);
+    if (sameDay) return _timeOfDay(context, dt);
     final yesterday = now.subtract(const Duration(days: 1));
     final isYesterday =
         dt.year == yesterday.year &&
         dt.month == yesterday.month &&
         dt.day == yesterday.day;
-    if (isYesterday) return 'Yesterday ${_timeOfDay(dt)}';
-    return '${dt.month}/${dt.day} ${_timeOfDay(dt)}';
+    if (isYesterday) return 'Yesterday ${_timeOfDay(context, dt)}';
+    return '${dt.month}/${dt.day} ${_timeOfDay(context, dt)}';
   }
 
-  String _timeOfDay(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    return '$h:$m';
+  String _timeOfDay(BuildContext context, DateTime dt) {
+    return _systemTimeLabel(context, dt);
   }
 
   // C21u: the top-right action now opens chat details + in-thread search
@@ -849,12 +852,16 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         // Precompute the entire view-item list ONCE (classification, labels,
         // reply previews, reactions, effects, delivery visibility, date
         // separators). The hot itemBuilder below only renders.
+        final localeTag = Localizations.maybeLocaleOf(context)?.toLanguageTag();
+        final use24HourFormat = MediaQuery.alwaysUse24HourFormatOf(context);
         final items = ThreadPresentationBuilder.build(
           messages: _controller.messages,
           prefs: prefs,
           isGroup: _active.isGroup,
           resolveName: contacts.displayNameFor,
           loadingOlder: _controller.loadingOlder,
+          use24HourFormat: use24HourFormat,
+          localeTag: localeTag,
         );
         final threadImages = _controller.messages
             .expand((m) => m.attachments)
@@ -1017,8 +1024,15 @@ class _ChatBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final path = context.watch<ThemeController>().chatBackgroundPath;
+    final theme = context.watch<ThemeController>();
+    final path = theme.chatBackgroundPath;
     if (path == null || path.isEmpty) {
+      if (theme.useLiquidGlass) {
+        return DecoratedBox(
+          decoration: const BoxDecoration(color: Colors.white),
+          child: child,
+        );
+      }
       return DecoratedBox(
         decoration: BoxDecoration(color: _accent1_50(scheme)),
         child: child,
@@ -1077,6 +1091,31 @@ Color _accent2_800(ColorScheme scheme) => Color.alphaBlend(
 Color _accent3_500(ColorScheme scheme) => scheme.tertiary;
 
 Color _accent3_600(ColorScheme scheme) => scheme.tertiary;
+
+bool _isLiquidGlassTheme(BuildContext context) =>
+    context.watch<ThemeController>().useLiquidGlass;
+
+Color _glassBlue(ColorScheme scheme) => const Color(0xFF007AFF);
+
+Color _glassIncomingBubble(BuildContext context) {
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  return dark
+      ? Colors.white.withValues(alpha: 0.78)
+      : Colors.white.withValues(alpha: 0.88);
+}
+
+LiquidGlassSettings _glassSettings(Color color, {double blur = 7}) =>
+    LiquidGlassSettings(
+      glassColor: color,
+      backerColor: color.withValues(alpha: 0.42),
+      blur: blur,
+      thickness: 28,
+      refractiveIndex: 1.18,
+      chromaticAberration: 0.012,
+      saturation: 1.35,
+      lightIntensity: 0.58,
+      standardOpacityMultiplier: 1.0,
+    );
 
 enum MessageAction { copy, hide, edit, retract, delete, deletePending }
 
@@ -1451,6 +1490,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final reply = widget.reply;
     final effectHint = widget.effectHint;
     final scheme = Theme.of(context).colorScheme;
+    final liquidGlass = _isLiquidGlassTheme(context);
     final fromMe = message.isFromMe;
     final showGroupSender = !fromMe && widget.senderName != null;
     final hasMedia = message.hasAttachments && api != null;
@@ -1483,8 +1523,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
         embeddedMedia;
     final bubbleColor = stripBubble
         ? Colors.transparent
+        : liquidGlass
+        ? (fromMe ? _glassBlue(scheme) : _glassIncomingBubble(context))
         : (fromMe ? _accent1_600(scheme) : _accent2_600(scheme));
-    final textColor = fromMe ? scheme.onPrimary : scheme.onSecondary;
+    final textColor = liquidGlass
+        ? (fromMe ? Colors.white : const Color(0xFF111827))
+        : (fromMe ? scheme.onPrimary : scheme.onSecondary);
 
     final messageImages = message.attachments
         .where((a) => a.canRenderInlineImage)
@@ -1563,6 +1607,16 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // Wraps [child] in the painted iMessage bubble (or nothing, when stripped).
     Widget paint(Widget child, {required bool mediaTopPad}) {
       if (stripBubble) return child;
+      if (liquidGlass) {
+        return GlassContainer(
+          useOwnLayer: true,
+          quality: GlassQuality.minimal,
+          settings: _glassSettings(bubbleColor, blur: fromMe ? 5 : 9),
+          shape: const LiquidRoundedSuperellipse(borderRadius: 19),
+          padding: EdgeInsets.fromLTRB(16, mediaTopPad ? 6 : 8, 16, 8),
+          child: child,
+        );
+      }
       return CustomPaint(
         painter: _IosBubblePainter(
           color: bubbleColor,
@@ -2077,7 +2131,11 @@ class _Footer extends StatelessWidget {
     final parts = <String>[];
     final ts = message.dateCreated;
     // Only show the time when grouping/tap asks for it (BlueBubbles-style).
-    if (ts != null && (showTime || showStatus)) parts.add(_time(ts));
+    if (ts != null && (showTime || showStatus)) {
+      parts.add(
+        _systemTimeLabel(context, DateTime.fromMillisecondsSinceEpoch(ts)),
+      );
+    }
     final edited = editedMarker(message);
     if (edited != null) parts.add(edited);
     // Status word is outgoing-only, shown only on the latest outgoing message.
@@ -2110,12 +2168,15 @@ class _Footer extends StatelessWidget {
       ),
     );
   }
+}
 
-  String _time(int unixMs) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(unixMs);
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(dt.hour)}:${two(dt.minute)}';
-  }
+String _systemTimeLabel(BuildContext context, DateTime dt) {
+  final localeTag = Localizations.maybeLocaleOf(context)?.toLanguageTag();
+  final use24HourFormat = MediaQuery.alwaysUse24HourFormatOf(context);
+  return (use24HourFormat ? DateFormat.Hm(localeTag) : DateFormat.jm(localeTag))
+      .format(dt)
+      .replaceAll('\u202f', ' ')
+      .replaceAll('\u00a0', ' ');
 }
 
 class _LinkedMessageText extends StatefulWidget {
@@ -2653,6 +2714,10 @@ class _ComposerState extends State<_Composer> {
       );
     }
 
+    if (_isLiquidGlassTheme(context)) {
+      return _buildLiquidComposer(context);
+    }
+
     final dark = Theme.of(context).brightness == Brightness.dark;
     final outerColor = dark ? _accent2_800(scheme) : _accent1_500(scheme);
     final attachIconColor = dark ? _accent1_50(scheme) : scheme.onPrimary;
@@ -2812,6 +2877,169 @@ class _ComposerState extends State<_Composer> {
     );
     // SafeArea bottom is applied by the emoji panel when it's open; here the bar
     // keeps its own bottom margin.
+    return SafeArea(top: false, child: bar);
+  }
+
+  Widget _buildLiquidComposer(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final onInput = scheme.onSurface;
+    final hintColor = scheme.onSurface.withValues(alpha: 0.58);
+    final inputIconColor = scheme.onSurfaceVariant;
+    final showEmoji = _focus.hasFocus || widget.emojiOpen;
+
+    Widget glassCircle({
+      required Widget icon,
+      required VoidCallback? onPressed,
+      Color? color,
+      Color? iconColor,
+      String? tooltip,
+    }) {
+      final effectiveColor =
+          color ?? scheme.surfaceContainerHighest.withValues(alpha: 0.50);
+      return SizedBox(
+        width: 52,
+        height: 52,
+        child: GlassContainer(
+          useOwnLayer: true,
+          quality: GlassQuality.standard,
+          settings: _glassSettings(effectiveColor, blur: 9),
+          shape: const LiquidOval(),
+          child: IconButton(
+            tooltip: tooltip,
+            onPressed: onPressed,
+            color: iconColor ?? scheme.onSurface,
+            icon: icon,
+          ),
+        ),
+      );
+    }
+
+    final bar = Container(
+      margin: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          widget.attachmentSending
+              ? const SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              : glassCircle(
+                  tooltip: 'Attachments',
+                  onPressed: widget.onAttach,
+                  icon: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 150),
+                    transitionBuilder: (child, anim) =>
+                        ScaleTransition(scale: anim, child: child),
+                    child: Icon(
+                      widget.attachOpen ? Icons.close : Icons.add,
+                      key: ValueKey(widget.attachOpen),
+                    ),
+                  ),
+                ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: GlassContainer(
+              useOwnLayer: true,
+              quality: GlassQuality.standard,
+              settings: _glassSettings(
+                scheme.surface.withValues(alpha: 0.70),
+                blur: 10,
+              ),
+              shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+              padding: const EdgeInsets.only(left: 18, right: 4),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 52),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: widget.controller,
+                        focusNode: _focus,
+                        minLines: 1,
+                        maxLines: 5,
+                        style: TextStyle(color: onInput, fontSize: 18),
+                        cursorColor: _glassBlue(scheme),
+                        textAlignVertical: TextAlignVertical.center,
+                        textInputAction: TextInputAction.newline,
+                        keyboardType: TextInputType.multiline,
+                        decoration: InputDecoration(
+                          hintText: _hintText,
+                          hintStyle: TextStyle(color: hintColor, fontSize: 18),
+                          border: InputBorder.none,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 11,
+                          ),
+                        ),
+                      ),
+                    ),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      transitionBuilder: (child, anim) => ScaleTransition(
+                        scale: anim,
+                        child: FadeTransition(opacity: anim, child: child),
+                      ),
+                      child: showEmoji
+                          ? IconButton(
+                              key: const ValueKey('emoji-liquid'),
+                              tooltip: 'Emoji',
+                              visualDensity: VisualDensity.compact,
+                              color: widget.emojiOpen
+                                  ? _glassBlue(scheme)
+                                  : inputIconColor,
+                              icon: const Icon(
+                                Icons.emoji_emotions_outlined,
+                                size: 22,
+                              ),
+                              onPressed: widget.onEmoji,
+                            )
+                          : IconButton(
+                              key: const ValueKey('voice-liquid'),
+                              tooltip: 'Voice message',
+                              visualDensity: VisualDensity.compact,
+                              color: inputIconColor,
+                              icon: const Icon(Icons.mic_none, size: 22),
+                              onPressed: widget.onVoice,
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          AnimatedScale(
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+            scale: widget.canSend ? 1.0 : 0.88,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 150),
+              opacity: widget.canSend ? 1.0 : 0.62,
+              child: glassCircle(
+                tooltip: MicaLocalizations.of(context).t('chat.send'),
+                onPressed: widget.canSend ? widget.onSend : null,
+                color: widget.canSend
+                    ? _glassBlue(scheme)
+                    : scheme.surfaceContainerHighest.withValues(alpha: 0.45),
+                iconColor: widget.canSend
+                    ? Colors.white
+                    : scheme.onSurfaceVariant,
+                icon: const Icon(Icons.send_rounded),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
     return SafeArea(top: false, child: bar);
   }
 }
@@ -3334,8 +3562,9 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     }
     final linkUrls = linkSet.take(4).toList(growable: false);
     final insets = MediaQuery.of(context).viewInsets.bottom;
-    final headerBg = _accent1_100(scheme);
-    final pageBg = _accent1_50(scheme);
+    final glass = _isLiquidGlassTheme(context);
+    final headerBg = glass ? Colors.white : _accent1_100(scheme);
+    final pageBg = glass ? Colors.white : _accent1_50(scheme);
     final isGroup = widget.active.isGroup;
     final detailSubtitle = isGroup
         ? 'iMessage 群聊'

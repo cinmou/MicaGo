@@ -120,4 +120,37 @@ class MicaGoTheme {
           surfaceTint: Colors.transparent,
         );
   }
+
+  static ColorScheme liquidGlassScheme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    return ColorScheme.fromSeed(
+      seedColor: const Color(0xFF007AFF),
+      brightness: brightness,
+    ).copyWith(
+      primary: const Color(0xFF007AFF),
+      onPrimary: Colors.white,
+      primaryContainer: dark
+          ? const Color(0xFF0B3D77)
+          : const Color(0xFFD7EAFF),
+      onPrimaryContainer: dark
+          ? const Color(0xFFEAF4FF)
+          : const Color(0xFF002D5C),
+      secondary: const Color(0xFFFFFFFF),
+      onSecondary: const Color(0xFF111827),
+      secondaryContainer: const Color(0xEFFFFFFF),
+      onSecondaryContainer: const Color(0xFF111827),
+      tertiary: const Color(0xFF007AFF),
+      onTertiary: Colors.white,
+      surface: const Color(0xFFFFFFFF),
+      surfaceContainerLowest: const Color(0xFFFFFFFF),
+      surfaceContainerLow: const Color(0xFFFFFFFF),
+      surfaceContainer: const Color(0xFFFFFFFF),
+      surfaceContainerHigh: const Color(0xFFFFFFFF),
+      surfaceContainerHighest: const Color(0xFFFFFFFF),
+      onSurface: const Color(0xFF111827),
+      onSurfaceVariant: const Color(0xFF4B5563),
+      outlineVariant: const Color(0x66B7C7DA),
+      surfaceTint: Colors.transparent,
+    );
+  }
 }

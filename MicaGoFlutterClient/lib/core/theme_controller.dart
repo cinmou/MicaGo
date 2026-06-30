@@ -23,6 +23,7 @@ enum ThemeColorChoice {
   dianthus,
   witheredGrass,
   amber,
+  liquidGlass,
 }
 
 /// Language choice. Null locale follows the system.
@@ -41,6 +42,7 @@ class ThemeController extends ChangeNotifier {
 
   bool get useSystemColors => colorChoice == ThemeColorChoice.system;
   bool get useBlackWhite => colorChoice == ThemeColorChoice.blackWhite;
+  bool get useLiquidGlass => colorChoice == ThemeColorChoice.liquidGlass;
 
   /// Seed color used when dynamic color is off/unavailable.
   Color get seedColor {
@@ -70,6 +72,8 @@ class ThemeController extends ChangeNotifier {
         return const Color(0xFF9C8A4F);
       case ThemeColorChoice.amber:
         return const Color(0xFFB8792B);
+      case ThemeColorChoice.liquidGlass:
+        return const Color(0xFF007AFF);
     }
   }
 

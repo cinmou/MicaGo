@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../core/app_controller.dart';
 import '../../core/l10n/app_localizations.dart';
 import '../../core/network/push_service.dart';
+import '../../core/ui/glass_theme_widgets.dart';
 import '../chats/chats_pane.dart';
 import '../settings/settings_screen.dart';
 import 'connection_notice_host.dart';
@@ -83,8 +84,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final strings = MicaLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final tablet = MediaQuery.sizeOf(context).width >= _tabletBreakpoint;
-    final headerBg = _homeAccent1_100(scheme);
-    final pageBg = _homeAccent1_50(scheme);
+    final glass = isGlassTheme(context);
+    final headerBg = glass ? Colors.white : _homeAccent1_100(scheme);
+    final pageBg = glass ? Colors.white : _homeAccent1_50(scheme);
     final chats = ConnectionNoticeHost(
       child: ChatsPane(
         searchRequests: _searchRequests,

@@ -37,8 +37,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final theme = context.watch<ThemeController>();
     final strings = MicaLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final headerBg = _settingsAccent1_100(scheme);
-    final pageBg = _settingsAccent1_50(scheme);
+    final headerBg = theme.useLiquidGlass
+        ? Colors.white
+        : _settingsAccent1_100(scheme);
+    final pageBg = theme.useLiquidGlass
+        ? Colors.white
+        : _settingsAccent1_50(scheme);
 
     return Scaffold(
       appBar: AppBar(
@@ -786,8 +790,9 @@ class _SettingsSubPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final headerBg = _settingsAccent1_100(scheme);
-    final pageBg = _settingsAccent1_50(scheme);
+    final glass = context.watch<ThemeController>().useLiquidGlass;
+    final headerBg = glass ? Colors.white : _settingsAccent1_100(scheme);
+    final pageBg = glass ? Colors.white : _settingsAccent1_50(scheme);
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
@@ -1034,6 +1039,10 @@ class _AppearanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = MicaLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final useGlass = theme.useLiquidGlass;
+    final selectedBg = useGlass ? scheme.primary : null;
+    final selectedFg = useGlass ? scheme.onPrimary : null;
 
     return Card(
       child: Padding(
@@ -1063,6 +1072,25 @@ class _AppearanceCard extends StatelessWidget {
                 ),
               ],
               selected: {theme.themeMode},
+              style: useGlass
+                  ? ButtonStyle(
+                      backgroundColor: WidgetStateProperty.resolveWith(
+                        (states) => states.contains(WidgetState.selected)
+                            ? selectedBg
+                            : null,
+                      ),
+                      foregroundColor: WidgetStateProperty.resolveWith(
+                        (states) => states.contains(WidgetState.selected)
+                            ? selectedFg
+                            : null,
+                      ),
+                      iconColor: WidgetStateProperty.resolveWith(
+                        (states) => states.contains(WidgetState.selected)
+                            ? selectedFg
+                            : null,
+                      ),
+                    )
+                  : null,
               onSelectionChanged: (s) => theme.setThemeMode(s.first),
             ),
             const Divider(height: 28),
@@ -1081,6 +1109,11 @@ class _AppearanceCard extends StatelessWidget {
                   ChoiceChip(
                     selected: theme.colorChoice == c,
                     onSelected: (_) => theme.setColorChoice(c),
+                    selectedColor: useGlass ? selectedBg : null,
+                    checkmarkColor: selectedFg,
+                    labelStyle: theme.colorChoice == c && useGlass
+                        ? TextStyle(color: selectedFg)
+                        : null,
                     avatar: c == ThemeColorChoice.system
                         ? const Icon(Icons.auto_awesome, size: 16)
                         : CircleAvatar(radius: 8, backgroundColor: _seedFor(c)),
@@ -1162,6 +1195,8 @@ class _AppearanceCard extends StatelessWidget {
         return const Color(0xFF9C8A4F);
       case ThemeColorChoice.amber:
         return const Color(0xFFB8792B);
+      case ThemeColorChoice.liquidGlass:
+        return const Color(0xFF007AFF);
     }
   }
 
@@ -1193,6 +1228,8 @@ class _AppearanceCard extends StatelessWidget {
         return strings.t('themeColor.witheredGrass');
       case ThemeColorChoice.amber:
         return strings.t('themeColor.amber');
+      case ThemeColorChoice.liquidGlass:
+        return strings.t('themeColor.liquidGlass');
     }
   }
 }
@@ -1200,7 +1237,7 @@ class _AppearanceCard extends StatelessWidget {
 /// Tiny indirection so the settings swatch can reference the brand seed without
 /// importing the app theme here.
 class MicaGoThemeSeed {
-  static const Color value = Color(0xFF5B6CFF);
+  static const Color value = Color(0xFF007AFF);
 }
 
 class _AboutBody extends StatefulWidget {

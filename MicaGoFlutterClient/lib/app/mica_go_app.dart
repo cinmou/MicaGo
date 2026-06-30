@@ -2,6 +2,7 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:go_router/go_router.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:provider/provider.dart';
 
 import '../core/app_controller.dart';
@@ -52,13 +53,18 @@ class _MicaGoAppState extends State<MicaGoApp> {
             builder: (lightDynamic, darkDynamic) {
               final useDynamic = theme.useSystemColors && lightDynamic != null;
               final useBlackWhite = theme.useBlackWhite;
+              final useLiquidGlass = theme.useLiquidGlass;
               final lightScheme = useBlackWhite
                   ? MicaGoTheme.blackWhiteScheme(Brightness.light)
+                  : useLiquidGlass
+                  ? MicaGoTheme.liquidGlassScheme(Brightness.light)
                   : useDynamic
                   ? lightDynamic.harmonized()
                   : ColorScheme.fromSeed(seedColor: theme.seedColor);
               final darkScheme = useBlackWhite
                   ? MicaGoTheme.blackWhiteScheme(Brightness.dark)
+                  : useLiquidGlass
+                  ? MicaGoTheme.liquidGlassScheme(Brightness.dark)
                   : (useDynamic && darkDynamic != null)
                   ? darkDynamic.harmonized()
                   : ColorScheme.fromSeed(
@@ -66,25 +72,37 @@ class _MicaGoAppState extends State<MicaGoApp> {
                       brightness: Brightness.dark,
                     );
 
-              return MaterialApp.router(
-                title: 'micaGO',
-                debugShowCheckedModeBanner: false,
-                theme: MicaGoTheme.fromScheme(lightScheme),
-                darkTheme: MicaGoTheme.fromScheme(darkScheme),
-                themeMode: theme.themeMode,
-                locale: theme.locale,
-                supportedLocales: const [
-                  Locale('en'),
-                  Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
-                  Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
-                ],
-                localizationsDelegates: const [
-                  MicaLocalizations.delegate,
-                  GlobalMaterialLocalizations.delegate,
-                  GlobalWidgetsLocalizations.delegate,
-                  GlobalCupertinoLocalizations.delegate,
-                ],
-                routerConfig: _router,
+              return LiquidGlassWidgets.wrap(
+                adaptiveQuality: true,
+                theme: GlassThemeData.simple(
+                  blur: 8,
+                  thickness: 32,
+                  chromaticAberration: 0.012,
+                  lightIntensity: 0.62,
+                  saturation: 1.28,
+                  borderRadius: 28,
+                  quality: GlassQuality.standard,
+                ),
+                child: MaterialApp.router(
+                  title: 'micaGO',
+                  debugShowCheckedModeBanner: false,
+                  theme: MicaGoTheme.fromScheme(lightScheme),
+                  darkTheme: MicaGoTheme.fromScheme(darkScheme),
+                  themeMode: theme.themeMode,
+                  locale: theme.locale,
+                  supportedLocales: const [
+                    Locale('en'),
+                    Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
+                    Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
+                  ],
+                  localizationsDelegates: const [
+                    MicaLocalizations.delegate,
+                    GlobalMaterialLocalizations.delegate,
+                    GlobalWidgetsLocalizations.delegate,
+                    GlobalCupertinoLocalizations.delegate,
+                  ],
+                  routerConfig: _router,
+                ),
               );
             },
           );

@@ -68,6 +68,7 @@ dependencies:
   # C24: in-app full-screen video playback for video attachments (official,
   # widely-used plugin). Graceful: videos that fail to load show an error state.
   video_player: ^2.9.2
+  liquid_glass_widgets: ^0.19.5
 
 # C19: file_picker pulls a flutter_plugin_android_lifecycle that demands its
 # consumers compile against android-36, conflicting with file_picker's own

@@ -7,6 +7,8 @@
 /// contact resolver is injected, so there is no Flutter/provider dependency.
 library;
 
+import 'package:intl/intl.dart';
+
 import '../message_display.dart';
 import '../emoji_text.dart';
 import '../message_render.dart';
@@ -106,6 +108,8 @@ class ThreadPresentationBuilder {
     required bool isGroup,
     required ContactNameResolver resolveName,
     bool loadingOlder = false,
+    bool use24HourFormat = false,
+    String? localeTag,
   }) {
     final rows = buildDisplayRows(messages, prefs);
     final byGuid = {for (final m in messages) m.guid: m};
@@ -190,7 +194,16 @@ class ThreadPresentationBuilder {
           lastDay = day;
         } else if (shouldShowTimeSeparator(lastTs, ts)) {
           // Same day but a large gap since the previous message: a time chip.
-          items.add(TimeSeparatorItem(timeOfDayLabel(dt), m.dedupeKey));
+          items.add(
+            TimeSeparatorItem(
+              timeOfDayLabel(
+                dt,
+                use24HourFormat: use24HourFormat,
+                localeTag: localeTag,
+              ),
+              m.dedupeKey,
+            ),
+          );
         }
         lastTs = ts;
       }
@@ -381,12 +394,17 @@ bool shouldShowTimeSeparator(
   return (ts - prevTs) >= gap.inMilliseconds;
 }
 
-/// 12-hour clock label, e.g. "3:45 PM".
-String timeOfDayLabel(DateTime dt) {
-  final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-  final minute = dt.minute.toString().padLeft(2, '0');
-  final ampm = dt.hour < 12 ? 'AM' : 'PM';
-  return '$hour12:$minute $ampm';
+/// Clock label for in-thread time chips, following the user's system 12/24h
+/// preference when supplied by the Flutter UI layer.
+String timeOfDayLabel(
+  DateTime dt, {
+  bool use24HourFormat = false,
+  String? localeTag,
+}) {
+  return (use24HourFormat ? DateFormat.Hm(localeTag) : DateFormat.jm(localeTag))
+      .format(dt)
+      .replaceAll('\u202f', ' ')
+      .replaceAll('\u00a0', ' ');
 }
 
 /// Human day-separator label ("Today" / "Yesterday" / "Jan 5" / "Jan 5, 2024").
