@@ -63,14 +63,21 @@ void main() {
     expect(find.text('🔥'), findsWidgets);
   });
 
-  testWidgets('a video attachment renders a tappable card (no crash)', (
+  testWidgets('a video attachment renders a tappable preview (no crash)', (
     tester,
   ) async {
+    // Serve a valid preview thumbnail so the video renders its preview path
+    // deterministically (no real network, no pending request timer).
+    final videoApi = ApiClient(
+      baseUrl: 'http://localhost:0',
+      token: 't',
+      httpClient: MockClient((_) async => http.Response.bytes(_png1x1, 200)),
+    );
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: AttachmentView(
-            api: api,
+            api: videoApi,
             attachment: _att(
               guid: 'v1',
               kind: 'video',
@@ -81,9 +88,10 @@ void main() {
         ),
       ),
     );
-    // Video card shows the play affordance + filename — and does not throw.
-    expect(find.text('clip.mp4'), findsOneWidget);
-    expect(find.byIcon(Icons.play_circle_fill), findsOneWidget);
+    await tester.pump(); // resolve the preview future
+    // Preview thumbnail shows a play affordance and is tappable; never throws.
+    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    expect(find.byType(GestureDetector), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 

@@ -122,9 +122,42 @@ void main() {
         MessageSendEffect.confetti,
       );
       expect(
-        sendEffectFor('com.apple.messages.effect.CKHappyBirthdayEffect'),
-        MessageSendEffect.none,
+        sendEffectFor('com.apple.MobileSMS.expressivesend.invisibleink'),
+        MessageSendEffect.invisibleInk,
       );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKHappyBirthdayEffect'),
+        MessageSendEffect.balloons,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKFireworksEffect'),
+        MessageSendEffect.fireworks,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKHeartEffect'),
+        MessageSendEffect.love,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKLasersEffect'),
+        MessageSendEffect.lasers,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKSparklesEffect'),
+        MessageSendEffect.celebration,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKSpotlightEffect'),
+        MessageSendEffect.spotlight,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKEchoEffect'),
+        MessageSendEffect.echo,
+      );
+      // Screen vs. bubble classification.
+      expect(isScreenSendEffect(MessageSendEffect.fireworks), isTrue);
+      expect(isScreenSendEffect(MessageSendEffect.slam), isFalse);
+      expect(isScreenSendEffect(MessageSendEffect.invisibleInk), isFalse);
+      expect(sendEffectFor('com.apple.unknown.effect'), MessageSendEffect.none);
     });
   });
 

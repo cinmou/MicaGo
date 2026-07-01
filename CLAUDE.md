@@ -49,6 +49,26 @@ Three components:
   guides (android-client-connection / remote-access-cloudflare / notifications-setup /
   manual-test-flow) are still English-only — the localized index marks them "(英文)".
 
+## Send effects — tap "Sent with …" to play (C52)
+
+- **Effects never auto-play**; tapping a message's "Sent with …" label triggers
+  them (`onPlayEffect` → `_playMessageEffect`). `MessageSendEffect`
+  (`message_render.dart`) + `sendEffectFor(expressiveSendStyleId)` classify Apple's
+  ids; `isScreenSendEffect` splits **bubble** effects from **screen** effects.
+- **Bubble effects** animate the bubble in-place (`_EffectBubble`, per-effect
+  duration + `HapticFeedback`): **Slam** drops in oversized + tilted then springs
+  with a rattle; **Loud** pops big and trembles then settles; **Gentle** rises from
+  tiny. **Invisible Ink** (`_InvisibleInkBubble` + `_InkPainter`) covers the
+  message with shimmering dust until tapped — covered by default (authentic),
+  tap the bubble to reveal, tap the label to re-hide.
+- **Screen effects** play as a top overlay: **Confetti** stays on the `confetti`
+  package; **Fireworks / Balloons / Love / Lasers / Celebration / Spotlight /
+  Echo** are CustomPainter particle systems in `send_effects.dart`
+  (`SendEffectController` + `SendEffectOverlay`, one per thread, `IgnorePointer`
+  over the stack). Particles are generated once per play from a token-seeded RNG.
+- Ported BlueBubbles-style. Tests: `bluebubbles_semantics_test.dart` covers the
+  id→effect mapping + screen/bubble split. Client-only.
+
 ## Scroll performance in image/file-heavy threads (C51)
 
 - **`imageByteCache` was an unbounded global `Map<String,Uint8List>`** — it held the

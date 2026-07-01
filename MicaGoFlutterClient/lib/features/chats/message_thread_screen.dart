@@ -35,6 +35,7 @@ import 'message_debug_sheet.dart';
 import 'message_display.dart';
 import 'message_render.dart';
 import 'media_viewer.dart';
+import 'send_effects.dart';
 import 'models/chat_summary.dart';
 import 'models/merged_chat.dart';
 import 'models/message_model.dart';
@@ -80,6 +81,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
   final _composer = TextEditingController();
   final Map<String, GlobalKey> _messageKeys = {};
   late final ConfettiController _confettiController;
+  final SendEffectController _sendEffects = SendEffectController();
   final Map<String, int> _effectTriggers = {};
   bool _showJumpToBottom = false;
   String? _flashGuid;
@@ -200,6 +202,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     _scroll.dispose();
     _composer.dispose();
     _confettiController.dispose();
+    _sendEffects.dispose();
     _recorder.dispose();
     final app = context.read<AppController>();
     if (app.isChatActive(_active.guid)) {
@@ -233,8 +236,16 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
 
   void _playMessageEffect(MessageSendEffect effect, String effectKey) {
     if (effect == MessageSendEffect.none || effectKey.isEmpty) return;
+    // Confetti keeps the dedicated package; the other screen effects play on the
+    // top overlay; bubble effects (+ invisible-ink toggle) bump a per-message
+    // trigger the bubble listens to.
     if (effect == MessageSendEffect.confetti) {
       _confettiController.play();
+      return;
+    }
+    if (isScreenSendEffect(effect)) {
+      _sendEffects.play(effect);
+      return;
     }
     setState(() {
       _effectTriggers[effectKey] = (_effectTriggers[effectKey] ?? 0) + 1;
@@ -671,6 +682,8 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
             ),
           ),
         ),
+        // Fireworks / balloons / love / lasers / celebration / spotlight / echo.
+        Positioned.fill(child: SendEffectOverlay(controller: _sendEffects)),
       ],
     );
     final glass = _isLiquidGlassTheme(context);
@@ -1481,14 +1494,25 @@ class _EffectBubbleState extends State<_EffectBubble>
     );
   }
 
+  static const _durations = {
+    MessageSendEffect.slam: Duration(milliseconds: 640),
+    MessageSendEffect.loud: Duration(milliseconds: 900),
+    MessageSendEffect.gentle: Duration(milliseconds: 1300),
+  };
+
   @override
   void didUpdateWidget(covariant _EffectBubble oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.trigger != oldWidget.trigger &&
-        widget.effect != MessageSendEffect.none &&
-        widget.effect != MessageSendEffect.confetti) {
+    final d = _durations[widget.effect];
+    if (widget.trigger != oldWidget.trigger && d != null) {
       _hasPlayed = true;
-      _controller.forward(from: 0);
+      _controller
+        ..duration = d
+        ..forward(from: 0);
+      if (widget.effect == MessageSendEffect.slam ||
+          widget.effect == MessageSendEffect.loud) {
+        HapticFeedback.heavyImpact();
+      }
     }
   }
 
@@ -1500,9 +1524,7 @@ class _EffectBubbleState extends State<_EffectBubble>
 
   @override
   Widget build(BuildContext context) {
-    if (!_hasPlayed ||
-        widget.effect == MessageSendEffect.none ||
-        widget.effect == MessageSendEffect.confetti) {
+    if (!_hasPlayed || !_durations.containsKey(widget.effect)) {
       return widget.child;
     }
     return AnimatedBuilder(
@@ -1512,33 +1534,245 @@ class _EffectBubbleState extends State<_EffectBubble>
         final t = _controller.value.clamp(0.0, 1.0);
         var scale = 1.0;
         var dx = 0.0;
+        var dy = 0.0;
+        var rotation = 0.0;
         var opacity = 1.0;
         switch (widget.effect) {
+          // Slam: the bubble drops in oversized and tilted, hits with a hard
+          // squash (overshoots below 1.0), then springs upright with a quick
+          // decaying rattle — Apple's "impact".
           case MessageSendEffect.slam:
-            final settle = Curves.easeOutBack.transform(t);
-            scale = 1.18 - (0.18 * settle);
-            dx = math.sin(t * math.pi * 6) * (1 - t) * 4;
+            if (t < 0.30) {
+              final p = t / 0.30;
+              final e = Curves.easeIn.transform(p);
+              scale = 1.55 - 0.70 * e; // 1.55 → 0.85
+              rotation = -0.16 * (1 - e);
+              opacity = 0.25 + 0.75 * p;
+            } else {
+              final p = (t - 0.30) / 0.70;
+              scale = 0.85 + 0.15 * Curves.elasticOut.transform(p);
+              final damp = (1 - p) * (1 - p);
+              dx = math.sin(p * math.pi * 9) * 6 * damp;
+              dy = math.sin(p * math.pi * 7) * 3 * damp;
+              rotation = math.sin(p * math.pi * 8) * 0.02 * damp;
+            }
+          // Loud: pops up big, trembles violently at size, then shrinks back.
           case MessageSendEffect.loud:
-            scale = 1 + math.sin(t * math.pi) * 0.18;
-            dx = math.sin(t * math.pi * 10) * (1 - t) * 3;
+            if (t < 0.20) {
+              scale = 1 + 0.42 * Curves.easeOutBack.transform(t / 0.20);
+            } else if (t < 0.68) {
+              final p = (t - 0.20) / 0.48;
+              scale = 1.40 + math.sin(p * math.pi * 6) * 0.04;
+              final amp = 1 - 0.4 * p;
+              dx = math.sin(p * math.pi * 16) * 8 * amp;
+              dy = math.cos(p * math.pi * 13) * 4 * amp;
+              rotation = math.sin(p * math.pi * 14) * 0.035 * amp;
+            } else {
+              final p = (t - 0.68) / 0.32;
+              scale = 1.40 - 0.40 * Curves.easeInOutCubic.transform(p);
+            }
+          // Gentle: arrives tiny and rises slowly to full size — understated.
           case MessageSendEffect.gentle:
-            final soft = Curves.easeOutCubic.transform(t);
-            scale = 0.94 + (0.06 * soft);
-            opacity = 0.72 + (0.28 * soft);
-          case MessageSendEffect.none:
-          case MessageSendEffect.confetti:
+            final e = Curves.easeOutCubic.transform(t);
+            scale = 0.35 + 0.65 * e;
+            opacity = (t / 0.30).clamp(0.0, 1.0) * 0.5 + 0.5;
+          // Screen effects + invisible ink are handled elsewhere; nothing to
+          // animate on the bubble here.
+          default:
             break;
         }
         return Opacity(
           opacity: opacity,
           child: Transform.translate(
-            offset: Offset(dx, 0),
-            child: Transform.scale(scale: scale, child: child),
+            offset: Offset(dx, dy),
+            child: Transform.rotate(
+              angle: rotation,
+              child: Transform.scale(scale: scale, child: child),
+            ),
           ),
         );
       },
     );
   }
+}
+
+/// Apple's "Invisible Ink": the message content is hidden behind a cloud of
+/// shimmering grey dust and revealed on tap. Tapping again (or the "Sent with
+/// Invisible Ink" label, via [trigger]) hides it once more.
+class _InvisibleInkBubble extends StatefulWidget {
+  final int trigger;
+  final Color coverColor;
+  final double radius;
+  final Widget child;
+
+  const _InvisibleInkBubble({
+    required this.trigger,
+    required this.coverColor,
+    required this.radius,
+    required this.child,
+  });
+
+  @override
+  State<_InvisibleInkBubble> createState() => _InvisibleInkBubbleState();
+}
+
+class _InvisibleInkBubbleState extends State<_InvisibleInkBubble>
+    with TickerProviderStateMixin {
+  // Continuous twinkle of the dust while hidden.
+  late final AnimationController _shimmer = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 2),
+  )..repeat();
+  // 0 = fully covered, 1 = fully revealed.
+  late final AnimationController _reveal = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 650),
+  );
+  late final List<_InkParticle> _particles = _buildParticles();
+
+  List<_InkParticle> _buildParticles() {
+    final rng = math.Random(widget.hashCode);
+    return List.generate(160, (_) {
+      return _InkParticle(
+        x: rng.nextDouble(),
+        y: rng.nextDouble(),
+        r: 0.5 + rng.nextDouble() * 1.4,
+        phase: rng.nextDouble() * math.pi * 2,
+        speed: 0.6 + rng.nextDouble() * 1.6,
+        bright: rng.nextBool(),
+      );
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _InvisibleInkBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.trigger != oldWidget.trigger) _toggle();
+  }
+
+  void _toggle() {
+    if (_reveal.value > 0.5) {
+      _reveal.reverse();
+      if (!_shimmer.isAnimating) _shimmer.repeat();
+    } else {
+      HapticFeedback.selectionClick();
+      _reveal.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    _reveal.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        widget.child,
+        Positioned.fill(
+          child: AnimatedBuilder(
+            animation: Listenable.merge([_shimmer, _reveal]),
+            builder: (context, _) {
+              final revealed = _reveal.value >= 0.999;
+              // Stop burning CPU on the twinkle once fully revealed.
+              if (revealed && _shimmer.isAnimating) _shimmer.stop();
+              final overlay = IgnorePointer(
+                ignoring: revealed,
+                child: CustomPaint(
+                  painter: _InkPainter(
+                    reveal: _reveal.value,
+                    shimmer: _shimmer.value,
+                    particles: _particles,
+                    cover: widget.coverColor,
+                    radius: widget.radius,
+                  ),
+                ),
+              );
+              if (revealed) return overlay;
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _reveal.forward(),
+                child: overlay,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InkParticle {
+  final double x; // normalized 0..1
+  final double y;
+  final double r;
+  final double phase;
+  final double speed;
+  final bool bright;
+  const _InkParticle({
+    required this.x,
+    required this.y,
+    required this.r,
+    required this.phase,
+    required this.speed,
+    required this.bright,
+  });
+}
+
+class _InkPainter extends CustomPainter {
+  final double reveal; // 0 hidden → 1 revealed
+  final double shimmer; // 0..1 repeating
+  final List<_InkParticle> particles;
+  final Color cover;
+  final double radius;
+
+  _InkPainter({
+    required this.reveal,
+    required this.shimmer,
+    required this.particles,
+    required this.cover,
+    required this.radius,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (reveal >= 1) return;
+    final coverAmount = 1 - Curves.easeInOut.transform(reveal);
+    final rrect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      Radius.circular(math.min(radius, size.height / 2)),
+    );
+    canvas.save();
+    canvas.clipRRect(rrect);
+    // Opaque-ish base hides the text/photo underneath.
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = cover.withValues(alpha: 0.94 * coverAmount),
+    );
+    // Twinkling dust. On reveal it scatters upward a little and fades.
+    final rise = (1 - coverAmount) * 10;
+    final dot = Paint();
+    for (final p in particles) {
+      final twinkle =
+          0.25 + 0.75 * (0.5 + 0.5 * math.sin(shimmer * math.pi * 2 * p.speed + p.phase));
+      final a = (twinkle * coverAmount).clamp(0.0, 1.0);
+      dot.color = (p.bright ? const Color(0xFFFFFFFF) : const Color(0xFF3A3A3C))
+          .withValues(alpha: a * (p.bright ? 0.9 : 0.6));
+      canvas.drawCircle(
+        Offset(p.x * size.width, p.y * size.height - rise * p.y),
+        p.r,
+        dot,
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _InkPainter old) =>
+      old.reveal != reveal || old.shimmer != shimmer;
 }
 
 class _DateSeparator extends StatelessWidget {
@@ -1765,14 +1999,18 @@ class _MessageBubbleState extends State<_MessageBubble> {
               : TextStyle(color: textColor),
           linkColor: textColor,
         ),
-      if (effect != null)
-        Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: widget.onPlayEffect,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+    ];
+
+    // The "Sent with …" affordance sits *below* the bubble (like iMessage), not
+    // inside it — the painted bubble must not frame it. Tapping it replays the
+    // effect.
+    final Widget? effectLabel = effect == null
+        ? null
+        : Padding(
+            padding: const EdgeInsets.only(top: 2, left: 4, right: 4),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onPlayEffect,
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1792,9 +2030,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                 ],
               ),
             ),
-          ),
-        ),
-    ];
+          );
 
     // Wraps [child] in the painted iMessage bubble (or nothing, when stripped).
     Widget paint(Widget child, {required bool mediaTopPad}) {
@@ -1897,11 +2133,23 @@ class _MessageBubbleState extends State<_MessageBubble> {
             ),
           );
 
-    final effectedBubble = _EffectBubble(
-      effect: widget.sendEffect,
-      trigger: widget.effectTrigger,
-      child: bubbleWithOverlays,
-    );
+    // Invisible Ink covers the message with shimmering "dust" until tapped;
+    // the others are one-shot bubble animations replayed from the label.
+    final Widget effectedBubble =
+        widget.sendEffect == MessageSendEffect.invisibleInk
+        ? _InvisibleInkBubble(
+            trigger: widget.effectTrigger,
+            coverColor: stripBubble
+                ? const Color(0xFF8E8E93)
+                : bubbleColor,
+            radius: stripBubble ? 12 : 18,
+            child: bubbleWithOverlays,
+          )
+        : _EffectBubble(
+            effect: widget.sendEffect,
+            trigger: widget.effectTrigger,
+            child: bubbleWithOverlays,
+          );
 
     final messageColumn = Column(
       crossAxisAlignment: fromMe
@@ -1931,6 +2179,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
             onTap: () => widget.onReplyTap(reply.targetGuid),
           ),
         effectedBubble,
+        ?effectLabel,
         _Footer(
           message: message,
           showStatus: widget.showStatus,

@@ -360,7 +360,34 @@ class ReplyPreview {
 // Message effects (expressiveSendStyleId)
 // ---------------------------------------------------------------------------
 
-enum MessageSendEffect { none, slam, loud, gentle, confetti }
+enum MessageSendEffect {
+  none,
+  // Bubble effects.
+  slam,
+  loud,
+  gentle,
+  invisibleInk,
+  // Screen effects.
+  confetti,
+  fireworks,
+  balloons,
+  love,
+  lasers,
+  celebration,
+  spotlight,
+  echo,
+}
+
+/// Whether an effect plays as a full-screen overlay (vs. a per-bubble animation).
+bool isScreenSendEffect(MessageSendEffect e) =>
+    e == MessageSendEffect.confetti ||
+    e == MessageSendEffect.fireworks ||
+    e == MessageSendEffect.balloons ||
+    e == MessageSendEffect.love ||
+    e == MessageSendEffect.lasers ||
+    e == MessageSendEffect.celebration ||
+    e == MessageSendEffect.spotlight ||
+    e == MessageSendEffect.echo;
 
 const Map<String, String> _effectLabels = {
   'com.apple.MobileSMS.expressivesend.impact': 'Sent with Slam',
@@ -385,8 +412,24 @@ MessageSendEffect sendEffectFor(String? expressiveSendStyleId) {
       return MessageSendEffect.loud;
     case 'com.apple.MobileSMS.expressivesend.gentle':
       return MessageSendEffect.gentle;
+    case 'com.apple.MobileSMS.expressivesend.invisibleink':
+      return MessageSendEffect.invisibleInk;
     case 'com.apple.messages.effect.CKConfettiEffect':
       return MessageSendEffect.confetti;
+    case 'com.apple.messages.effect.CKFireworksEffect':
+      return MessageSendEffect.fireworks;
+    case 'com.apple.messages.effect.CKHappyBirthdayEffect':
+      return MessageSendEffect.balloons;
+    case 'com.apple.messages.effect.CKHeartEffect':
+      return MessageSendEffect.love;
+    case 'com.apple.messages.effect.CKLasersEffect':
+      return MessageSendEffect.lasers;
+    case 'com.apple.messages.effect.CKSparklesEffect':
+      return MessageSendEffect.celebration;
+    case 'com.apple.messages.effect.CKSpotlightEffect':
+      return MessageSendEffect.spotlight;
+    case 'com.apple.messages.effect.CKEchoEffect':
+      return MessageSendEffect.echo;
     default:
       return MessageSendEffect.none;
   }
