@@ -22,6 +22,7 @@ import 'models/message_model.dart';
 ///   • < 1 min      → "now"
 ///   • < 1 hour     → "5m"
 ///   • same day     → clock time (06:06 or 6:06 AM per use24h)
+///   • yesterday     → Yesterday / 昨天
 ///   • within 7 days → weekday (Monday / 星期一)
 ///   • older        → numeric date in the locale's order (12/06/2026)
 String chatTimestampLabel(
@@ -44,6 +45,7 @@ String chatTimestampLabel(
         dt,
       );
     }
+    if (daysApart == 1) return _yesterdayLabel(locale);
     if (daysApart < 7) return DateFormat.EEEE(locale).format(dt);
     return DateFormat.yMd(locale).format(dt);
   } catch (_) {
@@ -54,6 +56,7 @@ String chatTimestampLabel(
       final h12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
       return '$h12:$m ${dt.hour < 12 ? 'AM' : 'PM'}';
     }
+    if (daysApart == 1) return _yesterdayLabel(locale);
     if (daysApart < 7) {
       const weekdays = [
         'Monday',
@@ -67,6 +70,61 @@ String chatTimestampLabel(
       return weekdays[(dt.weekday - 1) % 7];
     }
     return '${dt.month}/${dt.day}/${dt.year}';
+  }
+}
+
+String _yesterdayLabel(String locale) =>
+    locale.toLowerCase().startsWith('zh') ? '昨天' : 'Yesterday';
+
+/// Full timestamp label for in-thread message footers / chat headers. It uses
+/// the same day buckets as [chatTimestampLabel], but keeps the concrete time:
+/// today -> time, yesterday -> Yesterday 09:30, recent -> Monday 09:30.
+String threadTimestampLabel(
+  DateTime dt, {
+  required DateTime now,
+  required bool use24h,
+  required String locale,
+}) {
+  final startOfToday = DateTime(now.year, now.month, now.day);
+  final startOfThatDay = DateTime(dt.year, dt.month, dt.day);
+  final daysApart = startOfToday.difference(startOfThatDay).inDays;
+
+  final time = _timeLabel(dt, use24h: use24h, locale: locale);
+  try {
+    if (daysApart <= 0) return time;
+    if (daysApart == 1) return '${_yesterdayLabel(locale)} $time';
+    if (daysApart < 7) return '${DateFormat.EEEE(locale).format(dt)} $time';
+    return '${DateFormat.yMd(locale).format(dt)} $time';
+  } catch (_) {
+    if (daysApart <= 0) return time;
+    if (daysApart == 1) return '${_yesterdayLabel(locale)} $time';
+    if (daysApart < 7) {
+      const weekdays = [
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
+      ];
+      return '${weekdays[(dt.weekday - 1) % 7]} $time';
+    }
+    return '${dt.month}/${dt.day}/${dt.year} $time';
+  }
+}
+
+String _timeLabel(DateTime dt, {required bool use24h, required String locale}) {
+  try {
+    return (use24h ? DateFormat.Hm(locale) : DateFormat.jm(locale))
+        .format(dt)
+        .replaceAll('\u202f', ' ')
+        .replaceAll('\u00a0', ' ');
+  } catch (_) {
+    final m = dt.minute.toString().padLeft(2, '0');
+    if (use24h) return '${dt.hour.toString().padLeft(2, '0')}:$m';
+    final h12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    return '$h12:$m ${dt.hour < 12 ? 'AM' : 'PM'}';
   }
 }
 

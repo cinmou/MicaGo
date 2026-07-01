@@ -45,13 +45,36 @@ void main() {
       expect(label(DateTime(2026, 6, 8, 9, 0)), 'Monday');
     });
 
-    test('yesterday -> weekday (not clock time)', () {
-      expect(label(DateTime(2026, 6, 9, 23, 0)), 'Tuesday');
+    test('yesterday -> yesterday label', () {
+      expect(label(DateTime(2026, 6, 9, 23, 0)), 'Yesterday');
+      expect(label(DateTime(2026, 6, 9, 23, 0), locale: 'zh_Hans'), '昨天');
     });
 
     test('older than 7 days -> numeric date', () {
       // 2026-05-20 is well over a week before 2026-06-10.
       expect(label(DateTime(2026, 5, 20, 8, 0)), '5/20/2026');
+    });
+  });
+
+  group('threadTimestampLabel', () {
+    String full(DateTime dt, {bool use24h = true, String locale = 'en'}) =>
+        threadTimestampLabel(dt, now: now, use24h: use24h, locale: locale);
+
+    test('same day -> time only', () {
+      expect(full(DateTime(2026, 6, 10, 12, 30)), '12:30');
+    });
+
+    test('yesterday -> yesterday plus time', () {
+      expect(full(DateTime(2026, 6, 9, 23, 5)), 'Yesterday 23:05');
+      expect(full(DateTime(2026, 6, 9, 23, 5), locale: 'zh_Hans'), '昨天 23:05');
+    });
+
+    test('earlier this week -> weekday plus time', () {
+      expect(full(DateTime(2026, 6, 8, 9, 0)), 'Monday 09:00');
+    });
+
+    test('older -> date plus time', () {
+      expect(full(DateTime(2026, 5, 20, 8, 0)), '5/20/2026 08:00');
     });
   });
 }

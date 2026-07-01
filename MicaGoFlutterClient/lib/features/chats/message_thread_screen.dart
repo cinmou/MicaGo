@@ -7,7 +7,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:intl/intl.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -798,21 +797,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     }
     if (ts == null) return '';
     final dt = DateTime.fromMillisecondsSinceEpoch(ts);
-    final now = DateTime.now();
-    final sameDay =
-        dt.year == now.year && dt.month == now.month && dt.day == now.day;
-    if (sameDay) return _timeOfDay(context, dt);
-    final yesterday = now.subtract(const Duration(days: 1));
-    final isYesterday =
-        dt.year == yesterday.year &&
-        dt.month == yesterday.month &&
-        dt.day == yesterday.day;
-    if (isYesterday) return 'Yesterday ${_timeOfDay(context, dt)}';
-    return '${dt.month}/${dt.day} ${_timeOfDay(context, dt)}';
-  }
-
-  String _timeOfDay(BuildContext context, DateTime dt) {
-    return _systemTimeLabel(context, dt);
+    return _threadTimestampLabel(context, dt);
   }
 
   // C21u: the top-right action now opens chat details + in-thread search
@@ -1757,7 +1742,9 @@ class _InkPainter extends CustomPainter {
     final dot = Paint();
     for (final p in particles) {
       final twinkle =
-          0.25 + 0.75 * (0.5 + 0.5 * math.sin(shimmer * math.pi * 2 * p.speed + p.phase));
+          0.25 +
+          0.75 *
+              (0.5 + 0.5 * math.sin(shimmer * math.pi * 2 * p.speed + p.phase));
       final a = (twinkle * coverAmount).clamp(0.0, 1.0);
       dot.color = (p.bright ? const Color(0xFFFFFFFF) : const Color(0xFF3A3A3C))
           .withValues(alpha: a * (p.bright ? 0.9 : 0.6));
@@ -2139,9 +2126,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
         widget.sendEffect == MessageSendEffect.invisibleInk
         ? _InvisibleInkBubble(
             trigger: widget.effectTrigger,
-            coverColor: stripBubble
-                ? const Color(0xFF8E8E93)
-                : bubbleColor,
+            coverColor: stripBubble ? const Color(0xFF8E8E93) : bubbleColor,
             radius: stripBubble ? 12 : 18,
             child: bubbleWithOverlays,
           )
@@ -2670,7 +2655,7 @@ class _Footer extends StatelessWidget {
     // Only show the time when grouping/tap asks for it (BlueBubbles-style).
     if (ts != null && (showTime || showStatus)) {
       parts.add(
-        _systemTimeLabel(context, DateTime.fromMillisecondsSinceEpoch(ts)),
+        _threadTimestampLabel(context, DateTime.fromMillisecondsSinceEpoch(ts)),
       );
     }
     final edited = editedMarker(message);
@@ -2707,13 +2692,16 @@ class _Footer extends StatelessWidget {
   }
 }
 
-String _systemTimeLabel(BuildContext context, DateTime dt) {
-  final localeTag = Localizations.maybeLocaleOf(context)?.toLanguageTag();
+String _threadTimestampLabel(BuildContext context, DateTime dt) {
+  final localeTag =
+      Localizations.maybeLocaleOf(context)?.toLanguageTag() ?? 'en';
   final use24HourFormat = MediaQuery.alwaysUse24HourFormatOf(context);
-  return (use24HourFormat ? DateFormat.Hm(localeTag) : DateFormat.jm(localeTag))
-      .format(dt)
-      .replaceAll('\u202f', ' ')
-      .replaceAll('\u00a0', ' ');
+  return threadTimestampLabel(
+    dt,
+    now: DateTime.now(),
+    use24h: use24HourFormat,
+    locale: localeTag,
+  );
 }
 
 class _LinkedMessageText extends StatefulWidget {
