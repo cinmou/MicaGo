@@ -139,6 +139,10 @@ List<DisplayRow> buildDisplayRows(
       consumed.add(m.dedupeKey);
       continue;
     }
+    if (isInteractiveUpdate(m)) {
+      consumed.add(m.dedupeKey);
+      continue;
+    }
     if (isAssociatedSticker(m)) {
       final target = reactionTargetGuid(m.associatedMessageGuid);
       if (target != null && guids.contains(target)) {

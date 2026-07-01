@@ -3,6 +3,8 @@ package relaydb
 import (
 	"context"
 	"testing"
+
+	"micagoserver/internal/store"
 )
 
 func TestListChats(t *testing.T) {
@@ -27,6 +29,43 @@ func TestListChats(t *testing.T) {
 	}
 	if len(allChats) != 3 {
 		t.Fatalf("expected 3 chats, got %d", len(allChats))
+	}
+}
+
+func TestListChatsMarksGroupChats(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.sqlDB.Exec(`
+INSERT INTO chats (guid, chat_identifier, service_name, display_name, is_archived, style, participant_count, updated_at) VALUES
+('any;-;+15551234567', '+15551234567', 'iMessage', '', 0, 45, 1, 100),
+('any;+;guid-fallback', 'guid-fallback', 'iMessage', '', 0, NULL, 0, 90),
+('style-group', 'style-group', 'iMessage', '', 0, 43, 1, 80),
+('participant-group', 'participant-group', 'iMessage', '', 0, 45, 2, 70);
+`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sqlDB.Exec(`UPDATE chats SET participants = 'alice@example.com' || char(31) || '+15551234567' WHERE guid = 'participant-group'`); err != nil {
+		t.Fatal(err)
+	}
+
+	chats, err := db.ListChats(context.Background(), 20, 0, true, "all", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byGUID := map[string]store.ChatJSON{}
+	for _, chat := range chats {
+		byGUID[chat.GUID] = chat
+	}
+	if byGUID["any;-;+15551234567"].IsGroup {
+		t.Fatal("direct chat marked as group")
+	}
+	for _, guid := range []string{"any;+;guid-fallback", "style-group", "participant-group"} {
+		if !byGUID[guid].IsGroup {
+			t.Fatalf("%s not marked as group: %+v", guid, byGUID[guid])
+		}
+	}
+	gotParticipants := byGUID["participant-group"].Participants
+	if len(gotParticipants) != 2 || gotParticipants[0] != "alice@example.com" || gotParticipants[1] != "+15551234567" {
+		t.Fatalf("participants = %#v", gotParticipants)
 	}
 }
 

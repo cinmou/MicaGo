@@ -95,16 +95,61 @@ class ChatSummary {
   String get title {
     final dn = displayName?.trim() ?? '';
     if (dn.isNotEmpty) return dn;
+    if (isGroup) {
+      final generated = _groupTitle(participants);
+      return generated.isNotEmpty ? generated : 'Group Chat';
+    }
     final id = chatIdentifier?.trim() ?? '';
     if (id.isNotEmpty) return id;
     return guid;
   }
 
-  /// Heuristic group detection: an explicit flag if present, else "has a group
-  /// display name" (the server sets `displayName` only for groups) or more than
-  /// one participant.
+  String displayTitle({String? Function(String?)? resolveName}) {
+    if (!isGroup) {
+      final resolved = resolveName?.call(chatIdentifier)?.trim() ?? '';
+      return resolved.isNotEmpty ? resolved : title;
+    }
+    final dn = displayName?.trim() ?? '';
+    if (dn.isNotEmpty) return dn;
+    final names = participants
+        .map((h) {
+          final resolved = resolveName?.call(h)?.trim() ?? '';
+          return resolved.isNotEmpty ? resolved : h.trim();
+        })
+        .where((h) => h.isNotEmpty)
+        .toList(growable: false);
+    final generated = _groupTitle(names);
+    return generated.isNotEmpty ? generated : 'Group Chat';
+  }
+
+  static String _groupTitle(List<String> handles) {
+    final names = handles
+        .map(_groupTitlePart)
+        .where((h) => h.isNotEmpty)
+        .toList(growable: false);
+    if (names.isEmpty) return '';
+    if (names.length == 1) return names.first;
+    if (names.length <= 4) {
+      final head = names.take(names.length - 1).join(', ');
+      return '$head & ${names.last}';
+    }
+    return '${names.take(3).join(', ')} & ${names.length - 3} others';
+  }
+
+  static String _groupTitlePart(String raw) {
+    final cleaned = raw.replaceAll('\uFFFC', ' ').trim();
+    if (cleaned.isEmpty) return '';
+    final parts = cleaned.split(RegExp(r'\s+'));
+    return parts.first;
+  }
+
+  /// Heuristic group detection: trust the server when it provides `isGroup`;
+  /// otherwise fall back to BlueBubbles-style signals. `;+;` is the legacy
+  /// Messages chat GUID marker for groups and covers older MicaGo servers that
+  /// did not expose participant/style metadata yet.
   bool get isGroup {
     if (isGroupRaw != null) return isGroupRaw!;
+    if (guid.contains(';+;')) return true;
     if ((displayName?.trim() ?? '').isNotEmpty) return true;
     return participants.length > 1;
   }
@@ -159,7 +204,8 @@ class ChatSummary {
       serviceCategory: serviceCategory ?? this.serviceCategory,
       effectiveService: effectiveService ?? this.effectiveService,
       canSendTextRaw: canSendTextRaw ?? this.canSendTextRaw,
-      canSendAttachmentsRaw: canSendAttachmentsRaw ?? this.canSendAttachmentsRaw,
+      canSendAttachmentsRaw:
+          canSendAttachmentsRaw ?? this.canSendAttachmentsRaw,
       displayName: displayName ?? this.displayName,
       isArchived: isArchived ?? this.isArchived,
       lastMessagePreview: lastMessagePreview ?? this.lastMessagePreview,

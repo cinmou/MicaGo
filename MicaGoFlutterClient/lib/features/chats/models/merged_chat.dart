@@ -26,6 +26,10 @@ class MergedChat {
   /// Display title comes from the primary route's title (contact name/handle).
   String get title => primary.title;
 
+  /// Stable local-preference key for per-contact/per-group UI customizations.
+  /// Merged 1:1 routes share one key; group chats are standalone.
+  String get localCustomizationKey => key;
+
   int get unreadCount =>
       routes.fold<int>(0, (sum, route) => sum + (route.unreadCount ?? 0));
 

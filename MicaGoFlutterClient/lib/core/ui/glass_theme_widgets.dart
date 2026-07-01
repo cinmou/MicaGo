@@ -9,6 +9,18 @@ bool isGlassTheme(BuildContext context) =>
 
 const Color liquidGlassBlue = Color(0xFF007AFF);
 
+Color liquidGlassPageColor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? Colors.black
+    : Colors.white;
+
+Color liquidGlassSurfaceColor(BuildContext context, {double alpha = 0.58}) {
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  return (dark ? const Color(0xFF1C1C1E) : Colors.white).withValues(
+    alpha: alpha,
+  );
+}
+
 LiquidGlassSettings micaGlassSettings(Color color, {double blur = 9}) =>
     LiquidGlassSettings(
       glassColor: color,
@@ -50,7 +62,7 @@ class MicaGlassIconButton extends StatelessWidget {
         onPressed: onPressed,
       );
     }
-    final bg = color ?? Colors.white.withValues(alpha: 0.58);
+    final bg = color ?? liquidGlassSurfaceColor(context);
     return SizedBox(
       width: size,
       height: size,
@@ -89,7 +101,7 @@ class MicaGlassShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!enabled || !isGlassTheme(context)) return child;
-    final bg = color ?? Colors.white.withValues(alpha: 0.56);
+    final bg = color ?? liquidGlassSurfaceColor(context, alpha: 0.56);
     return GlassContainer(
       useOwnLayer: true,
       quality: GlassQuality.standard,

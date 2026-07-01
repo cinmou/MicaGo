@@ -31,3 +31,16 @@ func TestBuildSendAttachmentScript(t *testing.T) {
 		t.Fatalf("chat id missing: %s", script)
 	}
 }
+
+func TestBuildSendAttachmentsScript(t *testing.T) {
+	script := BuildSendAttachmentsScript("iMessage;-;+1555", []string{
+		`/tmp/one.jpg`,
+		`/tmp/two "quoted".mov`,
+	})
+	if !strings.Contains(script, `{POSIX file "/tmp/one.jpg", POSIX file "/tmp/two \"quoted\".mov"}`) {
+		t.Fatalf("expected POSIX file list: %s", script)
+	}
+	if !strings.Contains(script, `to chat id "iMessage;-;+1555"`) {
+		t.Fatalf("chat id missing: %s", script)
+	}
+}

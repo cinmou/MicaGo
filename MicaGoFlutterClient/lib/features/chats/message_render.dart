@@ -40,7 +40,9 @@ String chatTimestampLabel(
 
   try {
     if (daysApart <= 0) {
-      return (use24h ? DateFormat.Hm(locale) : DateFormat.jm(locale)).format(dt);
+      return (use24h ? DateFormat.Hm(locale) : DateFormat.jm(locale)).format(
+        dt,
+      );
     }
     if (daysApart < 7) return DateFormat.EEEE(locale).format(dt);
     return DateFormat.yMd(locale).format(dt);
@@ -90,12 +92,16 @@ enum MessageDeliveryState {
 }
 
 const String _objectReplacement = '￼';
+const String _unicodeReplacement = '�';
 
 /// Strips the invisible attachment-placeholder char and trims. Returns null
 /// when nothing meaningful remains.
 String? sanitizeMessageText(String? raw) {
   if (raw == null) return null;
-  final cleaned = raw.replaceAll(_objectReplacement, '').trim();
+  final cleaned = raw
+      .replaceAll(_objectReplacement, '')
+      .replaceAll(_unicodeReplacement, '')
+      .trim();
   return cleaned.isEmpty ? null : cleaned;
 }
 
@@ -107,7 +113,10 @@ String? sanitizeMessageText(String? raw) {
 /// CJK rune, so this never hides genuine text. The mixed case ("+!Hello") can't
 /// be safely repaired client-side and needs the server fix — documented.
 bool isControlLikeText(String text) {
-  final t = text.replaceAll(_objectReplacement, '').trim();
+  final t = text
+      .replaceAll(_objectReplacement, '')
+      .replaceAll(_unicodeReplacement, '')
+      .trim();
   if (t.isEmpty) return true;
   // Any letter, digit, or CJK ideograph means it's real content.
   final hasAlnum = RegExp(r'[A-Za-z0-9À-ɏЀ-ӿ぀-ヿ一-鿿가-힯]').hasMatch(t);
@@ -141,6 +150,10 @@ MessageRenderableKind renderableKindFor(MessageModel m) {
       m.groupActionType > 0 ||
       (m.groupTitle?.isNotEmpty ?? false)) {
     return MessageRenderableKind.service;
+  }
+  if (isInteractiveUpdate(m)) return MessageRenderableKind.unknown;
+  if (m.isInteractiveApp || m.isEmbeddedMedia) {
+    return MessageRenderableKind.normal;
   }
   final hasText = displayText(m) != null;
   if (hasText) return MessageRenderableKind.normal;
@@ -249,6 +262,14 @@ bool isAssociatedSticker(MessageModel m) =>
     (m.associatedMessageGuid?.trim().isNotEmpty ?? false) &&
     m.hasAttachments;
 
+/// Interactive app update rows, such as an iMessage Poll vote/update, point back
+/// at the original app balloon. Until we parse `payload_data`, render the source
+/// balloon and suppress the control/update row itself.
+bool isInteractiveUpdate(MessageModel m) =>
+    (m.associatedMessageType ?? 0) >= 4000 &&
+    (m.associatedMessageGuid?.trim().isNotEmpty ?? false) &&
+    (m.balloonBundleId?.trim().isNotEmpty ?? false);
+
 /// BlueBubbles hides the "kept an audio message" service row when it carries a
 /// subject. The actual voice attachment is the renderable content.
 bool isKeptAudioNotice(MessageModel m) =>
@@ -339,6 +360,8 @@ class ReplyPreview {
 // Message effects (expressiveSendStyleId)
 // ---------------------------------------------------------------------------
 
+enum MessageSendEffect { none, slam, loud, gentle, confetti }
+
 const Map<String, String> _effectLabels = {
   'com.apple.MobileSMS.expressivesend.impact': 'Sent with Slam',
   'com.apple.MobileSMS.expressivesend.loud': 'Sent with Loud',
@@ -353,6 +376,21 @@ const Map<String, String> _effectLabels = {
   'com.apple.messages.effect.CKFireworksEffect': 'Sent with Fireworks',
   'com.apple.messages.effect.CKSparklesEffect': 'Sent with Celebration',
 };
+
+MessageSendEffect sendEffectFor(String? expressiveSendStyleId) {
+  switch (expressiveSendStyleId?.trim()) {
+    case 'com.apple.MobileSMS.expressivesend.impact':
+      return MessageSendEffect.slam;
+    case 'com.apple.MobileSMS.expressivesend.loud':
+      return MessageSendEffect.loud;
+    case 'com.apple.MobileSMS.expressivesend.gentle':
+      return MessageSendEffect.gentle;
+    case 'com.apple.messages.effect.CKConfettiEffect':
+      return MessageSendEffect.confetti;
+    default:
+      return MessageSendEffect.none;
+  }
+}
 
 /// Human label for a send effect, or null when there is no effect. Unknown but
 /// present effect IDs map to a generic label rather than nothing.
@@ -393,11 +431,7 @@ MessageDeliveryState deliveryStateFor(MessageModel m) {
 }
 
 String attachmentPreviewLabel(AttachmentModel attachment) {
-  if (attachment.isVoiceMessage || attachment.isAudio) return '[语音]';
-  if (attachment.isStickerLike || attachment.isImage) return '[图片]';
-  if (attachment.isVideo) return '[视频]';
-  if (attachment.isLinkPreview) return '[链接]';
-  return '[文件]';
+  return '[附件]';
 }
 
 String messagePreviewText(MessageModel message) {
@@ -407,13 +441,13 @@ String messagePreviewText(MessageModel message) {
     return attachmentPreviewLabel(message.attachments.first);
   }
   if (message.isRetracted) return 'Message unsent';
-  return '[文件]';
+  return '[附件]';
 }
 
 String chatListPreviewText(String? raw, {bool hasMessage = false}) {
   final clean = sanitizeMessageText(raw);
   if (clean == null || isControlLikeText(clean)) {
-    return hasMessage ? '[文件]' : '';
+    return hasMessage ? '[附件]' : '';
   }
   final normalized = clean.toLowerCase();
   switch (normalized) {
@@ -423,21 +457,21 @@ String chatListPreviewText(String? raw, {bool hasMessage = false}) {
     case 'obj':
     case 'object':
     case 'null':
-      return '[文件]';
+      return '[附件]';
   }
   switch (clean) {
     case '（贴纸）':
     case '（图片）':
-      return '[图片]';
+      return '[附件]';
     case '（语音）':
     case '（音频）':
-      return '[语音]';
+      return '[附件]';
     case '（视频）':
-      return '[视频]';
+      return '[附件]';
     case '（链接）':
-      return '[链接]';
+      return '[附件]';
     case '（文件）':
-      return '[文件]';
+      return '[附件]';
   }
   return clean;
 }

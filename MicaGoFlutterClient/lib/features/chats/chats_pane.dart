@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/app_controller.dart';
 import '../../core/l10n/app_localizations.dart';
 import '../../core/theme_controller.dart';
+import '../../core/ui/glass_theme_widgets.dart';
 import 'chat_list_screen.dart';
 import 'message_thread_screen.dart';
 import 'models/merged_chat.dart';
@@ -106,8 +107,9 @@ class _ChatsPaneState extends State<ChatsPane> {
 
         final scheme = Theme.of(context).colorScheme;
         final glass = context.watch<ThemeController>().useLiquidGlass;
-        final headerBg = glass ? Colors.white : _chatsAccent1_100(scheme);
-        final pageBg = glass ? Colors.white : _chatsAccent1_50(scheme);
+        final glassBg = liquidGlassPageColor(context);
+        final headerBg = glass ? glassBg : _chatsAccent1_100(scheme);
+        final pageBg = glass ? glassBg : _chatsAccent1_50(scheme);
         final compact = _compactSidebar;
         return Row(
           children: [

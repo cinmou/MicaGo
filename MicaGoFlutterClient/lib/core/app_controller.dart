@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'models/connection_profile.dart';
 import 'models/server_urls.dart';
@@ -63,6 +65,8 @@ class RealtimeRefreshDiagnostics {
 class AppController extends ChangeNotifier {
   final SecureStore store;
   final LocalCacheStore cache = LocalCacheStore();
+  static const _customAvatarPrefix = 'custom_avatar:';
+  final Map<String, String> _customAvatarPaths = {};
 
   /// The realtime client is long-lived; home screen listens to it directly.
   final WebSocketClient ws = WebSocketClient();
@@ -203,12 +207,14 @@ class AppController extends ChangeNotifier {
   bool get bootstrapped => _bootstrapped;
   DateTime? get lastCatchUpSyncAt => _lastCatchUpSyncAt;
   bool get realtimeCatchingUp => _realtimeCatchingUp;
+  String? customAvatarPathFor(String key) => _customAvatarPaths[key];
 
   /// Loads any persisted profile at startup.
   Future<void> bootstrap() async {
     await cache.open();
     await _loadRealtimeDiagnostics();
     await _loadMutedChats();
+    await _loadCustomAvatars();
     _profile = await store.loadProfile();
     if (_profile != null) {
       _activeCandidate = connectionCandidatesForProfile(_profile!).firstOrNull;
@@ -1432,7 +1438,83 @@ class AppController extends ChangeNotifier {
     _profile = null;
     _serverUrls = null;
     _activeCandidate = null;
+    _customAvatarPaths.clear();
     notifyListeners();
+  }
+
+  Future<void> setCustomAvatarFromFile(String key, String sourcePath) async {
+    final normalizedKey = key.trim();
+    if (normalizedKey.isEmpty) return;
+    final source = File(sourcePath);
+    if (!await source.exists()) return;
+    final dir = await getApplicationSupportDirectory();
+    final avatarDir = Directory(p.join(dir.path, 'custom-avatars'));
+    await avatarDir.create(recursive: true);
+    final ext = p.extension(sourcePath).toLowerCase();
+    final safeExt = ext.isEmpty ? '.jpg' : ext;
+    final safeKey = normalizedKey.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final dest = File(p.join(avatarDir.path, '$safeKey$safeExt'));
+    await source.copy(dest.path);
+    final previous = _customAvatarPaths[normalizedKey];
+    _customAvatarPaths[normalizedKey] = dest.path;
+    await cache.writeMetadata('$_customAvatarPrefix$normalizedKey', dest.path);
+    if (previous != null && previous != dest.path) {
+      _deleteFileQuietly(previous);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setCustomAvatarBytes(String key, Uint8List bytes) async {
+    final normalizedKey = key.trim();
+    if (normalizedKey.isEmpty || bytes.isEmpty) return;
+    final dir = await getApplicationSupportDirectory();
+    final avatarDir = Directory(p.join(dir.path, 'custom-avatars'));
+    await avatarDir.create(recursive: true);
+    final safeKey = normalizedKey.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final dest = File(p.join(avatarDir.path, '$safeKey.png'));
+    await dest.writeAsBytes(bytes, flush: true);
+    final previous = _customAvatarPaths[normalizedKey];
+    _customAvatarPaths[normalizedKey] = dest.path;
+    await cache.writeMetadata('$_customAvatarPrefix$normalizedKey', dest.path);
+    if (previous != null && previous != dest.path) {
+      _deleteFileQuietly(previous);
+    }
+    notifyListeners();
+  }
+
+  Future<void> clearCustomAvatar(String key) async {
+    final normalizedKey = key.trim();
+    if (normalizedKey.isEmpty) return;
+    final previous = _customAvatarPaths.remove(normalizedKey);
+    await cache.deleteMetadata('$_customAvatarPrefix$normalizedKey');
+    if (previous != null) {
+      _deleteFileQuietly(previous);
+    }
+    notifyListeners();
+  }
+
+  void _deleteFileQuietly(String path) {
+    unawaited(() async {
+      try {
+        await File(path).delete();
+      } catch (_) {
+        // Best-effort cleanup; stale local avatar files should not block the UI.
+      }
+    }());
+  }
+
+  Future<void> _loadCustomAvatars() async {
+    final rows = await cache.readMetadataWithPrefix(_customAvatarPrefix);
+    _customAvatarPaths
+      ..clear()
+      ..addEntries(
+        rows.entries.map(
+          (entry) => MapEntry(
+            entry.key.substring(_customAvatarPrefix.length),
+            entry.value,
+          ),
+        ),
+      );
   }
 
   void _rebuildApi() {

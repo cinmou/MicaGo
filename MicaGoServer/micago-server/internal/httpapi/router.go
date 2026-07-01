@@ -31,6 +31,7 @@ func NewRouter(h *Handlers, hub *realtime.Hub, auth AuthConfig) http.Handler {
 	mux.Handle("GET /api/chats/{guid}/messages", auth.Wrap(http.HandlerFunc(h.GetChatMessages)))
 	mux.Handle("POST /api/chats/{guid}/send", auth.Wrap(http.HandlerFunc(h.SendText)))
 	mux.Handle("POST /api/chats/{guid}/send-attachment", auth.Wrap(http.HandlerFunc(h.SendAttachment)))
+	mux.Handle("POST /api/chats/{guid}/send-attachments", auth.Wrap(http.HandlerFunc(h.SendAttachments)))
 	mux.Handle("POST /api/chats/{guid}/messages/{messageGuid}/edit", auth.Wrap(http.HandlerFunc(h.EditMessage)))
 	mux.Handle("POST /api/chats/{guid}/messages/{messageGuid}/retract", auth.Wrap(http.HandlerFunc(h.RetractMessage)))
 	mux.Handle("DELETE /api/chats/{guid}/messages/{messageGuid}", auth.Wrap(http.HandlerFunc(h.DeleteMessage)))

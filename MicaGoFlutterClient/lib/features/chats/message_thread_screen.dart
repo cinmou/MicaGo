@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:confetti/confetti.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:provider/provider.dart';
@@ -16,6 +18,7 @@ import '../../core/network/api_client.dart';
 import '../../core/network/websocket_client.dart';
 import 'realtime_event_helpers.dart' as rt;
 import '../../core/theme_controller.dart';
+import '../../core/ui/glass_theme_widgets.dart';
 import '../../core/ui/top_banner.dart';
 import 'package:photo_manager/photo_manager.dart';
 
@@ -23,6 +26,7 @@ import '../contacts/contacts_service.dart';
 import 'attachment_panel.dart';
 import 'attachment_views.dart';
 import 'avatar.dart';
+import 'avatar_crop_screen.dart';
 import 'chat_service.dart';
 import '../settings/message_display_controller.dart';
 import 'diagnostics_store.dart';
@@ -75,8 +79,11 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
   final _scroll = ScrollController();
   final _composer = TextEditingController();
   final Map<String, GlobalKey> _messageKeys = {};
+  late final ConfettiController _confettiController;
+  final Map<String, int> _effectTriggers = {};
   bool _showJumpToBottom = false;
   String? _flashGuid;
+  bool _composerFocused = false;
 
   // C47: the open thread is the single authority on "the user has seen this
   // conversation". It advances the read watermark for every route on open, on
@@ -94,6 +101,9 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
   @override
   void initState() {
     super.initState();
+    _confettiController = ConfettiController(
+      duration: const Duration(milliseconds: 1400),
+    );
     _active = widget.merged.primary;
     _routeGuids = widget.merged.routes.map((r) => r.guid).toSet();
     final app = context.read<AppController>();
@@ -139,6 +149,9 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
       // can leave a stale MediaQuery.viewInsets.bottom on resume — a blank gap
       // above the composer that never collapses until the field is tapped again.
       FocusManager.instance.primaryFocus?.unfocus();
+      if (_composerFocused && mounted) {
+        setState(() => _composerFocused = false);
+      }
     }
     // Resuming with this thread on screen means the user is now looking at it —
     // catch the watermark up so anything that arrived while backgrounded clears,
@@ -149,6 +162,14 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         if (mounted) setState(() {});
       });
     }
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   // C21: switch the active send/view route. The thread is bound to a single
@@ -178,6 +199,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     _controller.dispose();
     _scroll.dispose();
     _composer.dispose();
+    _confettiController.dispose();
     _recorder.dispose();
     final app = context.read<AppController>();
     if (app.isChatActive(_active.guid)) {
@@ -207,6 +229,16 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 320) {
       _controller.loadOlder();
     }
+  }
+
+  void _playMessageEffect(MessageSendEffect effect, String effectKey) {
+    if (effect == MessageSendEffect.none || effectKey.isEmpty) return;
+    if (effect == MessageSendEffect.confetti) {
+      _confettiController.play();
+    }
+    setState(() {
+      _effectTriggers[effectKey] = (_effectTriggers[effectKey] ?? 0) + 1;
+    });
   }
 
   GlobalKey _messageKey(String guid) =>
@@ -280,6 +312,11 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         _attachOpen = false;
       });
     }
+  }
+
+  void _onComposerFocusChanged(bool focused) {
+    if (_composerFocused == focused) return;
+    setState(() => _composerFocused = focused);
   }
 
   bool _closeBottomPanelIfOpen() {
@@ -473,11 +510,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
   }
 
   String _resolveTitle(ContactsService contacts) {
-    if (!_active.isGroup) {
-      final name = contacts.displayNameFor(_active.chatIdentifier);
-      if (name != null && name.isNotEmpty) return name;
-    }
-    return _active.title;
+    return _active.displayTitle(resolveName: contacts.displayNameFor);
   }
 
   /// Server-authoritative service for this thread. The chat row is the
@@ -508,6 +541,9 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     final canSend = _active.canSendText(allowSmsSend: app.allowSmsSend);
 
     final title = _resolveTitle(contacts);
+    final customAvatarPath = app.customAvatarPathFor(
+      widget.merged.localCustomizationKey,
+    );
 
     final bottomOverlay = Column(
       mainAxisSize: MainAxisSize.min,
@@ -547,6 +583,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
                   emojiOpen: _emojiOpen,
                   onEmoji: _toggleEmojiPanel,
                   onInputFocused: _onInputFocused,
+                  onFocusChanged: _onComposerFocusChanged,
                 ),
               ),
         // C21/C24: bottom panels live below the composer, taking the keyboard's
@@ -605,12 +642,41 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
             ),
           ),
         ),
-        Positioned(left: 0, right: 0, bottom: 0, child: bottomOverlay),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: AnimatedPadding(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.only(bottom: _keyboardInset(context)),
+            child: bottomOverlay,
+          ),
+        ),
+        Positioned.fill(
+          child: IgnorePointer(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirection: math.pi / 2,
+                blastDirectionality: BlastDirectionality.directional,
+                emissionFrequency: 0.08,
+                numberOfParticles: 18,
+                maxBlastForce: 14,
+                minBlastForce: 6,
+                gravity: 0.26,
+                shouldLoop: false,
+              ),
+            ),
+          ),
+        ),
       ],
     );
     final glass = _isLiquidGlassTheme(context);
+    final glassBg = liquidGlassPageColor(context);
     final headerBg = glass
-        ? Colors.white
+        ? glassBg
         : _accent1_100(Theme.of(context).colorScheme);
     final themedContent = DecoratedBox(
       decoration: BoxDecoration(color: headerBg),
@@ -630,6 +696,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
           participantHandles: _active.participants,
           isGroup: _active.isGroup,
           radius: 19,
+          localAvatarPath: customAvatarPath,
         ),
         const SizedBox(width: 10),
         Expanded(
@@ -688,6 +755,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
         if (!didPop) _closeBottomPanelIfOpen();
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         appBar: AppBar(
           backgroundColor: headerBg,
           surfaceTintColor: Colors.transparent,
@@ -894,7 +962,13 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     if (_staged.isNotEmpty) inset += 72;
     if (_attachOpen) inset += AttachmentPanel.panelHeightFor(context);
     if (_emojiOpen) inset += EmojiPanel.initialHeightFor(context);
+    inset += _keyboardInset(context);
     return inset;
+  }
+
+  double _keyboardInset(BuildContext context) {
+    if (!_composerFocused || _attachOpen || _emojiOpen) return 0;
+    return MediaQuery.viewInsetsOf(context).bottom;
   }
 
   Widget _buildRow(
@@ -933,6 +1007,7 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
     }
     // Wrap media-bearing bubbles in a RepaintBoundary so image decode/paint
     // doesn't invalidate neighbouring rows during scroll.
+    final effectKey = m.message.dedupeKey;
     final bubble = _MessageBubble(
       message: m.message,
       api: api,
@@ -946,6 +1021,11 @@ class _MessageThreadScreenState extends State<MessageThreadScreen>
       reply: m.reply,
       highlighted: m.message.guid == _flashGuid,
       effectHint: m.effectHint,
+      sendEffect: m.sendEffect,
+      effectTrigger: _effectTriggers[effectKey] ?? 0,
+      onPlayEffect: m.sendEffect == MessageSendEffect.none
+          ? null
+          : () => _playMessageEffect(m.sendEffect, effectKey),
       showStatus: m.showStatus,
       showTimestamp: m.showTimestamp,
       showBubbleTail: m.showBubbleTail,
@@ -1029,7 +1109,7 @@ class _ChatBackground extends StatelessWidget {
     if (path == null || path.isEmpty) {
       if (theme.useLiquidGlass) {
         return DecoratedBox(
-          decoration: const BoxDecoration(color: Colors.white),
+          decoration: BoxDecoration(color: liquidGlassPageColor(context)),
           child: child,
         );
       }
@@ -1100,7 +1180,7 @@ Color _glassBlue(ColorScheme scheme) => const Color(0xFF007AFF);
 Color _glassIncomingBubble(BuildContext context) {
   final dark = Theme.of(context).brightness == Brightness.dark;
   return dark
-      ? Colors.white.withValues(alpha: 0.78)
+      ? const Color(0xFF1C1C1E).withValues(alpha: 0.84)
       : Colors.white.withValues(alpha: 0.88);
 }
 
@@ -1372,6 +1452,95 @@ Future<void> _runMessageAction(
   }
 }
 
+class _EffectBubble extends StatefulWidget {
+  final MessageSendEffect effect;
+  final int trigger;
+  final Widget child;
+
+  const _EffectBubble({
+    required this.effect,
+    required this.trigger,
+    required this.child,
+  });
+
+  @override
+  State<_EffectBubble> createState() => _EffectBubbleState();
+}
+
+class _EffectBubbleState extends State<_EffectBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  bool _hasPlayed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 560),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _EffectBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.trigger != oldWidget.trigger &&
+        widget.effect != MessageSendEffect.none &&
+        widget.effect != MessageSendEffect.confetti) {
+      _hasPlayed = true;
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_hasPlayed ||
+        widget.effect == MessageSendEffect.none ||
+        widget.effect == MessageSendEffect.confetti) {
+      return widget.child;
+    }
+    return AnimatedBuilder(
+      animation: _controller,
+      child: widget.child,
+      builder: (context, child) {
+        final t = _controller.value.clamp(0.0, 1.0);
+        var scale = 1.0;
+        var dx = 0.0;
+        var opacity = 1.0;
+        switch (widget.effect) {
+          case MessageSendEffect.slam:
+            final settle = Curves.easeOutBack.transform(t);
+            scale = 1.18 - (0.18 * settle);
+            dx = math.sin(t * math.pi * 6) * (1 - t) * 4;
+          case MessageSendEffect.loud:
+            scale = 1 + math.sin(t * math.pi) * 0.18;
+            dx = math.sin(t * math.pi * 10) * (1 - t) * 3;
+          case MessageSendEffect.gentle:
+            final soft = Curves.easeOutCubic.transform(t);
+            scale = 0.94 + (0.06 * soft);
+            opacity = 0.72 + (0.28 * soft);
+          case MessageSendEffect.none:
+          case MessageSendEffect.confetti:
+            break;
+        }
+        return Opacity(
+          opacity: opacity,
+          child: Transform.translate(
+            offset: Offset(dx, 0),
+            child: Transform.scale(scale: scale, child: child),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _DateSeparator extends StatelessWidget {
   final String label;
   const _DateSeparator({required this.label});
@@ -1431,6 +1600,9 @@ class _MessageBubble extends StatefulWidget {
   final ReplyPreview? reply;
   final bool highlighted;
   final String? effectHint;
+  final MessageSendEffect sendEffect;
+  final int effectTrigger;
+  final VoidCallback? onPlayEffect;
   final VoidCallback onRetry;
   final ValueChanged<String?> onReplyTap;
   final void Function(Offset globalPosition) onActions;
@@ -1453,6 +1625,9 @@ class _MessageBubble extends StatefulWidget {
     this.reply,
     required this.highlighted,
     this.effectHint,
+    required this.sendEffect,
+    required this.effectTrigger,
+    this.onPlayEffect,
     required this.onRetry,
     required this.onReplyTap,
     required this.onActions,
@@ -1511,6 +1686,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
         widget.body == null &&
         message.attachments.isNotEmpty &&
         message.attachments.every((a) => a.isStickerLike);
+    final interactiveOnly =
+        (message.isInteractiveApp || message.isEmbeddedMedia) &&
+        widget.body == null &&
+        !hasMedia;
     // C37: handwriting / Digital Touch ship their rendered media as the
     // attachment — show it with no chat bubble behind it (like a sticker).
     final embeddedMedia =
@@ -1520,6 +1699,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
         attachmentOnly ||
         cleanMediaOnly ||
         stickerOnly ||
+        interactiveOnly ||
         embeddedMedia;
     final bubbleColor = stripBubble
         ? Colors.transparent
@@ -1527,7 +1707,11 @@ class _MessageBubbleState extends State<_MessageBubble> {
         ? (fromMe ? _glassBlue(scheme) : _glassIncomingBubble(context))
         : (fromMe ? _accent1_600(scheme) : _accent2_600(scheme));
     final textColor = liquidGlass
-        ? (fromMe ? Colors.white : const Color(0xFF111827))
+        ? (fromMe
+              ? Colors.white
+              : Theme.of(context).brightness == Brightness.dark
+              ? const Color(0xFFF5F5F7)
+              : const Color(0xFF111827))
         : (fromMe ? scheme.onPrimary : scheme.onSecondary);
 
     final messageImages = message.attachments
@@ -1572,6 +1756,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
           ),
     ];
     final textWidgets = <Widget>[
+      if (interactiveOnly) _InteractiveAppCard(message: message),
       if (bodyText != null)
         _LinkedMessageText(
           text: bodyText,
@@ -1583,23 +1768,30 @@ class _MessageBubbleState extends State<_MessageBubble> {
       if (effect != null)
         Padding(
           padding: const EdgeInsets.only(top: 2),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.auto_awesome,
-                size: 11,
-                color: scheme.onSurfaceVariant,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onPlayEffect,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.auto_awesome,
+                    size: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    effect,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 3),
-              Text(
-                effect,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
     ];
@@ -1705,6 +1897,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
             ),
           );
 
+    final effectedBubble = _EffectBubble(
+      effect: widget.sendEffect,
+      trigger: widget.effectTrigger,
+      child: bubbleWithOverlays,
+    );
+
     final messageColumn = Column(
       crossAxisAlignment: fromMe
           ? CrossAxisAlignment.end
@@ -1732,7 +1930,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
             fromMe: fromMe,
             onTap: () => widget.onReplyTap(reply.targetGuid),
           ),
-        bubbleWithOverlays,
+        effectedBubble,
         _Footer(
           message: message,
           showStatus: widget.showStatus,
@@ -1893,6 +2091,96 @@ class _ReactionChips extends StatelessWidget {
       child: Text(
         byHandle.values.map((k) => tapbackEmoji(k)).join(' '),
         style: const TextStyle(fontSize: 11),
+      ),
+    );
+  }
+}
+
+class _InteractiveAppCard extends StatelessWidget {
+  final MessageModel message;
+  const _InteractiveAppCard({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isPoll = message.isApplePoll;
+    final isDigitalTouch = message.isDigitalTouch;
+    final isHandwritten = message.isHandwritten;
+    final title = isPoll
+        ? 'iMessage Poll'
+        : isDigitalTouch
+        ? 'Digital Touch Message'
+        : isHandwritten
+        ? 'Handwritten Message'
+        : 'Unsupported iMessage App';
+    final subtitle = isPoll
+        ? 'Poll details are unavailable'
+        : isDigitalTouch
+        ? 'Digital Touch media'
+        : isHandwritten
+        ? 'Handwritten media'
+        : message.payloadDataPresent
+        ? 'Interactive message'
+        : 'Unsupported interactive message';
+    final icon = isPoll
+        ? Icons.how_to_vote_outlined
+        : isDigitalTouch
+        ? Icons.gesture_outlined
+        : isHandwritten
+        ? Icons.draw_outlined
+        : Icons.apps_outlined;
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+      ),
+      child: Material(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: 0.14),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: scheme.primary, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2637,6 +2925,7 @@ class _Composer extends StatefulWidget {
   final bool emojiOpen;
   final VoidCallback onEmoji;
   final VoidCallback onInputFocused;
+  final ValueChanged<bool> onFocusChanged;
 
   const _Composer({
     required this.controller,
@@ -2651,6 +2940,7 @@ class _Composer extends StatefulWidget {
     required this.emojiOpen,
     required this.onEmoji,
     required this.onInputFocused,
+    required this.onFocusChanged,
   });
 
   @override
@@ -2673,6 +2963,7 @@ class _ComposerState extends State<_Composer> {
     // Rebuild on focus change so the voice↔emoji swap animates; tapping into the
     // field (keyboard returns) closes the bottom emoji panel.
     _focus.addListener(() {
+      widget.onFocusChanged(_focus.hasFocus);
       if (_focus.hasFocus) widget.onInputFocused();
       setState(() {});
     });
@@ -3533,6 +3824,8 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     final scheme = Theme.of(context).colorScheme;
     final app = context.watch<AppController>();
     final api = widget.api;
+    final avatarKey = widget.merged.localCustomizationKey;
+    final customAvatarPath = app.customAvatarPathFor(avatarKey);
     final routeGuids = widget.merged.routes.map((r) => r.guid).toList();
     final muted = app.areChatsMuted(routeGuids);
     final allAttachments = [
@@ -3563,8 +3856,9 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
     final linkUrls = linkSet.take(4).toList(growable: false);
     final insets = MediaQuery.of(context).viewInsets.bottom;
     final glass = _isLiquidGlassTheme(context);
-    final headerBg = glass ? Colors.white : _accent1_100(scheme);
-    final pageBg = glass ? Colors.white : _accent1_50(scheme);
+    final glassBg = liquidGlassPageColor(context);
+    final headerBg = glass ? glassBg : _accent1_100(scheme);
+    final pageBg = glass ? glassBg : _accent1_50(scheme);
     final isGroup = widget.active.isGroup;
     final detailSubtitle = isGroup
         ? 'iMessage 群聊'
@@ -3609,6 +3903,7 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                         participantHandles: widget.active.participants,
                         isGroup: widget.active.isGroup,
                         radius: 22,
+                        localAvatarPath: customAvatarPath,
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -3639,6 +3934,28 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
                           TopBanner.show(context, 'Refreshing conversation');
                         },
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: () => _pickCustomAvatar(avatarKey),
+                        icon: const Icon(Icons.photo_library_outlined),
+                        label: Text(
+                          customAvatarPath == null
+                              ? 'Set local avatar'
+                              : 'Change local avatar',
+                        ),
+                      ),
+                      if (customAvatarPath != null)
+                        OutlinedButton.icon(
+                          onPressed: () => _clearCustomAvatar(avatarKey),
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('Remove'),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -3825,6 +4142,43 @@ class _ThreadDetailsSheetState extends State<_ThreadDetailsSheet> {
         },
       ),
     );
+  }
+
+  Future<void> _pickCustomAvatar(String avatarKey) async {
+    final image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 92,
+    );
+    if (image == null) return;
+    if (!mounted) return;
+    final cropped = await AvatarCropScreen.open(context, image.path);
+    if (cropped == null) return;
+    if (!mounted) return;
+    try {
+      await context.read<AppController>().setCustomAvatarBytes(
+        avatarKey,
+        cropped,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Local avatar updated')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not use that image')),
+        );
+    }
+  }
+
+  Future<void> _clearCustomAvatar(String avatarKey) async {
+    await context.read<AppController>().clearCustomAvatar(avatarKey);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(content: Text('Local avatar removed')));
   }
 }
 
@@ -4054,8 +4408,12 @@ class _DetailsMediaTileState extends State<_DetailsMediaTile> {
   late final Future<Uint8List?> _future = _loadPreview();
 
   Future<Uint8List?> _loadPreview() async {
-    if (!widget.attachment.canRenderInlineImage) return null;
-    final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
+    if (!widget.attachment.canRenderInlineImage && !widget.attachment.isVideo) {
+      return null;
+    }
+    final cacheKey = widget.attachment.isVideo
+        ? 'video:${widget.attachment.previewUrl ?? widget.attachment.guid}'
+        : widget.attachment.previewUrl ?? widget.attachment.guid;
     final cached = imageByteCache[cacheKey];
     if (cached != null) return cached;
     final bytes = await widget.api.getAttachmentPreviewBytes(widget.attachment);
@@ -4092,56 +4450,88 @@ class _DetailsMediaTileState extends State<_DetailsMediaTile> {
           api: widget.api,
           attachment: widget.attachment,
         ),
-        child: widget.attachment.isVideo
-            ? Stack(
-                fit: StackFit.expand,
-                children: [
+        child: FutureBuilder<Uint8List?>(
+          future: _future,
+          builder: (context, snap) {
+            final bytes = snap.data;
+            if (snap.connectionState != ConnectionState.done) {
+              return const Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              );
+            }
+            if (snap.hasError || bytes == null || bytes.isEmpty) {
+              return _DetailsMediaFallback(attachment: widget.attachment);
+            }
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.memory(
+                  bytes,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  cacheWidth: 420,
+                ),
+                if (widget.attachment.isVideo)
                   Center(
-                    child: Icon(
-                      Icons.play_circle_fill,
-                      size: 42,
-                      color: scheme.primary,
-                    ),
-                  ),
-                  Positioned(
-                    left: 8,
-                    right: 8,
-                    bottom: 8,
-                    child: Text(
-                      widget.attachment.displayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+                    child: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.38),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.play_arrow_rounded,
+                        size: 30,
+                        color: Colors.white,
                       ),
                     ),
                   ),
-                ],
-              )
-            : FutureBuilder<Uint8List?>(
-                future: _future,
-                builder: (context, snap) {
-                  final bytes = snap.data;
-                  if (snap.connectionState != ConnectionState.done) {
-                    return const Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    );
-                  }
-                  if (snap.hasError || bytes == null || bytes.isEmpty) {
-                    return Icon(
-                      Icons.broken_image_outlined,
-                      color: scheme.onSurfaceVariant,
-                    );
-                  }
-                  return Image.memory(
-                    bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    cacheWidth: 420,
-                  );
-                },
-              ),
+              ],
+            );
+          },
+        ),
       ),
+    );
+  }
+}
+
+class _DetailsMediaFallback extends StatelessWidget {
+  final AttachmentModel attachment;
+  const _DetailsMediaFallback({required this.attachment});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Center(
+          child: Icon(
+            attachment.isVideo
+                ? Icons.play_circle_fill
+                : Icons.broken_image_outlined,
+            size: attachment.isVideo ? 42 : 28,
+            color: attachment.isVideo
+                ? scheme.primary
+                : scheme.onSurfaceVariant,
+          ),
+        ),
+        if (attachment.isVideo)
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 8,
+            child: Text(
+              attachment.displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+      ],
     );
   }
 }

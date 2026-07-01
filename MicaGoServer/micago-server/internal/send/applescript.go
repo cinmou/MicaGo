@@ -45,10 +45,43 @@ func (s AppleScriptSender) SendAttachment(ctx context.Context, chatGUID, filePat
 	return nil
 }
 
+// SendAttachments sends several local files in one Messages AppleScript call.
+// Messages accepts an AppleScript list of POSIX file references and groups the
+// media into one outgoing message when the service supports it.
+func (s AppleScriptSender) SendAttachments(ctx context.Context, chatGUID string, filePaths []string) error {
+	if len(filePaths) == 0 {
+		return nil
+	}
+	if len(filePaths) == 1 {
+		return s.SendAttachment(ctx, chatGUID, filePaths[0])
+	}
+	script := BuildSendAttachmentsScript(chatGUID, filePaths)
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
 func BuildSendAttachmentScript(chatGUID, filePath string) string {
 	return fmt.Sprintf(`tell application "Messages"
   send (POSIX file "%s") to chat id "%s"
 end tell`, escapeAppleScriptString(filePath), escapeAppleScriptString(chatGUID))
+}
+
+func BuildSendAttachmentsScript(chatGUID string, filePaths []string) string {
+	parts := make([]string, 0, len(filePaths))
+	for _, path := range filePaths {
+		parts = append(parts, fmt.Sprintf(`POSIX file "%s"`, escapeAppleScriptString(path)))
+	}
+	return fmt.Sprintf(`tell application "Messages"
+  send {%s} to chat id "%s"
+end tell`, strings.Join(parts, ", "), escapeAppleScriptString(chatGUID))
 }
 
 func escapeAppleScriptString(value string) string {

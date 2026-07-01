@@ -370,13 +370,163 @@ class _LocationAttachmentState extends State<_LocationAttachment> {
   }
 }
 
-/// C24: a video attachment card — tapping opens the full-screen player. We keep
-/// it a card (not an inline autoplaying player) so the scrolling list stays
-/// light; the player is only created on demand in the viewer.
-class _VideoAttachment extends StatelessWidget {
+/// C24: a video attachment preview — same inline thumbnail treatment as images,
+/// with a play affordance over the server-provided Quick Look preview. The video
+/// player is still only created on demand in the full-screen viewer.
+class _VideoAttachment extends StatefulWidget {
   final ApiClient api;
   final AttachmentModel attachment;
   const _VideoAttachment({required this.api, required this.attachment});
+
+  @override
+  State<_VideoAttachment> createState() => _VideoAttachmentState();
+}
+
+class _VideoAttachmentState extends State<_VideoAttachment> {
+  Uint8List? _bytes;
+  Future<Uint8List>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    final cacheKey = _videoPreviewCacheKey(widget.attachment);
+    final cached = imageByteCache[cacheKey];
+    if (cached != null) {
+      _bytes = cached;
+    } else {
+      _future = _loadBytes();
+    }
+  }
+
+  Future<Uint8List> _loadBytes() async {
+    final cacheKey = _videoPreviewCacheKey(widget.attachment);
+    final cached = imageByteCache[cacheKey];
+    if (cached != null) return cached;
+    final bytes = await widget.api.getAttachmentPreviewBytes(widget.attachment);
+    imageByteCache[cacheKey] = bytes;
+    return bytes;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes;
+    if (bytes != null && bytes.isNotEmpty) return _preview(context, bytes);
+    return FutureBuilder<Uint8List>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const SizedBox(
+            height: 160,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final bytes = snap.data;
+        if (snap.hasError || bytes == null || bytes.isEmpty) {
+          return _VideoFallbackCard(
+            api: widget.api,
+            attachment: widget.attachment,
+          );
+        }
+        return _preview(context, bytes);
+      },
+    );
+  }
+
+  Widget _preview(BuildContext context, Uint8List bytes) {
+    final boxMaxWidth = MediaQuery.sizeOf(context).width * 0.82;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final decodeWidth = (boxMaxWidth * dpr).round().clamp(200, 900);
+    return GestureDetector(
+      onTap: () => FullscreenVideo.open(
+        context,
+        api: widget.api,
+        attachment: widget.attachment,
+      ),
+      onLongPress: () => showAttachmentActions(
+        context,
+        api: widget.api,
+        attachment: widget.attachment,
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: 340,
+          maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Image.memory(
+                bytes,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                cacheWidth: decodeWidth,
+                filterQuality: FilterQuality.low,
+                errorBuilder: (_, _, _) => _VideoFallbackCard(
+                  api: widget.api,
+                  attachment: widget.attachment,
+                ),
+              ),
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.38),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow_rounded,
+                  color: Colors.white,
+                  size: 38,
+                ),
+              ),
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 8,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.42),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      child: Text(
+                        widget.attachment.totalBytes > 0
+                            ? _formatSize(widget.attachment.totalBytes)
+                            : 'Video',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _videoPreviewCacheKey(AttachmentModel attachment) =>
+    'video:${attachment.previewUrl ?? attachment.guid}';
+
+class _VideoFallbackCard extends StatelessWidget {
+  final ApiClient api;
+  final AttachmentModel attachment;
+  const _VideoFallbackCard({required this.api, required this.attachment});
 
   @override
   Widget build(BuildContext context) {
@@ -435,8 +585,23 @@ class _StickerAttachment extends StatefulWidget {
 }
 
 class _StickerAttachmentState extends State<_StickerAttachment> {
-  late final Future<Uint8List> _future = _load();
+  // Use already-cached bytes synchronously so scrolling back doesn't flash a
+  // spinner before the sticker reappears (C51).
+  Uint8List? _bytes;
+  Future<Uint8List>? _future;
   bool _visible = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
+    final cached = imageByteCache[cacheKey];
+    if (cached != null) {
+      _bytes = cached;
+    } else {
+      _future = _load();
+    }
+  }
 
   Future<Uint8List> _load() async {
     final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
@@ -449,6 +614,10 @@ class _StickerAttachmentState extends State<_StickerAttachment> {
 
   @override
   Widget build(BuildContext context) {
+    final bytes = _bytes;
+    if (bytes != null) {
+      return bytes.isEmpty ? const _StickerPlaceholder() : _sticker(bytes);
+    }
     return FutureBuilder<Uint8List>(
       future: _future,
       builder: (context, snap) {
@@ -462,30 +631,34 @@ class _StickerAttachmentState extends State<_StickerAttachment> {
         if (snap.hasError || snap.data == null || snap.data!.isEmpty) {
           return const _StickerPlaceholder();
         }
-        return GestureDetector(
-          onTap: () => setState(() => _visible = !_visible),
-          onLongPress: () => showAttachmentActions(
-            context,
-            api: widget.api,
-            attachment: widget.attachment,
-          ),
-          child: AnimatedOpacity(
-            duration: const Duration(milliseconds: 150),
-            opacity: _visible ? 1 : 0.25,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 160, maxWidth: 160),
-              child: Image.memory(
-                snap.data!,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                cacheWidth: 320,
-                filterQuality: FilterQuality.none,
-                errorBuilder: (_, _, _) => const _StickerPlaceholder(),
-              ),
-            ),
-          ),
-        );
+        return _sticker(snap.data!);
       },
+    );
+  }
+
+  Widget _sticker(Uint8List bytes) {
+    return GestureDetector(
+      onTap: () => setState(() => _visible = !_visible),
+      onLongPress: () => showAttachmentActions(
+        context,
+        api: widget.api,
+        attachment: widget.attachment,
+      ),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 150),
+        opacity: _visible ? 1 : 0.25,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 160, maxWidth: 160),
+          child: Image.memory(
+            bytes,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            cacheWidth: 320,
+            filterQuality: FilterQuality.none,
+            errorBuilder: (_, _, _) => const _StickerPlaceholder(),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -598,12 +771,21 @@ class _ImageAttachment extends StatefulWidget {
 }
 
 class _ImageAttachmentState extends State<_ImageAttachment> {
-  late Future<Uint8List> _future;
+  // Already-cached bytes are used synchronously so scrolling an image back into
+  // view renders it immediately instead of flashing a spinner frame (C51).
+  Uint8List? _bytes;
+  Future<Uint8List>? _future;
 
   @override
   void initState() {
     super.initState();
-    _future = _loadBytes();
+    final cacheKey = widget.attachment.previewUrl ?? widget.attachment.guid;
+    final cached = imageByteCache[cacheKey];
+    if (cached != null) {
+      _bytes = cached;
+    } else {
+      _future = _loadBytes();
+    }
   }
 
   Future<Uint8List> _loadBytes() async {
@@ -617,6 +799,8 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
 
   @override
   Widget build(BuildContext context) {
+    final bytes = _bytes;
+    if (bytes != null) return _image(context, bytes);
     return FutureBuilder<Uint8List>(
       future: _future,
       builder: (context, snap) {
@@ -632,49 +816,56 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
             attachment: widget.attachment,
           );
         }
-        final bytes = snap.data!;
-        return GestureDetector(
-          onTap: () => MediaGalleryViewer.open(
-            context,
-            api: widget.api,
-            images: widget.siblings,
-            initialIndex: widget.index,
-          ),
-          onLongPress: () => showAttachmentActions(
-            context,
-            api: widget.api,
-            attachment: widget.attachment,
-          ),
-          // Bounded inline thumbnail: cap height and downscale the decode
-          // (cacheWidth) so a large photo never decodes at full resolution in
-          // the scrolling list. Full-size loading happens in the media viewer.
-          child: ConstrainedBox(
-            constraints: widget.attachment.isSticker
-                ? const BoxConstraints(maxHeight: 180, maxWidth: 180)
-                : BoxConstraints(
-                    maxHeight: 340,
-                    maxWidth: MediaQuery.sizeOf(context).width * 0.82,
-                  ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(
-                widget.attachment.isSticker ? 4 : 12,
-              ),
-              child: Image.memory(
-                bytes,
-                fit: widget.attachment.isSticker
-                    ? BoxFit.contain
-                    : BoxFit.cover,
-                gaplessPlayback: true,
-                cacheWidth: 900,
-                errorBuilder: (_, _, _) => _FileAttachment(
-                  api: widget.api,
-                  attachment: widget.attachment,
-                ),
-              ),
-            ),
-          ),
-        );
+        return _image(context, snap.data!);
       },
+    );
+  }
+
+  Widget _image(BuildContext context, Uint8List bytes) {
+    // Decode at the size actually shown (display width × pixel ratio), capped at
+    // the previous fixed 900px so it only ever decodes *smaller* — less decode
+    // work and less memory per image when scrolling (C51).
+    final isSticker = widget.attachment.isSticker;
+    final boxMaxWidth = isSticker
+        ? 180.0
+        : MediaQuery.sizeOf(context).width * 0.82;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final decodeWidth = (boxMaxWidth * dpr).round().clamp(200, 900);
+    return GestureDetector(
+      onTap: () => MediaGalleryViewer.open(
+        context,
+        api: widget.api,
+        images: widget.siblings,
+        initialIndex: widget.index,
+      ),
+      onLongPress: () => showAttachmentActions(
+        context,
+        api: widget.api,
+        attachment: widget.attachment,
+      ),
+      // Bounded inline thumbnail: cap height and downscale the decode
+      // (cacheWidth) so a large photo never decodes at full resolution in
+      // the scrolling list. Full-size loading happens in the media viewer.
+      child: ConstrainedBox(
+        constraints: isSticker
+            ? const BoxConstraints(maxHeight: 180, maxWidth: 180)
+            : BoxConstraints(
+                maxHeight: 340,
+                maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+              ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(isSticker ? 4 : 12),
+          child: Image.memory(
+            bytes,
+            fit: isSticker ? BoxFit.contain : BoxFit.cover,
+            gaplessPlayback: true,
+            cacheWidth: decodeWidth,
+            filterQuality: FilterQuality.low,
+            errorBuilder: (_, _, _) =>
+                _FileAttachment(api: widget.api, attachment: widget.attachment),
+          ),
+        ),
+      ),
     );
   }
 }

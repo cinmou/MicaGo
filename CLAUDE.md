@@ -49,6 +49,22 @@ Three components:
   guides (android-client-connection / remote-access-cloudflare / notifications-setup /
   manual-test-flow) are still English-only — the localized index marks them "(英文)".
 
+## Scroll performance in image/file-heavy threads (C51)
+
+- **`imageByteCache` was an unbounded global `Map<String,Uint8List>`** — it held the
+  raw encoded bytes of every image ever scrolled past, on top of Flutter's decoded
+  cache, so a media-heavy thread grew memory without limit and the GC pressure
+  showed as scroll jank. Now a **bounded LRU by total bytes** (`LruByteCache`,
+  48 MB, `media_viewer.dart`) with the same `cache[key]`/`cache[key]=` interface,
+  so call sites are unchanged.
+- **Decode at the size shown, not a fixed 900 px.** `_ImageAttachment` now sets
+  `cacheWidth = (displayWidth × devicePixelRatio)` clamped to ≤900 (only ever
+  *smaller*), plus `filterQuality: low` — less decode CPU + memory per thumbnail.
+- **No spinner flash on scroll-back.** `_ImageAttachment`/`_StickerAttachment` read
+  already-cached bytes **synchronously** in `initState` and render immediately,
+  instead of going through a `FutureBuilder` loading frame each time a row recycles.
+- Media-bearing rows already get a `RepaintBoundary` (`_buildRow`). Client-only.
+
 ## Duplicated attachments (real root cause) + thread layout + QR (C49/C50)
 
 - **"Every photo / file / sticker / voice clip shows up twice — only *old*

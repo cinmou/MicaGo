@@ -16,7 +16,15 @@ SELECT
   c.chat_identifier,
   c.service_name,
   c.display_name,
-  c.is_archived
+  c.is_archived,
+  c.style,
+  (SELECT COUNT(*) FROM chat_handle_join chj WHERE chj.chat_id = c.ROWID) AS participant_count,
+  COALESCE((
+    SELECT group_concat(h.id, char(31))
+    FROM chat_handle_join chj
+    JOIN handle h ON h.ROWID = chj.handle_id
+    WHERE chj.chat_id = c.ROWID
+  ), '') AS participants
 FROM chat AS c
 ORDER BY c.ROWID DESC;
 `
@@ -326,15 +334,20 @@ func (q *Queries) ListSyncChats(ctx context.Context) ([]SyncChatRow, error) {
 	var chats []SyncChatRow
 	for rows.Next() {
 		var row SyncChatRow
+		var participants string
 		if err := rows.Scan(
 			&row.GUID,
 			&row.ChatIdentifier,
 			&row.ServiceName,
 			&row.DisplayName,
 			&row.IsArchived,
+			&row.Style,
+			&row.ParticipantCount,
+			&participants,
 		); err != nil {
 			return nil, err
 		}
+		row.Participants = splitParticipantHandles(participants)
 		chats = append(chats, row)
 	}
 
@@ -343,6 +356,20 @@ func (q *Queries) ListSyncChats(ctx context.Context) ([]SyncChatRow, error) {
 	}
 
 	return chats, nil
+}
+
+func splitParticipantHandles(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "\x1f")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (q *Queries) ListSyncRecentMessages(ctx context.Context, limit int) ([]SyncMessageRow, error) {
@@ -523,13 +550,13 @@ LIMIT ?;`
 	for rows.Next() {
 		// Base scan targets.
 		var (
-			chatGUID                        *string
-			guid                            string
-			text                            *string
-			attributedBody                  []byte
-			subject, service                *string
-			dateRaw                         int64
-			dateReadRaw, dateDeliveredRaw   *int64
+			chatGUID                      *string
+			guid                          string
+			text                          *string
+			attributedBody                []byte
+			subject, service              *string
+			dateRaw                       int64
+			dateReadRaw, dateDeliveredRaw *int64
 			// NULL-safe: chat.db stores these flags as NULL on many rows.
 			isFromMe, isRead, isDelivered   sql.NullInt64
 			hasAttachments                  sql.NullInt64

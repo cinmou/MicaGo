@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_go/features/chats/message_display.dart';
+import 'package:mica_go/features/chats/message_render.dart';
 import 'package:mica_go/features/chats/models/message_model.dart';
 import 'package:mica_go/features/chats/store/thread_presentation.dart';
 
@@ -29,6 +30,8 @@ MessageModel _m({
   String? renderRecommendation,
   String? unsupportedReason,
   int itemType = 0,
+  String? balloonBundleId,
+  bool payloadDataPresent = false,
 }) => MessageModel(
   guid: guid,
   text: text,
@@ -53,6 +56,8 @@ MessageModel _m({
   renderRecommendation: renderRecommendation,
   unsupportedReason: unsupportedReason,
   itemType: itemType,
+  balloonBundleId: balloonBundleId,
+  payloadDataPresent: payloadDataPresent,
   localState: LocalSendState.confirmed,
 );
 
@@ -135,6 +140,34 @@ void main() {
     final msgs = items.whereType<MessageViewItem>().toList();
     expect(msgs.length, 1);
     expect(msgs.single.message.guid, 'voice');
+  });
+
+  test('interactive update rows are hidden behind the source app balloon', () {
+    const pollsBundle =
+        'com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:com.apple.messages.Polls';
+    final items = _build([
+      _m(
+        guid: 'poll-source',
+        text: '�',
+        dateCreated: 1000,
+        balloonBundleId: pollsBundle,
+        payloadDataPresent: true,
+      ),
+      _m(
+        guid: 'poll-update',
+        text: ' ',
+        dateCreated: 1100,
+        associatedMessageType: 4000,
+        associatedMessageGuid: 'poll-source',
+        balloonBundleId: pollsBundle,
+        payloadDataPresent: true,
+      ),
+    ]);
+
+    final rows = items.whereType<MessageViewItem>().toList();
+    expect(rows.length, 1);
+    expect(rows.single.message.guid, 'poll-source');
+    expect(rows.single.kind, MessageRenderableKind.normal);
   });
 
   test('precomputes body + sender label (group, incoming) via resolver', () {
@@ -392,7 +425,9 @@ void main() {
         dateCreated: 1,
       ),
     ], prefs: const MessageDisplayPrefs(showEffectHints: true));
-    expect(on.whereType<MessageViewItem>().single.effectHint, 'Sent with Slam');
+    final enabled = on.whereType<MessageViewItem>().single;
+    expect(enabled.effectHint, 'Sent with Slam');
+    expect(enabled.sendEffect, MessageSendEffect.slam);
 
     final off = _build([
       _m(
@@ -402,7 +437,9 @@ void main() {
         dateCreated: 1,
       ),
     ], prefs: const MessageDisplayPrefs(showEffectHints: false));
-    expect(off.whereType<MessageViewItem>().single.effectHint, isNull);
+    final disabled = off.whereType<MessageViewItem>().single;
+    expect(disabled.effectHint, isNull);
+    expect(disabled.sendEffect, MessageSendEffect.slam);
   });
 
   test(

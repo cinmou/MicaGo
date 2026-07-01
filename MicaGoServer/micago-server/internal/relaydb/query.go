@@ -52,6 +52,9 @@ func (db *DB) ListChats(ctx context.Context, limit, offset int, withArchived boo
 	// flagged and (by default) hidden from the normal client list.
 	query := `
 SELECT c.guid, c.chat_identifier, c.service_name, c.display_name, c.is_archived,
+  c.style,
+  COALESCE(c.participant_count, 0) AS participant_count,
+  COALESCE(c.participants, '') AS participants,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid) AS total,
   (SELECT COUNT(*) FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0) AS renderable,
   (SELECT m.date_created FROM messages m WHERE m.chat_guid = c.guid AND COALESCE(m.is_debug_only, 0) = 0 AND COALESCE(m.is_reaction, 0) = 0 ORDER BY m.date_created DESC, m.source_rowid DESC LIMIT 1) AS latest_at,
@@ -87,12 +90,18 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		var latestService *string
 		var latestFromMe sql.NullInt64
 		var imessageCount int64
+		var style sql.NullInt64
+		var participantCount int64
+		var participants string
 		if err := rows.Scan(
 			&chat.GUID,
 			&chat.ChatIdentifier,
 			&chat.ServiceName,
 			&chat.DisplayName,
 			&chat.IsArchived,
+			&style,
+			&participantCount,
+			&participants,
 			&total,
 			&renderable,
 			&latestAt,
@@ -104,6 +113,8 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		); err != nil {
 			return nil, err
 		}
+		chat.IsGroup = isGroupChat(chat.GUID, style, participantCount)
+		chat.Participants = splitParticipants(participants)
 		chat.HasRenderableMessages = renderable > 0
 		// Drives the client's watermark-derived unread dot (a chat is unread when
 		// its latest renderable message is newer than the client last saw AND not
@@ -165,6 +176,30 @@ ORDER BY COALESCE(latest_at, 0) DESC, c.updated_at DESC;
 		end = len(filtered)
 	}
 	return filtered[offset:end], nil
+}
+
+func isGroupChat(guid string, style sql.NullInt64, participantCount int64) bool {
+	if participantCount > 1 {
+		return true
+	}
+	if style.Valid && style.Int64 == 43 {
+		return true
+	}
+	return strings.Contains(guid, ";+;")
+}
+
+func splitParticipants(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "\x1f")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (db *DB) attachmentPreviewLabel(ctx context.Context, messageGUID string) (string, error) {

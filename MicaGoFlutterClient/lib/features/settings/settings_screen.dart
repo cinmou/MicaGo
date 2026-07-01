@@ -14,6 +14,7 @@ import '../../core/l10n/app_localizations.dart';
 import '../../core/models/connection_profile.dart';
 import '../../core/network/connection_candidate.dart';
 import '../../core/theme_controller.dart';
+import '../../core/ui/glass_theme_widgets.dart';
 import '../../core/ui/top_banner.dart';
 import '../contacts/people_screen.dart';
 import '../debug/debug_log_panel.dart';
@@ -37,12 +38,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final theme = context.watch<ThemeController>();
     final strings = MicaLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
+    final glassBg = liquidGlassPageColor(context);
     final headerBg = theme.useLiquidGlass
-        ? Colors.white
+        ? glassBg
         : _settingsAccent1_100(scheme);
-    final pageBg = theme.useLiquidGlass
-        ? Colors.white
-        : _settingsAccent1_50(scheme);
+    final pageBg = theme.useLiquidGlass ? glassBg : _settingsAccent1_50(scheme);
 
     return Scaffold(
       appBar: AppBar(
@@ -791,8 +791,9 @@ class _SettingsSubPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final glass = context.watch<ThemeController>().useLiquidGlass;
-    final headerBg = glass ? Colors.white : _settingsAccent1_100(scheme);
-    final pageBg = glass ? Colors.white : _settingsAccent1_50(scheme);
+    final glassBg = liquidGlassPageColor(context);
+    final headerBg = glass ? glassBg : _settingsAccent1_100(scheme);
+    final pageBg = glass ? glassBg : _settingsAccent1_50(scheme);
     return Scaffold(
       appBar: AppBar(
         title: Text(title),

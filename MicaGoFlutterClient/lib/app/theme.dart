@@ -123,6 +123,16 @@ class MicaGoTheme {
 
   static ColorScheme liquidGlassScheme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
+    final surface = dark ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
+    final surfaceHigh = dark
+        ? const Color(0xFF1C1C1E)
+        : const Color(0xFFFFFFFF);
+    final onSurface = dark ? const Color(0xFFF5F5F7) : const Color(0xFF111827);
+    final onSurfaceVariant = dark
+        ? const Color(0xFFC7C7CC)
+        : const Color(0xFF4B5563);
+    final incoming = dark ? const Color(0xEE1C1C1E) : const Color(0xEFFFFFFF);
+    final onIncoming = dark ? const Color(0xFFF5F5F7) : const Color(0xFF111827);
     return ColorScheme.fromSeed(
       seedColor: const Color(0xFF007AFF),
       brightness: brightness,
@@ -135,21 +145,21 @@ class MicaGoTheme {
       onPrimaryContainer: dark
           ? const Color(0xFFEAF4FF)
           : const Color(0xFF002D5C),
-      secondary: const Color(0xFFFFFFFF),
-      onSecondary: const Color(0xFF111827),
-      secondaryContainer: const Color(0xEFFFFFFF),
-      onSecondaryContainer: const Color(0xFF111827),
+      secondary: incoming,
+      onSecondary: onIncoming,
+      secondaryContainer: incoming,
+      onSecondaryContainer: onIncoming,
       tertiary: const Color(0xFF007AFF),
       onTertiary: Colors.white,
-      surface: const Color(0xFFFFFFFF),
-      surfaceContainerLowest: const Color(0xFFFFFFFF),
-      surfaceContainerLow: const Color(0xFFFFFFFF),
-      surfaceContainer: const Color(0xFFFFFFFF),
-      surfaceContainerHigh: const Color(0xFFFFFFFF),
-      surfaceContainerHighest: const Color(0xFFFFFFFF),
-      onSurface: const Color(0xFF111827),
-      onSurfaceVariant: const Color(0xFF4B5563),
-      outlineVariant: const Color(0x66B7C7DA),
+      surface: surface,
+      surfaceContainerLowest: surface,
+      surfaceContainerLow: surface,
+      surfaceContainer: surface,
+      surfaceContainerHigh: surfaceHigh,
+      surfaceContainerHighest: surfaceHigh,
+      onSurface: onSurface,
+      onSurfaceVariant: onSurfaceVariant,
+      outlineVariant: dark ? const Color(0x665A5A5F) : const Color(0x66B7C7DA),
       surfaceTint: Colors.transparent,
     );
   }

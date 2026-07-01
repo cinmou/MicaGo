@@ -67,6 +67,15 @@ func TestClassifyDebugMessage(t *testing.T) {
 			DebugMessageJSON{Attachments: []DebugAttachmentJSON{{AttachmentKind: AttachmentKindFile}}},
 			KindFile, "",
 		},
+		{
+			"associated sticker",
+			DebugMessageJSON{
+				AssociatedMessageType: ip(1000),
+				AssociatedMessageGUID: sp("p:0/target"),
+				Attachments:           []DebugAttachmentJSON{{AttachmentKind: AttachmentKindSticker}},
+			},
+			KindSticker, KindReaction,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

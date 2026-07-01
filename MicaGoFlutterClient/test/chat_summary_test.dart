@@ -30,6 +30,44 @@ void main() {
       expect(c.initials, 'F');
     });
 
+    test('treats Messages group GUID marker as a group fallback', () {
+      final c = ChatSummary.fromJson({
+        'guid': 'any;+;9f28ec2cefb049fd83a2e2308104e02a',
+        'chatIdentifier': '9f28ec2cefb049fd83a2e2308104e02a',
+        'displayName': '',
+        'serviceName': 'iMessage',
+      });
+      expect(c.isGroup, isTrue);
+    });
+
+    test('builds unnamed group title from participant display names', () {
+      final c = ChatSummary.fromJson({
+        'guid': 'any;+;g',
+        'displayName': '',
+        'participants': ['alice@example.com', '+15551234567', 'c@example.com'],
+        'isGroup': true,
+      });
+      expect(
+        c.displayTitle(
+          resolveName: (handle) => switch (handle) {
+            'alice@example.com' => 'Alice Appleseed',
+            '+15551234567' => 'Bob Banana',
+            _ => null,
+          },
+        ),
+        'Alice, Bob & c@example.com',
+      );
+    });
+
+    test('builds compact unnamed group title for many participants', () {
+      final c = ChatSummary.fromJson({
+        'guid': 'any;+;g',
+        'participants': ['A', 'B', 'C', 'D', 'E', 'F'],
+        'isGroup': true,
+      });
+      expect(c.title, 'A, B, C & 3 others');
+    });
+
     test('title falls back to GUID when nothing else is present', () {
       final c = ChatSummary.fromJson({'guid': 'only-guid'});
       expect(c.title, 'only-guid');

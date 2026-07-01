@@ -401,7 +401,11 @@ ON CONFLICT(guid) DO UPDATE SET
       final latestAt = (rows.first['latest_renderable_at'] as int?) ?? 0;
       final lastSeenAt = (rows.first['last_seen_at'] as int?) ?? 0;
       // Never regress the watermark; cover a not-yet-bumped arrival via [upTo].
-      final seenAt = [latestAt, lastSeenAt, upTo ?? 0].reduce((a, b) => a > b ? a : b);
+      final seenAt = [
+        latestAt,
+        lastSeenAt,
+        upTo ?? 0,
+      ].reduce((a, b) => a > b ? a : b);
       final chat = _chatFromRow(rows.first).copyWith(unreadCount: 0);
       batch.update(
         'chats',
@@ -537,6 +541,26 @@ ON CONFLICT(guid) DO UPDATE SET
       limit: 1,
     );
     return rows.isEmpty ? null : rows.first['value'] as String?;
+  }
+
+  Future<Map<String, String>> readMetadataWithPrefix(String prefix) async {
+    final db = await _ready();
+    final rows = await db.query(
+      'metadata',
+      columns: const ['key', 'value'],
+      where: 'key LIKE ?',
+      whereArgs: ['$prefix%'],
+    );
+    return {
+      for (final row in rows)
+        if (row['key'] is String && row['value'] is String)
+          row['key'] as String: row['value'] as String,
+    };
+  }
+
+  Future<void> deleteMetadata(String key) async {
+    final db = await _ready();
+    await db.delete('metadata', where: 'key = ?', whereArgs: [key]);
   }
 
   Future<Map<String, Object?>> diagnostics() async {

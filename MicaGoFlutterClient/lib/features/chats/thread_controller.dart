@@ -247,15 +247,32 @@ class ThreadController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      for (final item in items) {
+      final canBatch = items.length > 1 && !items.any((i) => i.isAudioMessage);
+      if (canBatch) {
         final tempId = 'tmp-att-${DateTime.now().microsecondsSinceEpoch}';
-        await api.sendAttachment(
-          chatGuid: chatGuid,
-          tempGuid: tempId,
-          bytes: item.bytes,
-          filename: item.filename,
-          isAudioMessage: item.isAudioMessage,
-        );
+        try {
+          await api.sendAttachmentBatch(
+            chatGuid: chatGuid,
+            tempGuid: tempId,
+            files: [
+              for (final item in items)
+                (bytes: item.bytes, filename: item.filename),
+            ],
+          );
+        } on ApiException catch (e) {
+          // Older paired backends do not know the batch endpoint yet; keep the
+          // previous one-file-per-request behavior as a compatibility fallback.
+          if (e.statusCode == 404 ||
+              e.statusCode == 405 ||
+              e.code == 'not_found' ||
+              e.code == 'method_not_allowed') {
+            await _sendAttachmentsIndividually(api, items);
+          } else {
+            rethrow;
+          }
+        }
+      } else {
+        await _sendAttachmentsIndividually(api, items);
       }
       // One catch-up after the batch; the rows also arrive via message:new.
       await app.catchUp(reason: 'attachment_sent', minInterval: Duration.zero);
@@ -266,6 +283,22 @@ class ThreadController extends ChangeNotifier {
     } finally {
       attachmentSending = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _sendAttachmentsIndividually(
+    ApiClient api,
+    List<StagedAttachment> items,
+  ) async {
+    for (final item in items) {
+      final tempId = 'tmp-att-${DateTime.now().microsecondsSinceEpoch}';
+      await api.sendAttachment(
+        chatGuid: chatGuid,
+        tempGuid: tempId,
+        bytes: item.bytes,
+        filename: item.filename,
+        isAudioMessage: item.isAudioMessage,
+      );
     }
   }
 

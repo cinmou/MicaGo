@@ -17,6 +17,7 @@ const (
 	KindAudio         = "audio"
 	KindVoice         = "voice"
 	KindFile          = "file"
+	KindSticker       = "sticker"
 	KindReaction      = "reaction_candidate"
 	KindReply         = "reply_candidate"
 	KindService       = "service_candidate"
@@ -143,6 +144,8 @@ func ClassifyDebugMessage(m DebugMessageJSON) (kind string, candidates []string)
 		kind = KindService
 	case SemanticKindAttachment:
 		kind = attachmentKindOf(m)
+	case SemanticKindSticker:
+		kind = KindSticker
 	case SemanticKindNormalText, SemanticKindAttributedBodyText, SemanticKindEffect:
 		kind = KindText
 	case SemanticKindMissingAttachmentRows:

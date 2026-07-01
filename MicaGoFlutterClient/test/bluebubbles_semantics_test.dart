@@ -105,6 +105,26 @@ void main() {
       expect(effectLabel('com.apple.unknown.effect'), 'Sent with an effect');
       expect(effectLabel(null), isNull);
       expect(effectLabel(''), isNull);
+      expect(
+        sendEffectFor('com.apple.MobileSMS.expressivesend.impact'),
+        MessageSendEffect.slam,
+      );
+      expect(
+        sendEffectFor('com.apple.MobileSMS.expressivesend.loud'),
+        MessageSendEffect.loud,
+      );
+      expect(
+        sendEffectFor('com.apple.MobileSMS.expressivesend.gentle'),
+        MessageSendEffect.gentle,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKConfettiEffect'),
+        MessageSendEffect.confetti,
+      );
+      expect(
+        sendEffectFor('com.apple.messages.effect.CKHappyBirthdayEffect'),
+        MessageSendEffect.none,
+      );
     });
   });
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"micagoserver/internal/store"
@@ -263,13 +264,16 @@ func buildNotificationEvents(messages []store.MessageJSON, rows []store.SyncMess
 func upsertChatsTx(tx *sql.Tx, chats []store.SyncChatRow, updatedAt int64) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO chats (
-	guid, chat_identifier, service_name, display_name, is_archived, updated_at
-) VALUES (?, ?, ?, ?, ?, ?)
+	guid, chat_identifier, service_name, display_name, is_archived, style, participant_count, participants, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(guid) DO UPDATE SET
 	chat_identifier = excluded.chat_identifier,
 	service_name = excluded.service_name,
 	display_name = excluded.display_name,
 	is_archived = excluded.is_archived,
+	style = excluded.style,
+	participant_count = excluded.participant_count,
+	participants = excluded.participants,
 	updated_at = excluded.updated_at;
 `)
 	if err != nil {
@@ -284,6 +288,9 @@ ON CONFLICT(guid) DO UPDATE SET
 			chat.ServiceName,
 			chat.DisplayName,
 			boolToInt(chat.IsArchived),
+			chat.Style,
+			chat.ParticipantCount,
+			encodeParticipants(chat.Participants),
 			updatedAt,
 		); err != nil {
 			return err
@@ -291,6 +298,16 @@ ON CONFLICT(guid) DO UPDATE SET
 	}
 
 	return nil
+}
+
+func encodeParticipants(participants []string) string {
+	clean := make([]string, 0, len(participants))
+	for _, participant := range participants {
+		if p := strings.TrimSpace(participant); p != "" {
+			clean = append(clean, p)
+		}
+	}
+	return strings.Join(clean, "\x1f")
 }
 
 func upsertMessagesTx(tx *sql.Tx, messages []store.SyncMessageRow, createdAt int64) ([]string, error) {

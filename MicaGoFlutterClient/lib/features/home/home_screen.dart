@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../../core/app_controller.dart';
 import '../../core/l10n/app_localizations.dart';
 import '../../core/network/push_service.dart';
+import '../../core/platform/incoming_share_service.dart';
+import '../../core/ui/top_banner.dart';
 import '../../core/ui/glass_theme_widgets.dart';
 import '../chats/chats_pane.dart';
 import '../settings/settings_screen.dart';
@@ -40,6 +42,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       unawaited(_push!.start());
       // A notification tap routes here: jump to the Chats tab so the chat opens.
       app.pendingOpenChat.addListener(_onOpenChatRequested);
+      IncomingShareService.latest.addListener(_onIncomingShare);
+      unawaited(IncomingShareService.start());
     });
   }
 
@@ -47,6 +51,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     if (_app?.pendingOpenChat.value == null) return;
     if (!mounted) return;
     Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
+  void _onIncomingShare() {
+    final payload = IncomingShareService.latest.value;
+    if (!mounted || payload == null) return;
+    TopBanner.show(context, 'Shared to micaGO: ${payload.summary}');
+    IncomingShareService.clear();
   }
 
   @override
@@ -68,6 +79,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     _app?.pendingOpenChat.removeListener(_onOpenChatRequested);
+    IncomingShareService.latest.removeListener(_onIncomingShare);
     WidgetsBinding.instance.removeObserver(this);
     _searchRequests.dispose();
     super.dispose();
@@ -85,8 +97,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final scheme = Theme.of(context).colorScheme;
     final tablet = MediaQuery.sizeOf(context).width >= _tabletBreakpoint;
     final glass = isGlassTheme(context);
-    final headerBg = glass ? Colors.white : _homeAccent1_100(scheme);
-    final pageBg = glass ? Colors.white : _homeAccent1_50(scheme);
+    final glassBg = liquidGlassPageColor(context);
+    final headerBg = glass ? glassBg : _homeAccent1_100(scheme);
+    final pageBg = glass ? glassBg : _homeAccent1_50(scheme);
     final chats = ConnectionNoticeHost(
       child: ChatsPane(
         searchRequests: _searchRequests,

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -95,6 +96,7 @@ class HandleAvatar extends StatelessWidget {
   final List<String> participantHandles;
   final bool isGroup;
   final double radius;
+  final String? localAvatarPath;
 
   const HandleAvatar({
     super.key,
@@ -103,10 +105,18 @@ class HandleAvatar extends StatelessWidget {
     this.participantHandles = const [],
     this.isGroup = false,
     this.radius = 20,
+    this.localAvatarPath,
   });
 
   @override
   Widget build(BuildContext context) {
+    final override = localAvatarPath?.trim() ?? '';
+    if (override.isNotEmpty) {
+      final file = File(override);
+      if (file.existsSync()) {
+        return CircleAvatar(radius: radius, backgroundImage: FileImage(file));
+      }
+    }
     final fallback = ContactAvatar(
       title: title,
       isGroup: isGroup,

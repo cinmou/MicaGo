@@ -662,6 +662,49 @@ class ApiClient {
     }
   }
 
+  /// `POST /api/chats/{guid}/send-attachments` — send several files as a single
+  /// grouped media send when the paired backend supports the batch endpoint.
+  Future<void> sendAttachmentBatch({
+    required String chatGuid,
+    required String tempGuid,
+    required List<({Uint8List bytes, String filename})> files,
+  }) async {
+    if (files.isEmpty) return;
+    final request = http.MultipartRequest(
+      'POST',
+      _uri('/api/chats/${Uri.encodeComponent(chatGuid)}/send-attachments'),
+    );
+    request.headers.addAll(_authHeaders);
+    request.fields['tempGuid'] = tempGuid;
+    for (final file in files) {
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'files',
+          file.bytes,
+          filename: file.filename,
+        ),
+      );
+    }
+
+    final http.Response res;
+    try {
+      final streamed = await _http
+          .send(request)
+          .timeout(const Duration(seconds: 90));
+      res = await http.Response.fromStream(streamed);
+    } on TimeoutException {
+      throw const ApiException(
+        code: 'timeout',
+        message: 'Attachment batch send timed out',
+      );
+    } catch (e) {
+      throw ApiException(code: 'network_error', message: '$e');
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw _errorFrom(res);
+    }
+  }
+
   /// `GET /api/attachments/{guid}` — raw attachment bytes (authenticated).
   Future<Uint8List> getAttachmentBytes(String attachmentGuid) async {
     final res = await _send(

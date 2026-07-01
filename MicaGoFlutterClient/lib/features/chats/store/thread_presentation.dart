@@ -61,6 +61,7 @@ class MessageViewItem extends ThreadViewItem {
   final List<MessageModel> reactions;
   final List<MessageModel> stickers;
   final String? effectHint;
+  final MessageSendEffect sendEffect;
   final MessageDeliveryState deliveryState;
   final bool showStatus; // whether to render a delivery label
   final bool showTimestamp; // whether the footer shows the time by default
@@ -82,6 +83,7 @@ class MessageViewItem extends ThreadViewItem {
     required this.reactions,
     required this.stickers,
     required this.effectHint,
+    required this.sendEffect,
     required this.deliveryState,
     required this.showStatus,
     required this.showTimestamp,
@@ -263,6 +265,9 @@ class ThreadPresentationBuilder {
           effectHint: (!isSystem && prefs.showEffectHints)
               ? effectLabel(m.expressiveSendStyleId)
               : null,
+          sendEffect: isSystem
+              ? MessageSendEffect.none
+              : sendEffectFor(m.expressiveSendStyleId),
           deliveryState: deliveryStateFor(m),
           showStatus: !isSystem && showStatusFor(m),
           showTimestamp: !isSystem && m.dedupeKey == lastRowKey,

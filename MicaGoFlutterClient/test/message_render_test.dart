@@ -24,6 +24,8 @@ MessageModel _msg({
   String? renderRecommendation,
   String? unsupportedReason,
   String? tempId,
+  String? balloonBundleId,
+  bool payloadDataPresent = false,
   LocalSendState localState = LocalSendState.confirmed,
 }) {
   return MessageModel(
@@ -48,6 +50,8 @@ MessageModel _msg({
     semanticKind: semanticKind,
     renderRecommendation: renderRecommendation,
     unsupportedReason: unsupportedReason,
+    balloonBundleId: balloonBundleId,
+    payloadDataPresent: payloadDataPresent,
     tempId: tempId,
     localState: localState,
   );
@@ -70,6 +74,7 @@ void main() {
     });
     test('displayText strips placeholder and drops control payloads', () {
       expect(displayText(_msg(text: '￼Hello')), 'Hello');
+      expect(displayText(_msg(text: '�')), isNull);
       expect(displayText(_msg(text: '+!')), isNull);
       expect(displayText(_msg(text: '   ')), isNull);
     });
@@ -105,6 +110,47 @@ void main() {
         MessageRenderableKind.reaction,
       );
     });
+    test('interactive app balloons render while update rows stay hidden', () {
+      const pollsBundle =
+          'com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:com.apple.messages.Polls';
+      expect(
+        renderableKindFor(
+          _msg(
+            text: '�',
+            balloonBundleId: pollsBundle,
+            payloadDataPresent: true,
+          ),
+        ),
+        MessageRenderableKind.normal,
+      );
+      expect(
+        isInteractiveUpdate(
+          _msg(
+            text: ' ',
+            associatedType: 4000,
+            associatedGuid: 'BCF0CED8-2CD5-4F75-B89B-DCF030DEC71D',
+            balloonBundleId: pollsBundle,
+            payloadDataPresent: true,
+          ),
+        ),
+        isTrue,
+      );
+    });
+    test(
+      'Digital Touch without an attachment renders as an interactive card',
+      () {
+        expect(
+          renderableKindFor(
+            _msg(
+              text: '￼',
+              balloonBundleId: 'com.apple.DigitalTouchBalloonProvider',
+              payloadDataPresent: true,
+            ),
+          ),
+          MessageRenderableKind.normal,
+        );
+      },
+    );
     test('unknown for control-only text and no attachments', () {
       expect(
         renderableKindFor(_msg(text: '+!')),
@@ -168,7 +214,7 @@ void main() {
             ],
           ),
         ),
-        '[图片]',
+        '[附件]',
       );
       expect(
         messagePreviewText(
@@ -183,16 +229,16 @@ void main() {
             ],
           ),
         ),
-        '[语音]',
+        '[附件]',
       );
-      expect(messagePreviewText(_msg()), '[文件]');
+      expect(messagePreviewText(_msg()), '[附件]');
     });
 
     test('sanitizes stale server/cache previews', () {
-      expect(chatListPreviewText('￼', hasMessage: true), '[文件]');
-      expect(chatListPreviewText('obj', hasMessage: true), '[文件]');
-      expect(chatListPreviewText('Message', hasMessage: true), '[文件]');
-      expect(chatListPreviewText('（图片）', hasMessage: true), '[图片]');
+      expect(chatListPreviewText('￼', hasMessage: true), '[附件]');
+      expect(chatListPreviewText('obj', hasMessage: true), '[附件]');
+      expect(chatListPreviewText('Message', hasMessage: true), '[附件]');
+      expect(chatListPreviewText('（图片）', hasMessage: true), '[附件]');
       expect(chatListPreviewText('', hasMessage: false), '');
     });
   });

@@ -28,11 +28,17 @@ func (s *smsChatQueries) GetChatInfo(_ context.Context, guid string) (*store.Cha
 
 type recordingAttachmentSender struct {
 	noopSender
-	path string
+	path  string
+	paths []string
 }
 
 func (s *recordingAttachmentSender) SendAttachment(_ context.Context, _ string, path string) error {
 	s.path = path
+	return nil
+}
+
+func (s *recordingAttachmentSender) SendAttachments(_ context.Context, _ string, paths []string) error {
+	s.paths = append([]string(nil), paths...)
 	return nil
 }
 
@@ -48,6 +54,26 @@ func multipartFile(t *testing.T, field, filename string, data []byte) (*bytes.Bu
 		t.Fatalf("write: %v", err)
 	}
 	_ = w.WriteField("tempGuid", "tmp-1")
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return &buf, w.FormDataContentType()
+}
+
+func multipartFiles(t *testing.T, field string, files map[string][]byte) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for filename, data := range files {
+		fw, err := w.CreateFormFile(field, filename)
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		if _, err := fw.Write(data); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	_ = w.WriteField("tempGuid", "tmp-batch")
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -110,6 +136,44 @@ func TestSendAttachmentAcceptsIMessageUpload(t *testing.T) {
 	}
 	if !strings.HasSuffix(sender.path, "photo.jpg") {
 		t.Fatalf("attachment should preserve filename, got %q", sender.path)
+	}
+}
+
+func TestSendAttachmentsAcceptsIMessageBatch(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sender := &recordingAttachmentSender{}
+	handlers := NewHandlers(
+		&stubQueries{}, log.New(io.Discard, "", 0),
+		&SendDependencies{Sender: sender}, nil, root,
+		&stubDeviceStore{}, stubNotifier{}, config.Config{HTTPAddr: "127.0.0.1:3000"}, StatusDeps{},
+	)
+
+	body, contentType := multipartFiles(t, "files", map[string][]byte{
+		"photo.jpg": []byte("jpegbytes"),
+		"clip.mov":  []byte("movbytes"),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/chats/c1/send-attachments", body)
+	req.Header.Set("Content-Type", contentType)
+	req.SetPathValue("guid", "c1")
+	rec := httptest.NewRecorder()
+
+	handlers.SendAttachments(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(sender.paths) != 2 {
+		t.Fatalf("expected 2 staged paths, got %d: %#v", len(sender.paths), sender.paths)
+	}
+	wantPrefix := filepath.Join(home, "Library", "Messages", "Attachments", "MicaGo", "Outgoing")
+	for _, path := range sender.paths {
+		if !strings.HasPrefix(path, wantPrefix) {
+			t.Fatalf("attachment should be staged under Messages attachments; got %q want prefix %q", path, wantPrefix)
+		}
+	}
+	if !strings.Contains(rec.Body.String(), `"count":2`) {
+		t.Fatalf("response should include count: %s", rec.Body.String())
 	}
 }
 
@@ -184,6 +248,7 @@ func (s stubSyncSettings) SetSyncSettings(_ context.Context, in relaydb.SyncSett
 
 // C20: SMS attachment send is rejected when AllowSMSSend is off, accepted when on.
 func TestSendAttachmentSMSGate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	newH := func(allow bool) *Handlers {
 		h := NewHandlers(
 			&smsChatQueries{}, log.New(io.Discard, "", 0),

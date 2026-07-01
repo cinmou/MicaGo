@@ -890,6 +890,10 @@ func (h *Handlers) SendText(w http.ResponseWriter, r *http.Request) {
 // itself enforces smaller limits per service; this is just a safety bound.
 const maxOutgoingAttachmentBytes = 100 << 20
 
+type multiAttachmentSender interface {
+	SendAttachments(ctx context.Context, chatGUID string, filePaths []string) error
+}
+
 // SendAttachment sends a file to an iMessage chat (C19). The client uploads the
 // bytes as multipart/form-data ("file", optional "tempGuid"); the server writes
 // them to a private temp file and hands the path to Messages via AppleScript.
@@ -985,6 +989,121 @@ func (h *Handlers) SendAttachment(w http.ResponseWriter, r *http.Request) {
 		"state":    "sent_unconfirmed",
 		"filename": responseFilename,
 	})
+}
+
+// SendAttachments uploads several files and asks Messages to send them as one
+// grouped media message where AppleScript supports multi-file send.
+func (h *Handlers) SendAttachments(w http.ResponseWriter, r *http.Request) {
+	if testcontact.IsTestChatGUID(r.PathValue("guid")) {
+		writeBadRequest(w, "the test contact supports text messages only")
+		return
+	}
+
+	if h.send == nil || h.send.Sender == nil {
+		writeInternalError(w)
+		return
+	}
+
+	guid := r.PathValue("guid")
+	chatInfo, err := h.queries.GetChatInfo(r.Context(), guid)
+	if err != nil {
+		h.logInternal("get chat info", err)
+		writeInternalError(w)
+		return
+	}
+	if chatInfo == nil {
+		writeNotFound(w, "chat not found")
+		return
+	}
+	if ok, msg := h.chatSendable(r.Context(), chatInfo); !ok {
+		writeBadRequest(w, msg)
+		return
+	}
+
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeBadRequest(w, "expected multipart/form-data with files")
+		return
+	}
+	tempGUID := strings.TrimSpace(r.FormValue("tempGuid"))
+	if tempGUID != "" {
+		h.broadcastSendPending(r.Context(), tempGUID, guid)
+	}
+
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		files = r.MultipartForm.File["file"]
+	}
+	if len(files) == 0 {
+		writeBadRequest(w, "missing files field")
+		return
+	}
+
+	paths := make([]string, 0, len(files))
+	filenames := make([]string, 0, len(files))
+	for _, header := range files {
+		if header.Size > maxOutgoingAttachmentBytes {
+			cleanupFiles(paths)
+			writeAPIError(w, http.StatusRequestEntityTooLarge, "file_too_large", "attachment exceeds the size limit")
+			return
+		}
+		file, err := header.Open()
+		if err != nil {
+			cleanupFiles(paths)
+			writeBadRequest(w, "could not open uploaded file")
+			return
+		}
+		tmpPath, err := h.writeOutgoingTempFile(header.Filename, file)
+		_ = file.Close()
+		if err != nil {
+			cleanupFiles(paths)
+			h.logInternal("write outgoing attachment", err)
+			writeInternalError(w)
+			return
+		}
+		paths = append(paths, tmpPath)
+		filenames = append(filenames, filepath.Base(header.Filename))
+	}
+
+	var sendErr error
+	if sender, ok := h.send.Sender.(multiAttachmentSender); ok {
+		sendErr = sender.SendAttachments(r.Context(), guid, paths)
+	} else {
+		for _, path := range paths {
+			if err := h.send.Sender.SendAttachment(r.Context(), guid, path); err != nil {
+				sendErr = err
+				break
+			}
+		}
+	}
+	if sendErr != nil {
+		cleanupFiles(paths)
+		h.logSend(tempGUID, "attachment batch send failed", sendErr.Error())
+		if tempGUID != "" {
+			h.broadcastSendError(r.Context(), tempGUID, guid, "send_failed", "failed to send attachments")
+		}
+		writeAPIError(w, http.StatusInternalServerError, "send_failed", "failed to send attachments")
+		return
+	}
+
+	if h.send.SyncNow != nil {
+		if err := h.send.SyncNow(r.Context()); err != nil {
+			h.logInternal("sync after attachment batch send", err)
+		}
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"tempGuid": tempGUID,
+		"chatGuid": guid,
+		"state":    "sent_unconfirmed",
+		"files":    filenames,
+		"count":    len(filenames),
+	})
+}
+
+func cleanupFiles(paths []string) {
+	for _, path := range paths {
+		_ = os.Remove(path)
+	}
 }
 
 func (h *Handlers) prepareOutgoingVoiceAttachment(ctx context.Context, sourcePath, originalName string, isAudioMessage bool) (string, bool) {

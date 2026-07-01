@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/app_controller.dart';
 import '../../core/l10n/app_localizations.dart';
+import '../../core/platform/incoming_share_service.dart';
 import '../contacts/contacts_service.dart';
 import '../settings/message_display_controller.dart';
 import 'avatar.dart';
@@ -47,6 +48,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   String _query = '';
   bool _searchOpen = false;
   Timer? _autoRefresh;
+  String _registeredShareTargetsKey = '';
 
   @override
   void initState() {
@@ -144,6 +146,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
     });
   }
 
+  void _registerShareTargets(
+    List<MergedChat> merged,
+    ContactsService contacts,
+  ) {
+    final targets = merged
+        .take(8)
+        .map((m) {
+          return (
+            guid: m.primary.guid,
+            title: m.primary.displayTitle(resolveName: contacts.displayNameFor),
+          );
+        })
+        .toList(growable: false);
+    final key = targets.map((t) => '${t.guid}\u0000${t.title}').join('\u0001');
+    if (key == _registeredShareTargetsKey) return;
+    _registeredShareTargetsKey = key;
+    unawaited(IncomingShareService.registerShareTargets(targets));
+  }
+
   void _openMerged(MergedChat merged) {
     _controller.markRoutesRead(merged.routes.map((r) => r.guid));
     widget.onOpen(merged);
@@ -222,12 +243,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
     if (q.isEmpty) return chats;
     return chats
         .where((c) {
-          final name = !c.isGroup
-              ? contacts.displayNameFor(c.chatIdentifier)
-              : null;
+          final name = c.displayTitle(resolveName: contacts.displayNameFor);
           final hay = [
             c.title,
-            name ?? '',
+            name,
+            for (final participant in c.participants)
+              contacts.displayNameFor(participant) ?? participant,
             c.chatIdentifier ?? '',
             c.service.label,
             c.lastMessagePreview ?? '',
@@ -266,6 +287,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             // C21: merge a contact's multiple chats (iMessage/SMS routes) into
             // one list entry. Client-side view only; real chat GUIDs are intact.
             final merged = mergeChatsByContact(chats, contacts.contactIdFor);
+            _registerShareTargets(merged, contacts);
             // C22: a notification tap requested a specific chat — open it once
             // the list is loaded, then clear the request.
             _maybeOpenPendingChat(merged);
@@ -447,12 +469,11 @@ class _ChatRailRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final chat = merged.primary;
     final contacts = context.watch<ContactsService>();
-    final resolvedName = (!chat.isGroup)
-        ? contacts.displayNameFor(chat.chatIdentifier)
-        : null;
-    final title = (resolvedName != null && resolvedName.isNotEmpty)
-        ? resolvedName
-        : chat.title;
+    final app = context.watch<AppController>();
+    final title = chat.displayTitle(resolveName: contacts.displayNameFor);
+    final customAvatarPath = app.customAvatarPathFor(
+      merged.localCustomizationKey,
+    );
     final unreadCount = merged.unreadCount;
     final hasUnread = merged.hasUnread;
     return Padding(
@@ -477,6 +498,7 @@ class _ChatRailRow extends StatelessWidget {
                   participantHandles: chat.participants,
                   isGroup: chat.isGroup,
                   radius: 22,
+                  localAvatarPath: customAvatarPath,
                 ),
                 if (hasUnread)
                   Positioned(
@@ -549,12 +571,11 @@ class _ChatRow extends StatelessWidget {
     final hasUnread = merged.hasUnread;
     // Prefer a local contact name (1:1) when contacts matching is enabled.
     final contacts = context.watch<ContactsService>();
-    final resolvedName = (!chat.isGroup)
-        ? contacts.displayNameFor(chat.chatIdentifier)
-        : null;
-    final title = (resolvedName != null && resolvedName.isNotEmpty)
-        ? resolvedName
-        : chat.title;
+    final app = context.watch<AppController>();
+    final title = chat.displayTitle(resolveName: contacts.displayNameFor);
+    final customAvatarPath = app.customAvatarPathFor(
+      merged.localCustomizationKey,
+    );
     final rowColor = hasUnread
         ? scheme.primary
         : selected
@@ -600,6 +621,7 @@ class _ChatRow extends StatelessWidget {
                     participantHandles: chat.participants,
                     isGroup: chat.isGroup,
                     radius: avatarRadius,
+                    localAvatarPath: customAvatarPath,
                   ),
                   const SizedBox(width: 12),
                   Expanded(

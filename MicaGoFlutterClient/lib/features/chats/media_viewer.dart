@@ -67,6 +67,7 @@ class _MediaGalleryViewerState extends State<MediaGalleryViewer> {
     initialPage: widget.initialIndex,
   );
   late int _index = widget.initialIndex;
+  bool _imageZoomed = false;
 
   @override
   void dispose() {
@@ -83,10 +84,22 @@ class _MediaGalleryViewerState extends State<MediaGalleryViewer> {
         children: [
           PageView.builder(
             controller: _page,
+            physics: _imageZoomed
+                ? const NeverScrollableScrollPhysics()
+                : const PageScrollPhysics(parent: ClampingScrollPhysics()),
             itemCount: widget.images.length,
-            onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) =>
-                _ZoomableImage(api: widget.api, attachment: widget.images[i]),
+            onPageChanged: (i) => setState(() {
+              _index = i;
+              _imageZoomed = false;
+            }),
+            itemBuilder: (context, i) => _ZoomableImage(
+              api: widget.api,
+              attachment: widget.images[i],
+              onZoomChanged: (zoomed) {
+                if (_imageZoomed == zoomed || !mounted) return;
+                setState(() => _imageZoomed = zoomed);
+              },
+            ),
           ),
           // Top bar: close + counter, over a subtle gradient for legibility.
           Positioned(
@@ -140,7 +153,12 @@ class _MediaGalleryViewerState extends State<MediaGalleryViewer> {
 class _ZoomableImage extends StatefulWidget {
   final ApiClient api;
   final AttachmentModel attachment;
-  const _ZoomableImage({required this.api, required this.attachment});
+  final ValueChanged<bool>? onZoomChanged;
+  const _ZoomableImage({
+    required this.api,
+    required this.attachment,
+    this.onZoomChanged,
+  });
 
   @override
   State<_ZoomableImage> createState() => _ZoomableImageState();
@@ -156,6 +174,7 @@ class _ZoomableImageState extends State<_ZoomableImage>
   );
   Animation<Matrix4>? _zoomAnim;
   TapDownDetails? _doubleTapDetails;
+  bool _reportedZoomed = false;
 
   @override
   void initState() {
@@ -163,13 +182,22 @@ class _ZoomableImageState extends State<_ZoomableImage>
     _anim.addListener(() {
       if (_zoomAnim != null) _tc.value = _zoomAnim!.value;
     });
+    _tc.addListener(_onTransformChanged);
   }
 
   @override
   void dispose() {
+    _tc.removeListener(_onTransformChanged);
     _anim.dispose();
     _tc.dispose();
     super.dispose();
+  }
+
+  void _onTransformChanged() {
+    final zoomed = _tc.value.getMaxScaleOnAxis() > 1.02;
+    if (zoomed == _reportedZoomed) return;
+    _reportedZoomed = zoomed;
+    widget.onZoomChanged?.call(zoomed);
   }
 
   Future<Uint8List> _load() {
@@ -289,7 +317,46 @@ class _ErrorBody extends StatelessWidget {
 }
 
 /// Shared in-memory cache for fetched image bytes (thread bubbles + viewer).
-final Map<String, Uint8List> imageByteCache = {};
+///
+/// Bounded LRU by total bytes (C51): an unbounded map kept the raw encoded bytes
+/// of every image ever scrolled past — on top of Flutter's own decoded-image
+/// cache — so a thread with many photos grew memory without limit and the
+/// resulting GC pressure showed up as scroll jank. Capped + least-recently-used
+/// eviction keeps the working set hot while bounding total memory. Exposes the
+/// `cache[key]` / `cache[key] = bytes` map interface the call sites already use.
+final imageByteCache = LruByteCache();
+
+class LruByteCache {
+  LruByteCache({this.maxBytes = 48 * 1024 * 1024});
+
+  final int maxBytes;
+  // Insertion order is the LRU order: a get re-inserts at the end (most recent).
+  final _entries = <String, Uint8List>{};
+  int _bytes = 0;
+
+  Uint8List? operator [](String key) {
+    final value = _entries.remove(key);
+    if (value != null) _entries[key] = value; // mark most-recently-used
+    return value;
+  }
+
+  void operator []=(String key, Uint8List value) {
+    final previous = _entries.remove(key);
+    if (previous != null) _bytes -= previous.length;
+    _entries[key] = value;
+    _bytes += value.length;
+    while (_bytes > maxBytes && _entries.isNotEmpty) {
+      final oldest = _entries.keys.first;
+      final removed = _entries.remove(oldest);
+      if (removed != null) _bytes -= removed.length;
+    }
+  }
+
+  void clear() {
+    _entries.clear();
+    _bytes = 0;
+  }
+}
 
 /// C24: full-screen video player for a single video attachment. The stream is
 /// fetched with the bearer token in the Authorization header (never in the URL).

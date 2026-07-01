@@ -47,6 +47,7 @@ type ChatJSON struct {
 	DisplayName        *string  `json:"displayName"`
 	IsArchived         bool     `json:"isArchived"`
 	Participants       []string `json:"participants,omitempty"`
+	IsGroup            bool     `json:"isGroup"`
 
 	// C7 renderable-timeline summary (additive). Populated by the relay store so
 	// the client can hide noisy chats and show a real last-message preview.
@@ -141,11 +142,14 @@ type MessageRow struct {
 }
 
 type SyncChatRow struct {
-	GUID           string
-	ChatIdentifier *string
-	ServiceName    *string
-	DisplayName    *string
-	IsArchived     bool
+	GUID             string
+	ChatIdentifier   *string
+	ServiceName      *string
+	DisplayName      *string
+	IsArchived       bool
+	Style            *int64
+	ParticipantCount int64
+	Participants     []string
 }
 
 type SyncMessageRow struct {
