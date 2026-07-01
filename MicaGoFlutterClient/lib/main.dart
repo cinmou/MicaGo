@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
@@ -10,7 +13,23 @@ import 'features/settings/message_display_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await LiquidGlassWidgets.initialize();
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('[Startup] FlutterError: ${details.exception}');
+    if (details.stack != null) {
+      debugPrintStack(stackTrace: details.stack);
+    }
+  };
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('[Startup] Platform error: $error');
+    debugPrintStack(stackTrace: stack);
+    return true;
+  };
+  await _startupStep(
+    'LiquidGlassWidgets.initialize',
+    () => LiquidGlassWidgets.initialize(),
+    timeout: const Duration(seconds: 2),
+  );
 
   final store = SecureStore();
   final controller = AppController(store: store);
@@ -18,10 +37,26 @@ Future<void> main() async {
   final theme = ThemeController(store: store);
   final messageDisplay = MessageDisplayController(store: store);
 
-  await controller.bootstrap();
-  await contacts.bootstrap();
-  await theme.bootstrap();
-  await messageDisplay.bootstrap();
+  await _startupStep(
+    'AppController.bootstrap',
+    controller.bootstrap,
+    timeout: const Duration(seconds: 6),
+  );
+  await _startupStep(
+    'ContactsService.bootstrap',
+    contacts.bootstrap,
+    timeout: const Duration(seconds: 3),
+  );
+  await _startupStep(
+    'ThemeController.bootstrap',
+    theme.bootstrap,
+    timeout: const Duration(seconds: 2),
+  );
+  await _startupStep(
+    'MessageDisplayController.bootstrap',
+    messageDisplay.bootstrap,
+    timeout: const Duration(seconds: 2),
+  );
 
   // C31: let the controller title local notifications with on-device contact
   // names (resolves live against the contacts index; null when matching is off).
@@ -37,4 +72,23 @@ Future<void> main() async {
       messageDisplay: messageDisplay,
     ),
   );
+}
+
+Future<void> _startupStep(
+  String name,
+  Future<void> Function() run, {
+  required Duration timeout,
+}) async {
+  final started = DateTime.now();
+  debugPrint('[Startup] $name started');
+  try {
+    await run().timeout(timeout);
+    final elapsed = DateTime.now().difference(started).inMilliseconds;
+    debugPrint('[Startup] $name completed in ${elapsed}ms');
+  } on TimeoutException {
+    debugPrint('[Startup] $name timed out after ${timeout.inMilliseconds}ms');
+  } catch (error, stack) {
+    debugPrint('[Startup] $name failed: $error');
+    debugPrintStack(stackTrace: stack);
+  }
 }

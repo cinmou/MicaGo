@@ -211,31 +211,75 @@ class AppController extends ChangeNotifier {
 
   /// Loads any persisted profile at startup.
   Future<void> bootstrap() async {
-    await cache.open();
-    await _loadRealtimeDiagnostics();
-    await _loadMutedChats();
-    await _loadCustomAvatars();
-    _profile = await store.loadProfile();
-    if (_profile != null) {
-      _activeCandidate = connectionCandidatesForProfile(_profile!).firstOrNull;
-      _hasCompletedFirstConnectAttempt = false;
-      _connectionNoticeGraceUntil = DateTime.now().add(
-        const Duration(seconds: 10),
+    try {
+      await _bootstrapStep(
+        'cache.open',
+        cache.open,
+        timeout: const Duration(seconds: 4),
       );
-      _startupConnectionNoticeQuietUntil = DateTime.now().add(
-        const Duration(seconds: 10),
+      await _bootstrapStep(
+        'load realtime diagnostics',
+        _loadRealtimeDiagnostics,
+        timeout: const Duration(seconds: 2),
       );
-      _hasSuppressedStartupConnectionNotice = false;
-      _logConnectionSelection('bootstrap profile mode=${_profile!.mode.name}');
-      _logConnectionSelection(
-        'candidates: ${connectionCandidates.join(' | ')}',
+      await _bootstrapStep(
+        'load muted chats',
+        _loadMutedChats,
+        timeout: const Duration(seconds: 2),
       );
+      await _bootstrapStep(
+        'load custom avatars',
+        _loadCustomAvatars,
+        timeout: const Duration(seconds: 2),
+      );
+      await _bootstrapStep('load profile', () async {
+        _profile = await store.loadProfile();
+      }, timeout: const Duration(seconds: 3));
+      if (_profile != null) {
+        _activeCandidate = connectionCandidatesForProfile(
+          _profile!,
+        ).firstOrNull;
+        _hasCompletedFirstConnectAttempt = false;
+        _connectionNoticeGraceUntil = DateTime.now().add(
+          const Duration(seconds: 10),
+        );
+        _startupConnectionNoticeQuietUntil = DateTime.now().add(
+          const Duration(seconds: 10),
+        );
+        _hasSuppressedStartupConnectionNotice = false;
+        _logConnectionSelection(
+          'bootstrap profile mode=${_profile!.mode.name}',
+        );
+        _logConnectionSelection(
+          'candidates: ${connectionCandidates.join(' | ')}',
+        );
+      }
+      _rebuildApi();
+      // C29: restore the keep-alive setting (and re-arm the service if it was on).
+      await _bootstrapStep(
+        'load keep alive',
+        _loadKeepAlive,
+        timeout: const Duration(seconds: 2),
+      );
+    } finally {
+      _bootstrapped = true;
+      notifyListeners();
     }
-    _rebuildApi();
-    // C29: restore the keep-alive setting (and re-arm the service if it was on).
-    await _loadKeepAlive();
-    _bootstrapped = true;
-    notifyListeners();
+  }
+
+  Future<void> _bootstrapStep(
+    String name,
+    Future<void> Function() run, {
+    required Duration timeout,
+  }) async {
+    try {
+      await run().timeout(timeout);
+    } on TimeoutException {
+      debugPrint('[Startup] AppController $name timed out');
+    } catch (error, stack) {
+      debugPrint('[Startup] AppController $name failed: $error');
+      debugPrintStack(stackTrace: stack);
+    }
   }
 
   Future<void> _loadMutedChats() async {
