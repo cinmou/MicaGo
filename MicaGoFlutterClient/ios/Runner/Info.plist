@@ -69,9 +69,13 @@
 	<!-- C21c: image_picker media attachment send. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>MicaGo needs access to your photos so you can send images and videos in chats.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>MicaGo needs permission to save received media to your photo library when you choose Save.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>MicaGo needs camera access so you can take and send photos or videos in chats.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MicaGo needs microphone access to record video with sound for attachments.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>MicaGo can match chats with your local contacts when you enable contacts matching. Contacts stay on this device.</string>
 </dict>
 </plist>

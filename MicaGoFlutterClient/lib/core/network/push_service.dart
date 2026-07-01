@@ -5,7 +5,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../app_controller.dart';
 import '../storage/secure_store.dart';
@@ -276,18 +275,15 @@ Future<void> micaGoFirebaseBackgroundHandler(RemoteMessage message) async {
 }
 
 /// Initializes Firebase inside the FCM background isolate. MicaGo bakes no
-/// google-services.json, so a killed-app push runs in a fresh process with NO
-/// default Firebase app — `Firebase.initializeApp()` (no options) would throw.
-/// We prefer the persisted runtime options (written by the foreground), then
-/// fall back to any existing/default app. Returns false when Firebase can't be
-/// initialized at all.
+/// google-services.json / GoogleService-Info.plist, so a killed-app push runs in
+/// a fresh process with NO default Firebase app. Only initialize from persisted
+/// runtime options; otherwise gracefully skip Firebase instead of asking native
+/// Firebase to load a missing default config.
 @pragma('vm:entry-point')
 Future<bool> ensureBackgroundFirebase() async {
   if (Firebase.apps.isNotEmpty) return true;
   try {
-    final raw = await const FlutterSecureStorage().read(
-      key: fcmOptionsStorageKey,
-    );
+    final raw = await SecureStore().readValue(fcmOptionsStorageKey);
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
@@ -296,14 +292,9 @@ Future<bool> ensureBackgroundFirebase() async {
       }
     }
   } catch (_) {
-    // Fall through to a best-effort default init.
-  }
-  try {
-    await Firebase.initializeApp();
-    return true;
-  } catch (_) {
     return false;
   }
+  return false;
 }
 
 /// C32: shows the FCM (background isolate) notification as a native MessagingStyle

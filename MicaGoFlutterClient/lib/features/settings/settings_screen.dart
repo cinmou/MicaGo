@@ -1106,7 +1106,7 @@ class _AppearanceCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final c in ThemeColorChoice.values)
+                for (final c in theme.availableColorChoices)
                   ChoiceChip(
                     selected: theme.colorChoice == c,
                     onSelected: (_) => theme.setColorChoice(c),

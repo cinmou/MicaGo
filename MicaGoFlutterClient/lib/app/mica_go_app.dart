@@ -51,7 +51,13 @@ class _MicaGoAppState extends State<MicaGoApp> {
         builder: (context, theme, _) {
           return DynamicColorBuilder(
             builder: (lightDynamic, darkDynamic) {
-              final useDynamic = theme.useSystemColors && lightDynamic != null;
+              final dynamicAvailable = lightDynamic != null;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  theme.setSystemColorsAvailable(dynamicAvailable);
+                }
+              });
+              final useDynamic = theme.useSystemColors && dynamicAvailable;
               final useBlackWhite = theme.useBlackWhite;
               final useLiquidGlass = theme.useLiquidGlass;
               final lightScheme = useBlackWhite

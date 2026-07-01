@@ -70,6 +70,7 @@ dependencies:
   video_player: ^2.9.2
   liquid_glass_widgets: ^0.19.5
   confetti: ^0.8.0
+  shared_preferences: ^2.5.5
 
 # C19: file_picker pulls a flutter_plugin_android_lifecycle that demands its
 # consumers compile against android-36, conflicting with file_picker's own

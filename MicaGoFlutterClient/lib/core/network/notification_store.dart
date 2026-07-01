@@ -1,12 +1,11 @@
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../storage/secure_store.dart';
 
 /// C32 — a tiny persisted per-chat buffer of recent message previews, used to
 /// drive Android MessagingStyle notifications. It must be reachable from BOTH
 /// the FCM background isolate (a fresh process per push) and the keep-alive main
-/// isolate, so it lives in `flutter_secure_storage` (already used cross-isolate
-/// for the connection profile). Bounded and small; cleared when a chat is opened.
+/// isolate. It is bounded and small; cleared when a chat is opened.
 const String _notifBufferKey = 'micago.notif_buffer.v1';
 
 /// Keep only the last few previews per chat (a MessagingStyle notification only
@@ -26,7 +25,12 @@ class BufferedNotifMessage {
     required this.ts,
   });
 
-  Map<String, dynamic> toJson() => {'g': guid, 's': sender, 't': text, 'ts': ts};
+  Map<String, dynamic> toJson() => {
+    'g': guid,
+    's': sender,
+    't': text,
+    'ts': ts,
+  };
 
   factory BufferedNotifMessage.fromJson(Map<String, dynamic> j) =>
       BufferedNotifMessage(
@@ -37,18 +41,20 @@ class BufferedNotifMessage {
       );
 }
 
-const FlutterSecureStorage _storage = FlutterSecureStorage();
+final SecureStore _storage = SecureStore();
 
 Future<Map<String, List<BufferedNotifMessage>>> _readAll() async {
   try {
-    final raw = await _storage.read(key: _notifBufferKey);
+    final raw = await _storage.readValue(_notifBufferKey);
     if (raw == null || raw.isEmpty) return {};
     final decoded = jsonDecode(raw) as Map<String, dynamic>;
     return decoded.map(
       (k, v) => MapEntry(
         k,
         (v as List)
-            .map((e) => BufferedNotifMessage.fromJson(e as Map<String, dynamic>))
+            .map(
+              (e) => BufferedNotifMessage.fromJson(e as Map<String, dynamic>),
+            )
             .toList(),
       ),
     );
@@ -62,7 +68,7 @@ Future<void> _writeAll(Map<String, List<BufferedNotifMessage>> map) async {
     final encoded = jsonEncode(
       map.map((k, v) => MapEntry(k, v.map((e) => e.toJson()).toList())),
     );
-    await _storage.write(key: _notifBufferKey, value: encoded);
+    await _storage.writeValue(_notifBufferKey, encoded);
   } catch (_) {
     // Best-effort; a failure just means the next notification won't stack.
   }

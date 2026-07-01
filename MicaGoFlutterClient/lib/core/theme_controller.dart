@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -36,13 +37,20 @@ class ThemeController extends ChangeNotifier {
   ThemeController({required this.store});
 
   ThemeMode themeMode = ThemeMode.system;
-  ThemeColorChoice colorChoice = ThemeColorChoice.system; // system colors ON
+  ThemeColorChoice colorChoice = ThemeColorChoice.micago;
   LanguageChoice language = LanguageChoice.system;
   String? chatBackgroundPath;
+  bool systemColorsAvailable = false;
 
-  bool get useSystemColors => colorChoice == ThemeColorChoice.system;
+  bool get useSystemColors =>
+      systemColorsAvailable && colorChoice == ThemeColorChoice.system;
   bool get useBlackWhite => colorChoice == ThemeColorChoice.blackWhite;
   bool get useLiquidGlass => colorChoice == ThemeColorChoice.liquidGlass;
+  List<ThemeColorChoice> get availableColorChoices => [
+    if (systemColorsAvailable) ThemeColorChoice.system,
+    for (final choice in ThemeColorChoice.values)
+      if (choice != ThemeColorChoice.system) choice,
+  ];
 
   /// Seed color used when dynamic color is off/unavailable.
   Color get seedColor {
@@ -111,9 +119,25 @@ class ThemeController extends ChangeNotifier {
   }
 
   Future<void> setColorChoice(ThemeColorChoice choice) async {
+    if (choice == ThemeColorChoice.system && !systemColorsAvailable) {
+      choice = ThemeColorChoice.micago;
+    }
     colorChoice = choice;
     notifyListeners();
     await store.writeValue(_kColor, choice.name);
+  }
+
+  void setSystemColorsAvailable(bool available) {
+    if (systemColorsAvailable == available &&
+        (available || colorChoice != ThemeColorChoice.system)) {
+      return;
+    }
+    systemColorsAvailable = available;
+    if (!available && colorChoice == ThemeColorChoice.system) {
+      colorChoice = ThemeColorChoice.micago;
+      store.writeValue(_kColor, colorChoice.name).ignore();
+    }
+    notifyListeners();
   }
 
   Future<void> setLanguage(LanguageChoice lang) async {
@@ -175,8 +199,8 @@ class ThemeController extends ChangeNotifier {
       'purple' => ThemeColorChoice.wisteria,
       'orange' => ThemeColorChoice.citrus,
       'suoh' => ThemeColorChoice.wineRed,
-      'enshuNezu' => ThemeColorChoice.system,
-      _ => ThemeColorChoice.system,
+      'enshuNezu' => ThemeColorChoice.micago,
+      _ => ThemeColorChoice.micago,
     },
   );
   LanguageChoice _parseLang(String? v) {
